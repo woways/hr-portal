@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd \"C:\\\\Users\\\\navan\\\\hr-portal\\\\hr-dashboard\"; npx tsc --noEmit 2>&1 | Where-Object { $_ -match \"goals.page\" })",
+      "Read(//c/Users/navan/**)",
+      "PowerShell(firebase firestore:rules:get 2>&1)",
+      "Bash(npx firebase *)"
+    ]
+  }
+}

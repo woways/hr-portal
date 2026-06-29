@@ -1,0 +1,8 @@
+{
+  "name": "hr-portal",
+  "scripts": {
+    "dev": "cd hr-dashboard && npm run dev",
+    "build": "cd hr-dashboard && npm run build",
+    "start": "cd hr-dashboard && npm run start"
+  }
+}

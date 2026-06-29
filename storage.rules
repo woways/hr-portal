@@ -1,0 +1,29 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Profile photos — employee can upload their own
+    match /employeePhotos/{empId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Education certificates — employee can upload their own
+    match /employeeCertificates/{empId}/{rest=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Employee documents (PAN, Aadhar, offer letters, etc.) — legacy path
+    match /employeeDocuments/{empId}/{rest=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // New unified documents path
+    match /documents/{empId}/{rest=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+  }
+}
