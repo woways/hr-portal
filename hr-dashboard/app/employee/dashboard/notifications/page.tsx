@@ -6,7 +6,7 @@ import {
   onSnapshot, updateDoc, writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { Bell, Calendar, Clock, Target, CheckCheck, Megaphone, DollarSign, Wifi, Loader2 } from "lucide-react";
+import { Bell, Calendar, Clock, Target, CheckCheck, Megaphone, IndianRupee, Wifi, Loader2 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ const typeConfig: Record<string, { icon: React.FC<{ size: number; className?: st
   attendance: { icon: Clock,     bg: "bg-orange-50",  text: "text-orange-600" },
   goal:       { icon: Target,    bg: "bg-purple-50",  text: "text-purple-600" },
   system:     { icon: Megaphone, bg: "bg-blue-50",    text: "text-blue-600"   },
-  payroll:    { icon: DollarSign,bg: "bg-green-50",   text: "text-green-600"  },
+  payroll:    { icon: IndianRupee,bg: "bg-green-50",   text: "text-green-600"  },
 };
 
 function timeAgo(iso: string): string {
@@ -132,9 +132,7 @@ export default function EmployeeNotificationsPage() {
     try {
       await updateDoc(doc(db, "notifications", id), { read: true });
       // onSnapshot will update UI — no manual setState needed
-    } catch (err) {
-      console.error("[Notifs] markRead error:", err);
-    }
+    } catch { /* ignore */ }
   }
 
   // ── Mark all as read ──────────────────────────────────────────────────────
@@ -145,9 +143,7 @@ export default function EmployeeNotificationsPage() {
       const batch = writeBatch(db);
       unread.forEach(n => batch.update(doc(db, "notifications", n.id), { read: true }));
       await batch.commit();
-    } catch (err) {
-      console.error("[Notifs] markAllRead error:", err);
-    }
+    } catch { /* ignore */ }
   }
 
   // ── Filter ────────────────────────────────────────────────────────────────

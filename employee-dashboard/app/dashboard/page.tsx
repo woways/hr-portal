@@ -4,13 +4,8 @@ import {
   Clock, CheckCircle, CalendarDays, AlertCircle, XCircle,
 } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-
-const HR_BASE  = "http://localhost:3000";
-const EMP_API  = `${HR_BASE}/api/employees`;
-const CLK_API  = `${HR_BASE}/api/clock`;
-const LVE_API  = `${HR_BASE}/api/leave-requests`;
 
 interface EmpRecord {
   id: string; name: string; designation: string; department: string;
@@ -76,36 +71,32 @@ export default function DashboardPage() {
         const eid = snap.data().employeeId as string;
         if (!eid) { setLoading(false); return; }
 
-        // Fetch employee record
-        const empRes = await fetch(EMP_API);
-        if (empRes.ok) {
-          const emps = await empRes.json() as EmpRecord[];
-          const emp = emps.find((e) => e.id === eid);
-          if (emp) { setEmpData(emp); setEmpName(emp.name); }
+        // Fetch employee record directly from Firestore
+        const empSnap = await getDoc(doc(db, "employees", eid));
+        if (empSnap.exists()) {
+          const empData = { id: eid, ...empSnap.data() } as EmpRecord;
+          setEmpData(empData);
+          setEmpName(empData.name);
         }
 
         const today = new Date().toISOString().slice(0, 10);
 
-        // Fetch today's clock record
-        const clkRes = await fetch(`${CLK_API}/${eid}?date=${today}`);
-        if (clkRes.ok) {
-          const clk = await clkRes.json() as ClockRecord;
+        // Fetch today's clock record directly from Firestore
+        const clkSnap = await getDoc(doc(db, "attendance", `${today}-${eid}`));
+        if (clkSnap.exists()) {
+          const clk = clkSnap.data() as ClockRecord;
           setClockIn(clk.clockIn ?? "");
           setClockOut(clk.clockOut ?? "");
           setWorkHrs(clk.workingHours ?? "");
           setAttStatus(clk.clockIn ? "Present" : "Absent");
         }
 
-        // Fetch leave stats
-        const lveRes = await fetch(`${LVE_API}?empId=${eid}`);
-        if (lveRes.ok) {
-          const leaves = await lveRes.json() as LeaveRequest[];
-          if (Array.isArray(leaves)) {
-            setPendingLeaves(leaves.filter((l) => l.status === "Pending").length);
-            setApprovedLeaves(leaves.filter((l) => l.status === "Approved").length);
-            setRejectedLeaves(leaves.filter((l) => l.status === "Rejected").length);
-          }
-        }
+        // Fetch leave stats directly from Firestore
+        const lveSnap = await getDocs(query(collection(db, "leaveRequests"), where("empId", "==", eid)));
+        const leaves = lveSnap.docs.map((d) => d.data() as LeaveRequest);
+        setPendingLeaves(leaves.filter((l) => l.status === "Pending").length);
+        setApprovedLeaves(leaves.filter((l) => l.status === "Approved").length);
+        setRejectedLeaves(leaves.filter((l) => l.status === "Rejected").length);
       } catch { /* ignore */ }
       setLoading(false);
     });

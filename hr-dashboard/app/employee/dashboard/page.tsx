@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import {
   Clock, CheckCircle, CalendarDays, Bell, AlertCircle,
-  CalendarOff, Target, DollarSign, Megaphone,
+  CalendarOff, Target, IndianRupee, Megaphone,
 } from "lucide-react";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
 import {
@@ -43,7 +43,7 @@ function timeAgo(iso: string): string {
 }
 
 const NOTIF_ICON: Record<string, typeof Bell> = {
-  leave: CalendarOff, goal: Target, payroll: DollarSign,
+  leave: CalendarOff, goal: Target, payroll: IndianRupee,
   system: Megaphone, attendance: Clock,
 };
 const NOTIF_CLS: Record<string, string> = {

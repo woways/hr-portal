@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 80" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 80" fill="none">
   <!-- Red rounded square (keeps brand color even on dark bg) -->
-  <rect x="0" y="0" width="80" height="80" rx="14" ry="14" fill="#CC2222"/>
-  <!-- White W -->
-  <text x="40" y="62" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="52" fill="white" text-anchor="middle" letter-spacing="-3">W</text>
+  <rect x="0" y="4" width="74" height="72" rx="12" ry="12" fill="#D32F2F"/>
+  <!-- White lowercase w -->
+  <text x="37" y="62" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="56" fill="white" text-anchor="middle" letter-spacing="-2">w</text>
   <!-- WOWAYS in white for dark backgrounds -->
-  <text x="98" y="58" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="48" fill="white" letter-spacing="0">WOWAYS</text>
+  <text x="96" y="62" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="52" fill="white" letter-spacing="1">WOWAYS</text>
 </svg>

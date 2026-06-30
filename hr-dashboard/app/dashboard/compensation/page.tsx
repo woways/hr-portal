@@ -209,7 +209,34 @@ export default function CompensationPage() {
             <p className="text-xs text-gray-400">Net Pay</p>
             <p className="text-2xl font-bold text-[#4F3CC9]">{fmt(emp.netPay)}</p>
           </div>
-          <button onClick={() => window.print()} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
+          <button
+            onClick={() => {
+              const grossEarnings = emp.salary + emp.incentive + emp.bonus;
+              const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip – ${emp.month}</title>
+<style>body{font-family:Arial,sans-serif;padding:32px;color:#111}h2{color:#4F3CC9;margin:0 0 4px}.sub{color:#6b7280;font-size:12px;margin-bottom:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}.cell .lbl{font-size:11px;color:#6b7280}.cell .val{font-size:13px;font-weight:600}.section{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#374151;margin:16px 0 8px}.row{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid #f3f4f6}.row.total{font-weight:700;border-top:2px solid #e5e7eb;border-bottom:none;margin-top:4px;padding-top:8px}.net{margin-top:20px;background:#ede9ff;border-radius:10px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center}.net-lbl{font-size:12px;color:#6b7280}.net-amt{font-size:26px;font-weight:700;color:#4F3CC9}.footer{margin-top:20px;font-size:10px;color:#9ca3af;text-align:center}@media print{body{padding:0}@page{margin:20mm}}</style></head><body>
+<h2>Woways</h2><div class="sub">Payslip for ${emp.month}</div>
+<div class="grid">
+<div class="cell"><div class="lbl">Employee Name</div><div class="val">${emp.name}</div></div>
+<div class="cell"><div class="lbl">Employee ID</div><div class="val">${emp.empId}</div></div>
+<div class="cell"><div class="lbl">Designation</div><div class="val">${emp.designation || "—"}</div></div>
+<div class="cell"><div class="lbl">Emp Type</div><div class="val">${emp.empType}</div></div>
+<div class="cell"><div class="lbl">Payment Status</div><div class="val">${emp.paymentStatus}</div></div>
+<div class="cell"><div class="lbl">Payment Date</div><div class="val">${emp.paymentDate || "—"}</div></div>
+</div>
+<div class="section">Earnings</div>
+<div class="row"><span>Basic Salary</span><span>₹${emp.salary.toLocaleString("en-IN")}</span></div>
+${emp.incentive > 0 ? `<div class="row"><span>Incentive</span><span>₹${emp.incentive.toLocaleString("en-IN")}</span></div>` : ""}
+${emp.bonus > 0 ? `<div class="row"><span>Bonus</span><span>₹${emp.bonus.toLocaleString("en-IN")}</span></div>` : ""}
+<div class="row total"><span>Gross Salary</span><span>₹${grossEarnings.toLocaleString("en-IN")}</span></div>
+<div class="section">Deductions</div>
+${emp.deductions > 0 ? `<div class="row"><span>Total Deductions</span><span style="color:#ef4444">- ₹${emp.deductions.toLocaleString("en-IN")}</span></div>` : `<div class="row"><span style="color:#9ca3af">No deductions this month</span></div>`}
+<div class="net"><div class="net-lbl">Net Salary</div><div class="net-amt">₹${emp.netPay.toLocaleString("en-IN")}</div></div>
+<div class="footer">This is a system-generated salary slip and does not require a physical signature. | Woways | ${emp.month}</div>
+<script>window.onload=function(){window.print()}<\/script></body></html>`;
+              const win = window.open("", "_blank");
+              if (win) { win.document.write(html); win.document.close(); }
+            }}
+            className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
             <FileText size={14} /> Download Payslip
           </button>
         </div>
@@ -273,7 +300,11 @@ export default function CompensationPage() {
           <div className="p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Department-wise Payroll</h2>
             <p className="text-xs text-gray-400 mb-5">Total net pay grouped by department across all compensation records</p>
-            {deptPayroll.length === 0 ? (
+            {loading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 size={24} className="animate-spin text-[#4F3CC9]" />
+              </div>
+            ) : deptPayroll.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-gray-400">
                 <svg className="w-12 h-12 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
                 <p className="text-sm font-medium">No payroll data yet</p>

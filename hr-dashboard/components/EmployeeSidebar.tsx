@@ -7,7 +7,7 @@ import { collection, query, where, getDocs, getDoc, doc } from "firebase/firesto
 import { auth, db } from "@/lib/firebase";
 import {
   LayoutDashboard, Clock, Calendar, Target, User,
-  CalendarDays, Bell, DollarSign, HelpCircle, LogOut,
+  CalendarDays, Bell, IndianRupee, HelpCircle, LogOut,
 } from "lucide-react";
 
 const navItems = [
@@ -18,7 +18,7 @@ const navItems = [
   { label: "Profile",       href: "/employee/dashboard/profile",      icon: User            },
   { label: "Calendar",      href: "/employee/dashboard/calendar",     icon: CalendarDays    },
   { label: "Notifications", href: "/employee/dashboard/notifications",icon: Bell            },
-  { label: "Compensation",  href: "/employee/dashboard/compensation", icon: DollarSign      },
+  { label: "Compensation",  href: "/employee/dashboard/compensation", icon: IndianRupee      },
   { label: "Help & Support",href: "/employee/dashboard/help",         icon: HelpCircle      },
 ];
 

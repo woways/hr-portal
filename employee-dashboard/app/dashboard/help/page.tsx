@@ -113,10 +113,9 @@ export default function HelpPage() {
   // Real-time listener for this employee's queries
   useEffect(() => {
     if (!empId) return;
-    const q = query(collection(db, "notifications"), where("userId", "==", empId));
+    const q = query(collection(db, "helpQueries"), where("empId", "==", empId));
     const unsub = onSnapshot(q, (snap) => {
       const docs: HelpQuery[] = snap.docs
-        .filter(d => (d.data() as Record<string, unknown>).category === "helpQuery")
         .map(d => {
           const r = d.data() as Record<string, unknown>;
           return {
@@ -150,9 +149,7 @@ export default function HelpPage() {
     setSubmitting(true);
     try {
       const now = new Date().toISOString();
-      const docRef = await addDoc(collection(db, "notifications"), {
-        category:      "helpQuery",
-        userId:        empId,
+      const docRef = await addDoc(collection(db, "helpQueries"), {
         empId, empName,
         subject:       queryForm.subject.trim(),
         queryCategory: queryForm.category,
@@ -163,7 +160,6 @@ export default function HelpPage() {
         status:        "Open",
         raisedOn:      localDate(),
         hrResponse:    "",
-        read:          false,
         createdAt:     now,
         updatedAt:     now,
       });
@@ -179,8 +175,7 @@ export default function HelpPage() {
       setOpenModal(null);
       setQueryForm({ subject: "", category: "General", description: "" });
       showToast("Query submitted! HR will respond shortly.");
-    } catch (err) {
-      console.error("[Help] query submit error:", err);
+    } catch {
       showToast("Failed to submit. Please check your connection.", false);
     } finally {
       setSubmitting(false);
@@ -193,9 +188,7 @@ export default function HelpPage() {
     setSubmitting(true);
     try {
       const now = new Date().toISOString();
-      const docRef = await addDoc(collection(db, "notifications"), {
-        category:      "helpQuery",
-        userId:        empId,
+      const docRef = await addDoc(collection(db, "helpQueries"), {
         empId, empName,
         subject:       reportForm.subject.trim(),
         queryCategory: "Issue Report",
@@ -206,7 +199,6 @@ export default function HelpPage() {
         status:        "Open",
         raisedOn:      localDate(),
         hrResponse:    "",
-        read:          false,
         createdAt:     now,
         updatedAt:     now,
       });
@@ -222,8 +214,7 @@ export default function HelpPage() {
       setOpenModal(null);
       setReportForm({ subject: "", description: "" });
       showToast("Issue reported! HR will review it shortly.");
-    } catch (err) {
-      console.error("[Help] report submit error:", err);
+    } catch {
       showToast("Failed to submit. Please check your connection.", false);
     } finally {
       setSubmitting(false);

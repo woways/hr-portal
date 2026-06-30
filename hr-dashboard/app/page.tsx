@@ -52,8 +52,12 @@ export default function LoginPage() {
         setError("Too many failed attempts. Please wait a moment or reset your password.");
       } else if (code === "auth/invalid-email") {
         setError("Please enter a valid email address.");
+      } else if (code === "auth/unauthorized-domain") {
+        setError("This domain is not authorized for sign-in. Please contact your administrator.");
+      } else if (code === "auth/network-request-failed") {
+        setError("Network error. Please check your connection and try again.");
       } else {
-        setError("Incorrect email or password. Please try again.");
+        setError(`Sign-in failed. Please try again. (${code})`);
       }
       setLoading(false);
       return;

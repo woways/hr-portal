@@ -2,13 +2,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Plus, X, CheckCircle, Clock, XCircle, Calendar, MessageSquare } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, getDocs, addDoc, collection, query, where } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-
-// HR portal base (hr-dashboard on port 3000)
-const HR_BASE   = "http://localhost:3000";
-const LEAVE_API = `${HR_BASE}/api/leave-requests`;
-const EMP_API   = `${HR_BASE}/api/employees`;
 
 interface LeaveRequest {
   id: string;
@@ -38,9 +33,17 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function calcDays(start: string, end: string): number {
+function calcWorkdays(start: string, end: string): number {
   if (!start || !end) return 1;
-  return Math.max(1, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1);
+  let count = 0;
+  const d = new Date(start);
+  const e = new Date(end);
+  while (d <= e) {
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) count++;
+    d.setDate(d.getDate() + 1);
+  }
+  return Math.max(1, count);
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -84,45 +87,34 @@ export default function LeavesPage() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // ── Load employee identity from Firebase Auth ─────────────────────────────
+  // ── Load employee identity + leave requests from Firestore ───────────────
+  const loadRequests = useCallback(async (eid: string) => {
+    if (!eid) return;
+    try {
+      const snap = await getDocs(query(collection(db, "leaveRequests"), where("empId", "==", eid)));
+      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() } as LeaveRequest));
+      setRequests(data.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn)));
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) return;
       try {
         const userSnap = await getDoc(doc(db, "users", user.uid));
         if (!userSnap.exists()) return;
-        const userData = userSnap.data();
-        const eid = (userData.employeeId as string) ?? "";
+        const eid = String(userSnap.data().employeeId ?? "");
         if (!eid) return;
-        const res = await fetch(EMP_API);
-        if (!res.ok) return;
-        const emps = await res.json() as Array<{ id: string; name: string }>;
-        const emp = emps.find((e) => e.id === eid);
-        if (emp) { setEmpId(emp.id); setEmpName(emp.name); }
+        // Get employee name from employees collection
+        const empDoc = await getDoc(doc(db, "employees", eid));
+        const name = empDoc.exists() ? String(empDoc.data().name ?? "") : user.displayName ?? "";
+        setEmpId(eid);
+        setEmpName(name);
+        await loadRequests(eid);
       } catch { /* ignore */ }
     });
     return unsub;
-  }, []);
-
-  // ── Load & poll leave requests from HR portal ─────────────────────────────
-  const loadRequests = useCallback(() => {
-    if (!empId) return;
-    fetch(`${LEAVE_API}?empId=${empId}`)
-      .then((r) => r.json())
-      .then((data: LeaveRequest[]) => {
-        if (Array.isArray(data)) {
-          setRequests(data.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn)));
-        }
-      })
-      .catch(() => {});
-  }, [empId]);
-
-  useEffect(() => {
-    if (!empId) return;
-    loadRequests();
-    const t = setInterval(loadRequests, 8000);
-    return () => clearInterval(t);
-  }, [loadRequests, empId]);
+  }, [loadRequests]);
 
   // ── Submit leave request to HR portal (Firestore via API) ─────────────────
   async function handleSubmit(e: React.FormEvent) {
@@ -135,9 +127,8 @@ export default function LeavesPage() {
     }
     setSubmitting(true);
 
-    const days = calcDays(leaveForm.startDate, leaveForm.endDate);
-    const newReq: LeaveRequest = {
-      id:        `LR-${Date.now()}`,
+    const days = calcWorkdays(leaveForm.startDate, leaveForm.endDate);
+    const payload = {
       empId,
       empName,
       leaveType: leaveForm.leaveType,
@@ -149,25 +140,14 @@ export default function LeavesPage() {
       appliedOn: today,
     };
 
-    // Optimistic update — show immediately before API confirms
-    setRequests((prev) => [newReq, ...prev]);
-    setShowModal(false);
-    setLeaveForm({ leaveType: "Casual Leave", startDate: "", endDate: "", reason: "" });
-
     try {
-      const res = await fetch(LEAVE_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newReq),
-      });
-      if (res.ok) {
-        showToast("Leave request submitted to HR!");
-        loadRequests(); // refresh from Firestore to get canonical state
-      } else {
-        showToast("Server error — request may not have been saved.", false);
-      }
+      const ref = await addDoc(collection(db, "leaveRequests"), payload);
+      setRequests((prev) => [{ id: ref.id, ...payload } as LeaveRequest, ...prev]);
+      setShowModal(false);
+      setLeaveForm({ leaveType: "Casual Leave", startDate: "", endDate: "", reason: "" });
+      showToast("Leave request submitted to HR!");
     } catch {
-      showToast("Could not reach HR portal — check your connection.", false);
+      showToast("Could not submit — check your connection.", false);
     } finally {
       setSubmitting(false);
     }
@@ -213,7 +193,7 @@ export default function LeavesPage() {
         <span className="px-3 py-1.5 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium">{pending} Pending</span>
         <span className="px-3 py-1.5 rounded-full bg-green-100 text-green-700 text-xs font-medium">{approved} Approved</span>
         <span className="px-3 py-1.5 rounded-full bg-red-100 text-red-700 text-xs font-medium">{rejected} Rejected</span>
-        <span className="ml-auto text-xs text-gray-400">Auto-refreshes every 8s</span>
+        <button onClick={() => loadRequests(empId)} className="ml-auto text-xs text-[#4F3CC9] hover:underline">Refresh</button>
       </div>
 
       {/* Leave Usage Cards */}

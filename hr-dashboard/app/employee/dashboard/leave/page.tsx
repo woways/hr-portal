@@ -162,8 +162,7 @@ export default function LeavePage() {
       });
       setRequests(docs.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn)));
       setLiveReady(true);
-    }, (err) => {
-      console.error("[Leave] snapshot error:", err);
+    }, () => {
       setLiveReady(true);
     });
 
@@ -219,8 +218,7 @@ export default function LeavePage() {
       setShowModal(false);
       setLeaveForm({ leaveType: "Annual Leave", startDate: "", endDate: "", reason: "" });
       showToast("Leave request submitted! HR will respond shortly.");
-    } catch (err) {
-      console.error("[Leave] submit error:", err);
+    } catch {
       showToast("Failed to submit. Please check your connection and try again.", false);
     } finally {
       setSubmitting(false);

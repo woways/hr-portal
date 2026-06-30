@@ -25,14 +25,21 @@ function formatDate(iso?: string) {
   return new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function downloadFile(fileUrl: string, fileName: string) {
-  const proxyUrl = `/api/download?url=${encodeURIComponent(fileUrl)}&name=${encodeURIComponent(fileName || "document")}`;
-  const a = document.createElement("a");
-  a.href = proxyUrl;
-  a.download = fileName || "document";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+async function downloadFile(fileUrl: string, fileName: string) {
+  try {
+    const res = await fetch(fileUrl);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName || "document";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch {
+    window.open(fileUrl, "_blank");
+  }
 }
 
 export default function DocumentsPage() {
@@ -61,7 +68,7 @@ export default function DocumentsPage() {
   useEffect(() => {
     loadAllDocuments()
       .then(setDocs)
-      .catch(console.error)
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
@@ -107,8 +114,7 @@ export default function DocumentsPage() {
       setUploadForm({ name: "", category: "Employment" });
       setEmpSearch("");
       setUploadPct(0);
-    } catch (err) {
-      console.error("[HR upload]", err);
+    } catch {
       showMsg("Upload failed. Check storage rules are deployed.");
     } finally {
       setUploading(false);

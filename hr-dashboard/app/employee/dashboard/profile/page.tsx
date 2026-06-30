@@ -107,7 +107,7 @@ function WorkExperienceSection({ empId }: { empId?: string | null }) {
       const { updateDoc: ud, doc: fsD } = await import("firebase/firestore");
       const { db } = await import("@/lib/firebase");
       await ud(fsD(db, "employees", empId), { workExperience: next, updatedAt: new Date().toISOString() });
-    } catch (err) { console.error("[WorkExp] save error:", err); }
+    } catch { /* ignore */ }
   }
 
   const inp = (f: keyof WorkExp) => <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={(draft![f] as string) ?? ""} onChange={(e) => setDraft({ ...draft!, [f]: e.target.value })} />;
@@ -156,7 +156,7 @@ async function saveSkillsFirestore(empId: string, skills: string[], langs: {lang
     const { updateDoc: ud, doc: fsD } = await import("firebase/firestore");
     const { db } = await import("@/lib/firebase");
     await ud(fsD(db, "employees", empId), { skills, languages: langs, updatedAt: new Date().toISOString() });
-  } catch (err) { console.error("[Skills] save error:", err); }
+  } catch { /* ignore */ }
 }
 
 function SkillsSection({ empId }: { empId?: string | null }) {
@@ -246,7 +246,7 @@ function GovtIdSection({ empId }: { empId?: string | null }) {
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
       <div className="flex items-center justify-between mb-5">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Lock size={16} className="text-[#4F3CC9]" /> Personal & Government IDs</h3>
-        {!editing ? <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 text-sm text-[#4F3CC9] font-medium hover:underline"><Edit2 size={14} /> Edit</button> : <div className="flex gap-2"><button onClick={() => setEditing(false)} className="text-sm text-gray-500 font-medium">Cancel</button><button onClick={async () => { setForm({ ...draft }); setEditing(false); if (!empId) return; try { const { updateDoc: ud, doc: fsD } = await import("firebase/firestore"); const { db } = await import("@/lib/firebase"); await ud(fsD(db, "employees", empId), { aadharNumber: draft.aadhar, panNumber: draft.pan, passport: draft.passport, drivingLicense: draft.drivingLicense, dob: draft.dob, bloodGroup: draft.bloodGroup, gender: draft.gender, maritalStatus: draft.maritalStatus, nationality: draft.nationality, updatedAt: new Date().toISOString() }); } catch(e){ console.error("[GovtId] save error:",e); }}} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-4 py-1.5 rounded-full"><Save size={12} /> Save</button></div>}
+        {!editing ? <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 text-sm text-[#4F3CC9] font-medium hover:underline"><Edit2 size={14} /> Edit</button> : <div className="flex gap-2"><button onClick={() => setEditing(false)} className="text-sm text-gray-500 font-medium">Cancel</button><button onClick={async () => { setForm({ ...draft }); setEditing(false); if (!empId) return; try { const { updateDoc: ud, doc: fsD } = await import("firebase/firestore"); const { db } = await import("@/lib/firebase"); await ud(fsD(db, "employees", empId), { aadharNumber: draft.aadhar, panNumber: draft.pan, passport: draft.passport, drivingLicense: draft.drivingLicense, dob: draft.dob, bloodGroup: draft.bloodGroup, gender: draft.gender, maritalStatus: draft.maritalStatus, nationality: draft.nationality, updatedAt: new Date().toISOString() }); } catch{ /* ignore */ }}} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-4 py-1.5 rounded-full"><Save size={12} /> Save</button></div>}
       </div>
       <div className="grid grid-cols-2 gap-4">
         {inp("dob","Date of Birth")}
@@ -402,9 +402,7 @@ export default function ProfilePage() {
           setForm(f);
           setDraft(f);
         }
-      } catch (err) {
-        console.error("[Profile] load error:", err);
-      }
+      } catch { /* ignore */ }
     });
     return unsub;
   }, []);
@@ -521,7 +519,7 @@ export default function ProfilePage() {
         education: next.map(e => ({ ...e, certificateFile: e.certificateFile ?? null })),
         updatedAt: new Date().toISOString(),
       });
-    } catch (err) { console.error("[Profile] education save error:", err); }
+    } catch { /* ignore */ }
   }
 
   function deleteEdu(id: string) {
@@ -634,9 +632,7 @@ export default function ProfilePage() {
             })
           )
         );
-      } catch (e) {
-        console.warn("[migrate]", e);
-      }
+      } catch { /* ignore */ }
     }
 
     async function readOldCollection(): Promise<Record<string, import("@/lib/documentService").StoredDoc>> {
@@ -671,7 +667,8 @@ export default function ProfilePage() {
   // Upload via the drag-and-drop modal
   async function doModalUpload() {
     const file = pendingUploadFile;
-    if (!file || !uploadModal || !currentEmpId) return;
+    if (!file || !uploadModal) return;
+    if (!currentEmpId) { showDocToast("Employee profile not loaded. Please refresh and try again."); return; }
     const ext = file.name.split(".").pop()?.toUpperCase() ?? "FILE";
     let success = false;
 
@@ -695,8 +692,7 @@ export default function ProfilePage() {
         setDocs(prev => [...prev, newDoc]);
         showDocToast(`"${docName}" uploaded successfully!`);
         success = true;
-      } catch (err) {
-        console.error("[Upload] Firebase Storage error:", err);
+      } catch {
         showDocToast("Upload failed — check Firebase Storage rules.");
       } finally {
         setUploadingSlot(null);
@@ -713,8 +709,7 @@ export default function ProfilePage() {
         setDocs(prev => prev.map(d => d.id === docId ? meta : d));
         showDocToast(`"${meta.name}" uploaded successfully!`);
         success = true;
-      } catch (err) {
-        console.error("[Upload] Firebase Storage error:", err);
+      } catch {
         showDocToast("Upload failed — check Firebase Storage rules.");
       } finally {
         setUploadingSlot(null);
@@ -834,7 +829,7 @@ export default function ProfilePage() {
         permanentAddress: draft.permanentAddress,
         updatedAt:        new Date().toISOString(),
       });
-    } catch (err) { console.error("[Profile] personal save error:", err); }
+    } catch { /* ignore */ }
   };
 
   const handleCancel = () => {

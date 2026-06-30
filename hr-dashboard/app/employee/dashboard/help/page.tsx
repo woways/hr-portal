@@ -171,8 +171,7 @@ export default function HelpPage() {
         });
       setQueries(docs.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
       setLiveReady(true);
-    }, (err) => {
-      console.error("[Help] snapshot error:", err);
+    }, () => {
       setLiveReady(true);
     });
     return () => unsub();
@@ -222,8 +221,7 @@ export default function HelpPage() {
       setOpenModal(null);
       setQueryForm({ subject: "", category: "General", description: "" });
       showToast("Query submitted! HR will respond shortly.");
-    } catch (err) {
-      console.error("[Help] query submit error:", err);
+    } catch {
       showToast("Failed to submit. Please check your connection.", false);
     } finally {
       setSubmitting(false);
@@ -267,8 +265,7 @@ export default function HelpPage() {
       setOpenModal(null);
       setReportForm({ subject: "", description: "" });
       showToast("Issue reported! HR will review it shortly.");
-    } catch (err) {
-      console.error("[Help] report submit error:", err);
+    } catch {
       showToast("Failed to submit. Please check your connection.", false);
     } finally {
       setSubmitting(false);

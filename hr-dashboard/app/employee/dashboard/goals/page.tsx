@@ -124,8 +124,7 @@ export default function EmployeeGoalsPage() {
       });
       showMsg("Progress updated — HR has been notified");
       setSelfNote("");
-    } catch (err) {
-      console.error("[Goals] update error:", err);
+    } catch {
       showMsg("Failed to save. Please try again.");
     } finally {
       setSaving(false);

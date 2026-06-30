@@ -1,8 +1,9 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { onAuthStateChanged } from "firebase/auth";
-import { doc as fsDoc, getDoc, updateDoc, deleteField } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail } from "firebase/auth";
+import { doc as fsDoc, getDoc, getDocs, collection, query, where, updateDoc, deleteField } from "firebase/firestore";
+import { auth, db, storage } from "@/lib/firebase";
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { uploadDocFile, saveDocMeta, loadDocMeta } from "@/lib/documentService";
 import {
   User,
@@ -26,7 +27,7 @@ import {
   Plus,
 } from "lucide-react";
 
-type ProfileTab = "Overview" | "Personal Details" | "Employment Details" | "Documents";
+type ProfileTab = "Overview" | "Personal Details" | "Employment Details" | "Documents" | "Security";
 
 interface EduEntry {
   id: string;
@@ -64,7 +65,7 @@ const DEGREES = [
 ];
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const YEARS = Array.from({ length: 30 }, (_, i) => String(2025 - i));
+const YEARS = Array.from({ length: 30 }, (_, i) => String(new Date().getFullYear() - i));
 
 // ── Work Experience ──────────────────────────────────────────
 interface WorkExp {
@@ -74,11 +75,27 @@ interface WorkExp {
 }
 const EMP_TYPES = ["Full-Time","Part-Time","Internship","Freelance","Contract"];
 
-function WorkExperienceSection() {
+function WorkExperienceSection({ currentEmpId }: { currentEmpId?: string | null }) {
   const blank = (): WorkExp => ({ id: Date.now().toString(), company: "", role: "", empType: "Full-Time", startMonth: "", startYear: "", endMonth: "", endYear: "", currentlyWorking: false, location: "", description: "" });
   const [list, setList] = useState<WorkExp[]>([]);
   const [editId, setEditId] = useState<string | null>(null);
   const [draft, setDraft] = useState<WorkExp | null>(null);
+
+  useEffect(() => {
+    if (!currentEmpId) return;
+    getDoc(fsDoc(db, "employees", currentEmpId)).then((snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (Array.isArray(data.workExperience)) setList(data.workExperience as WorkExp[]);
+      }
+    }).catch(() => {});
+  }, [currentEmpId]);
+
+  function persistList(updated: WorkExp[]) {
+    if (currentEmpId) {
+      updateDoc(fsDoc(db, "employees", currentEmpId), { workExperience: updated }).catch(() => {});
+    }
+  }
 
   const inp = (f: keyof WorkExp) => <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={(draft![f] as string) ?? ""} onChange={(e) => setDraft({ ...draft!, [f]: e.target.value })} />;
 
@@ -86,7 +103,7 @@ function WorkExperienceSection() {
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
       <div className="flex items-center justify-between mb-5">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Briefcase size={16} className="text-[#4F3CC9]" /> Work Experience</h3>
-        <button onClick={() => { const e = blank(); setList((p) => [...p, e]); setEditId(e.id); setDraft(e); }} className="flex items-center gap-1.5 text-sm text-[#4F3CC9] font-medium border border-[#4F3CC9] px-3 py-1.5 rounded-full hover:bg-[#EDE9FF]"><Plus size={13} /> Add Experience</button>
+        <button onClick={() => { const e = blank(); const updated = [...list, e]; setList(updated); setEditId(e.id); setDraft(e); }} className="flex items-center gap-1.5 text-sm text-[#4F3CC9] font-medium border border-[#4F3CC9] px-3 py-1.5 rounded-full hover:bg-[#EDE9FF]"><Plus size={13} /> Add Experience</button>
       </div>
       <div className="space-y-4">
         {list.map((w) => {
@@ -96,9 +113,9 @@ function WorkExperienceSection() {
             <div key={w.id} className="border border-gray-100 rounded-2xl p-5 relative">
               <div className="absolute top-4 right-4 flex gap-2">
                 {!isEd ? (
-                  <><button onClick={() => { setEditId(w.id); setDraft({ ...w }); }} className="p-1.5 rounded-lg hover:bg-[#EDE9FF] text-[#4F3CC9]"><Edit2 size={13} /></button><button onClick={() => setList((p) => p.filter((x) => x.id !== w.id))} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"><Trash2 size={13} /></button></>
+                  <><button onClick={() => { setEditId(w.id); setDraft({ ...w }); }} className="p-1.5 rounded-lg hover:bg-[#EDE9FF] text-[#4F3CC9]"><Edit2 size={13} /></button><button onClick={() => { const updated = list.filter((x) => x.id !== w.id); setList(updated); persistList(updated); }} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"><Trash2 size={13} /></button></>
                 ) : (
-                  <><button onClick={() => { setList((p) => p.map((x) => x.id === d.id ? d : x)); setEditId(null); setDraft(null); }} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-3 py-1.5 rounded-full"><Save size={12} /> Save</button><button onClick={() => { setEditId(null); setDraft(null); if (!w.company) setList((p) => p.filter((x) => x.id !== w.id)); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-full">Cancel</button></>
+                  <><button onClick={() => { const updated = list.map((x) => x.id === d.id ? d : x); setList(updated); persistList(updated); setEditId(null); setDraft(null); }} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-3 py-1.5 rounded-full"><Save size={12} /> Save</button><button onClick={() => { setEditId(null); setDraft(null); if (!w.company) { const updated = list.filter((x) => x.id !== w.id); setList(updated); persistList(updated); } }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-full">Cancel</button></>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-4 pr-24">
@@ -107,8 +124,8 @@ function WorkExperienceSection() {
                 <div><p className="text-xs text-gray-400 mb-1">Employment Type</p>{isEd ? <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.empType} onChange={(e) => setDraft({ ...d, empType: e.target.value })}>{EMP_TYPES.map((t) => <option key={t}>{t}</option>)}</select> : <p className="text-sm font-medium text-gray-900">{d.empType}</p>}</div>
                 <div><p className="text-xs text-gray-400 mb-1">Location</p>{isEd ? inp("location") : <p className="text-sm font-medium text-gray-900">{d.location || "—"}</p>}</div>
                 <div><p className="text-xs text-gray-400 mb-1">I Currently Work Here</p>{isEd ? <div className="flex gap-2">{["Yes","No"].map((v) => <button key={v} onClick={() => setDraft({ ...d, currentlyWorking: v === "Yes" })} className={`px-4 py-1.5 rounded-xl text-sm font-semibold border ${(d.currentlyWorking ? "Yes" : "No") === v ? "bg-[#4F3CC9] text-white border-[#4F3CC9]" : "bg-white text-gray-500 border-gray-200"}`}>{v}</button>)}</div> : <p className="text-sm font-medium text-gray-900">{d.currentlyWorking ? "Yes" : "No"}</p>}</div>
-                <div><p className="text-xs text-gray-400 mb-1">Start</p>{isEd ? <div className="flex gap-2"><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.startMonth} onChange={(e) => setDraft({ ...d, startMonth: e.target.value })}><option value="">Month</option>{["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map((m) => <option key={m}>{m}</option>)}</select><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.startYear} onChange={(e) => setDraft({ ...d, startYear: e.target.value })}><option value="">Year</option>{Array.from({length:30},(_,i)=>String(2025-i)).map((y) => <option key={y}>{y}</option>)}</select></div> : <p className="text-sm font-medium text-gray-900">{d.startMonth} {d.startYear}</p>}</div>
-                {!d.currentlyWorking && <div><p className="text-xs text-gray-400 mb-1">End</p>{isEd ? <div className="flex gap-2"><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.endMonth} onChange={(e) => setDraft({ ...d, endMonth: e.target.value })}><option value="">Month</option>{["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map((m) => <option key={m}>{m}</option>)}</select><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.endYear} onChange={(e) => setDraft({ ...d, endYear: e.target.value })}><option value="">Year</option>{Array.from({length:30},(_,i)=>String(2025-i)).map((y) => <option key={y}>{y}</option>)}</select></div> : <p className="text-sm font-medium text-gray-900">{d.endMonth} {d.endYear}</p>}</div>}
+                <div><p className="text-xs text-gray-400 mb-1">Start</p>{isEd ? <div className="flex gap-2"><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.startMonth} onChange={(e) => setDraft({ ...d, startMonth: e.target.value })}><option value="">Month</option>{["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map((m) => <option key={m}>{m}</option>)}</select><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.startYear} onChange={(e) => setDraft({ ...d, startYear: e.target.value })}><option value="">Year</option>{Array.from({length:30},(_,i)=>String(new Date().getFullYear()-i)).map((y) => <option key={y}>{y}</option>)}</select></div> : <p className="text-sm font-medium text-gray-900">{d.startMonth} {d.startYear}</p>}</div>
+                {!d.currentlyWorking && <div><p className="text-xs text-gray-400 mb-1">End</p>{isEd ? <div className="flex gap-2"><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.endMonth} onChange={(e) => setDraft({ ...d, endMonth: e.target.value })}><option value="">Month</option>{["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map((m) => <option key={m}>{m}</option>)}</select><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.endYear} onChange={(e) => setDraft({ ...d, endYear: e.target.value })}><option value="">Year</option>{Array.from({length:30},(_,i)=>String(new Date().getFullYear()-i)).map((y) => <option key={y}>{y}</option>)}</select></div> : <p className="text-sm font-medium text-gray-900">{d.endMonth} {d.endYear}</p>}</div>}
                 <div className="col-span-2"><p className="text-xs text-gray-400 mb-1">Description / Key Responsibilities</p>{isEd ? <textarea rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9] resize-none" value={d.description} onChange={(e) => setDraft({ ...d, description: e.target.value })} /> : <p className="text-sm text-gray-700">{d.description || "—"}</p>}</div>
               </div>
             </div>
@@ -121,33 +138,51 @@ function WorkExperienceSection() {
 }
 
 // ── Skills & Languages ────────────────────────────────────────
-function SkillsSection() {
+function SkillsSection({ currentEmpId }: { currentEmpId?: string | null }) {
   const [skills, setSkills] = useState<string[]>([]);
   const [langs, setLangs] = useState<{lang:string;level:string}[]>([]);
   const [newSkill, setNewSkill] = useState("");
   const [newLang, setNewLang] = useState({lang:"",level:"Beginner"});
   const LEVELS = ["Beginner","Intermediate","Fluent","Native"];
+
+  useEffect(() => {
+    if (!currentEmpId) return;
+    getDoc(fsDoc(db, "employees", currentEmpId)).then((snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (Array.isArray(data.skills)) setSkills(data.skills as string[]);
+        if (Array.isArray(data.languages)) setLangs(data.languages as {lang:string;level:string}[]);
+      }
+    }).catch(() => {});
+  }, [currentEmpId]);
+
+  function persistSkills(updatedSkills: string[], updatedLangs: {lang:string;level:string}[]) {
+    if (currentEmpId) {
+      updateDoc(fsDoc(db, "employees", currentEmpId), { skills: updatedSkills, languages: updatedLangs }).catch(() => {});
+    }
+  }
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6">
       <div>
         <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-4"><User size={16} className="text-[#4F3CC9]" /> Skills</h3>
         <div className="flex flex-wrap gap-2 mb-3">
-          {skills.map((s) => <span key={s} className="flex items-center gap-1.5 px-3 py-1 bg-[#EDE9FF] text-[#4F3CC9] rounded-full text-sm font-medium">{s}<button onClick={() => setSkills((p) => p.filter((x) => x !== s))} className="text-[#4F3CC9]/50 hover:text-[#4F3CC9]"><X size={12} /></button></span>)}
+          {skills.map((s) => <span key={s} className="flex items-center gap-1.5 px-3 py-1 bg-[#EDE9FF] text-[#4F3CC9] rounded-full text-sm font-medium">{s}<button onClick={() => { const updated = skills.filter((x) => x !== s); setSkills(updated); persistSkills(updated, langs); }} className="text-[#4F3CC9]/50 hover:text-[#4F3CC9]"><X size={12} /></button></span>)}
         </div>
         <div className="flex gap-2">
-          <input className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" placeholder="Add a skill..." value={newSkill} onChange={(e) => setNewSkill(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && newSkill.trim()) { setSkills((p) => [...p, newSkill.trim()]); setNewSkill(""); }}} />
-          <button onClick={() => { if (newSkill.trim()) { setSkills((p) => [...p, newSkill.trim()]); setNewSkill(""); }}} className="px-4 py-2 bg-[#4F3CC9] text-white rounded-xl text-sm font-medium hover:bg-[#3d2fa3]"><Plus size={14} /></button>
+          <input className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" placeholder="Add a skill..." value={newSkill} onChange={(e) => setNewSkill(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && newSkill.trim()) { const updated = [...skills, newSkill.trim()]; setSkills(updated); persistSkills(updated, langs); setNewSkill(""); }}} />
+          <button onClick={() => { if (newSkill.trim()) { const updated = [...skills, newSkill.trim()]; setSkills(updated); persistSkills(updated, langs); setNewSkill(""); }}} className="px-4 py-2 bg-[#4F3CC9] text-white rounded-xl text-sm font-medium hover:bg-[#3d2fa3]"><Plus size={14} /></button>
         </div>
       </div>
       <div>
         <h3 className="font-semibold text-gray-900 mb-3">Languages Known</h3>
         <div className="space-y-2 mb-3">
-          {langs.map((l, i) => <div key={i} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-xl"><div><p className="text-sm font-medium text-gray-900">{l.lang}</p><p className="text-xs text-gray-400">{l.level}</p></div><button onClick={() => setLangs((p) => p.filter((_, idx) => idx !== i))} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button></div>)}
+          {langs.map((l, i) => <div key={i} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-xl"><div><p className="text-sm font-medium text-gray-900">{l.lang}</p><p className="text-xs text-gray-400">{l.level}</p></div><button onClick={() => { const updated = langs.filter((_, idx) => idx !== i); setLangs(updated); persistSkills(skills, updated); }} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button></div>)}
         </div>
         <div className="flex gap-2">
           <input className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" placeholder="Language" value={newLang.lang} onChange={(e) => setNewLang({ ...newLang, lang: e.target.value })} />
           <select className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={newLang.level} onChange={(e) => setNewLang({ ...newLang, level: e.target.value })}>{LEVELS.map((l) => <option key={l}>{l}</option>)}</select>
-          <button onClick={() => { if (newLang.lang.trim()) { setLangs((p) => [...p, newLang]); setNewLang({ lang: "", level: "Beginner" }); }}} className="px-4 py-2 bg-[#4F3CC9] text-white rounded-xl text-sm font-medium hover:bg-[#3d2fa3]"><Plus size={14} /></button>
+          <button onClick={() => { if (newLang.lang.trim()) { const updated = [...langs, newLang]; setLangs(updated); persistSkills(skills, updated); setNewLang({ lang: "", level: "Beginner" }); }}} className="px-4 py-2 bg-[#4F3CC9] text-white rounded-xl text-sm font-medium hover:bg-[#3d2fa3]"><Plus size={14} /></button>
         </div>
       </div>
     </div>
@@ -162,7 +197,7 @@ interface GovtIdInit {
 // Fields set by HR — employee can view but not edit
 const HR_LOCKED_FIELDS = new Set(["dob","gender","bloodGroup","maritalStatus","nationality","pan","aadhar"]);
 
-function GovtIdSection({ initData = {} }: { initData?: GovtIdInit }) {
+function GovtIdSection({ initData = {}, currentEmpId }: { initData?: GovtIdInit; currentEmpId?: string | null }) {
   const [editing, setEditing] = useState(false);
   const blank = { aadhar: "", pan: "", passport: "", drivingLicense: "", dob: "", bloodGroup: "", gender: "", maritalStatus: "", nationality: "" };
   const [form, setForm] = useState({ ...blank, ...initData });
@@ -197,7 +232,7 @@ function GovtIdSection({ initData = {} }: { initData?: GovtIdInit }) {
         <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Lock size={16} className="text-[#4F3CC9]" /> Personal & Government IDs</h3>
         {!editing
           ? <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 text-sm text-[#4F3CC9] font-medium hover:underline"><Edit2 size={14} /> Edit</button>
-          : <div className="flex gap-2"><button onClick={() => { setDraft({ ...form }); setEditing(false); }} className="text-sm text-gray-500 font-medium">Cancel</button><button onClick={() => { setForm({ ...draft }); setEditing(false); }} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-4 py-1.5 rounded-full"><Save size={12} /> Save</button></div>
+          : <div className="flex gap-2"><button onClick={() => { setDraft({ ...form }); setEditing(false); }} className="text-sm text-gray-500 font-medium">Cancel</button><button onClick={() => { setForm({ ...draft }); setEditing(false); if (currentEmpId) { updateDoc(fsDoc(db, "employees", currentEmpId), { ...draft }).catch(() => {}); } }} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-4 py-1.5 rounded-full"><Save size={12} /> Save</button></div>
         }
       </div>
       <div className="grid grid-cols-2 gap-4">
@@ -263,6 +298,7 @@ interface EmpRecord {
   employmentType: string; doj: string; status: string; branch: string;
   ctc: string; noticePeriod: string; shift: string;
   panNumber: string; aadharNumber: string;
+  photoURL?: string;
 }
 
 export default function ProfilePage() {
@@ -289,12 +325,20 @@ export default function ProfilePage() {
         const eid = snap.data().employeeId as string;
         if (!eid) return;
         setCurrentEmpId(eid);
-        const res = await fetch("http://localhost:3000/api/employees");
-        if (!res.ok) return;
-        const emps = await res.json() as EmpRecord[];
-        const emp = emps.find((e) => e.id === eid);
+        // Fetch employee record directly from Firestore
+        let empRecord: EmpRecord | null = null;
+        const empDoc = await getDoc(fsDoc(db, "employees", eid));
+        if (empDoc.exists()) {
+          empRecord = { ...empDoc.data(), id: empDoc.id } as EmpRecord;
+        }
+        if (!empRecord && user.email) {
+          const empSnap = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
+          if (!empSnap.empty) empRecord = { ...empSnap.docs[0].data(), id: empSnap.docs[0].id } as EmpRecord;
+        }
+        const emp = empRecord;
         if (emp) {
           setEmpData(emp);
+          if (emp.photoURL) setProfilePhoto(emp.photoURL as string);
           const filled = {
             fullName: emp.name ?? "",
             email: emp.email ?? "",
@@ -313,23 +357,13 @@ export default function ProfilePage() {
   const [passwordForm, setPasswordForm] = useState({ current: "", newPw: "", confirm: "" });
   const [pwErrors, setPwErrors] = useState<{ current?: string; newPw?: string; confirm?: string }>({});
   const [pwSuccess, setPwSuccess] = useState(false);
+  const [pwSaving, setPwSaving] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const [showPw, setShowPw] = useState({ current: false, newPw: false, confirm: false });
-  const CURRENT_PASSWORD = "john@123"; // simulated stored password
 
-  function getStrength(pw: string) {
-    if (!pw) return 0;
-    let score = 0;
-    if (pw.length >= 8) score++;
-    if (/[A-Z]/.test(pw)) score++;
-    if (/[0-9]/.test(pw)) score++;
-    if (/[^A-Za-z0-9]/.test(pw)) score++;
-    return score;
-  }
-
-  function handlePasswordUpdate() {
+  async function handlePasswordUpdate() {
     const errs: typeof pwErrors = {};
     if (!passwordForm.current) errs.current = "Please enter your current password.";
-    else if (passwordForm.current !== CURRENT_PASSWORD) errs.current = "Current password is incorrect.";
     if (!passwordForm.newPw) errs.newPw = "New password is required.";
     else if (passwordForm.newPw.length < 8) errs.newPw = "Password must be at least 8 characters.";
     else if (passwordForm.newPw === passwordForm.current) errs.newPw = "New password must differ from current password.";
@@ -337,16 +371,46 @@ export default function ProfilePage() {
     else if (passwordForm.confirm !== passwordForm.newPw) errs.confirm = "Passwords do not match.";
     setPwErrors(errs);
     if (Object.keys(errs).length > 0) return;
-    setPwSuccess(true);
-    setPasswordForm({ current: "", newPw: "", confirm: "" });
-    setPwErrors({});
-    setTimeout(() => setPwSuccess(false), 4000);
+
+    const user = auth.currentUser;
+    if (!user || !user.email) { setPwErrors({ current: "Session expired. Please log in again." }); return; }
+
+    setPwSaving(true);
+    try {
+      const credential = EmailAuthProvider.credential(user.email, passwordForm.current);
+      await reauthenticateWithCredential(user, credential);
+      await updatePassword(user, passwordForm.newPw);
+      setPwSuccess(true);
+      setPasswordForm({ current: "", newPw: "", confirm: "" });
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code ?? "";
+      if (code === "auth/wrong-password" || code === "auth/invalid-credential")
+        setPwErrors({ current: "Current password is incorrect." });
+      else if (code === "auth/too-many-requests")
+        setPwErrors({ current: "Too many attempts. Please wait and try again." });
+      else
+        setPwErrors({ current: "Failed to update password. Please try again." });
+    } finally {
+      setPwSaving(false);
+    }
+  }
+
+  async function handleForgotPassword() {
+    const user = auth.currentUser;
+    if (!user?.email) return;
+    try {
+      await sendPasswordResetEmail(auth, user.email);
+      setResetSent(true);
+      setTimeout(() => setResetSent(false), 5000);
+    } catch { /* silent */ }
   }
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [photoToast, setPhotoToast] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [previewPhoto, setPreviewPhoto] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadFileRef = useRef<File | null>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const certInputRef = useRef<{ [id: string]: HTMLInputElement | null }>({});
 
@@ -501,7 +565,7 @@ export default function ProfilePage() {
       a.click();
     } else {
       // Generate a simple mock PDF text blob for system docs
-      const content = `HR Pulse Technologies\n\nDocument: ${doc.name}\nDate: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" })}\n\nThis is an official document issued by HR Pulse Technologies.\nPlease contact HR for queries.`;
+      const content = `Woways\n\nDocument: ${doc.name}\nDate: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" })}\n\nThis is an official document issued by Woways.\nPlease contact HR for queries.`;
       const blob = new Blob([content], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -517,6 +581,7 @@ export default function ProfilePage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) return;
+    uploadFileRef.current = file;
     const reader = new FileReader();
     reader.onload = (ev) => {
       setPreviewPhoto(ev.target?.result as string);
@@ -526,17 +591,35 @@ export default function ProfilePage() {
     e.target.value = "";
   }
 
-  function confirmPhoto() {
-    if (previewPhoto) {
-      setProfilePhoto(previewPhoto);
+  async function confirmPhoto() {
+    const file = uploadFileRef.current;
+    if (!file || !previewPhoto || !currentEmpId) return;
+    setShowPhotoModal(false);
+    setPhotoUploading(true);
+    try {
+      const sRef = storageRef(storage, `profile-photos/${currentEmpId}`);
+      await uploadBytes(sRef, file);
+      const url = await getDownloadURL(sRef);
+      await updateDoc(fsDoc(db, "employees", currentEmpId), { photoURL: url });
+      setProfilePhoto(url);
       setPhotoToast(true);
       setTimeout(() => setPhotoToast(false), 3000);
+    } catch { /* ignore */ } finally {
+      setPhotoUploading(false);
+      setPreviewPhoto(null);
+      uploadFileRef.current = null;
     }
-    setShowPhotoModal(false);
-    setPreviewPhoto(null);
   }
 
-  function removePhoto() {
+  async function removePhoto() {
+    if (currentEmpId) {
+      try {
+        await deleteObject(storageRef(storage, `profile-photos/${currentEmpId}`));
+      } catch { /* may not exist */ }
+      try {
+        await updateDoc(fsDoc(db, "employees", currentEmpId), { photoURL: deleteField() });
+      } catch { /* ignore */ }
+    }
     setProfilePhoto(null);
     setShowPhotoModal(false);
     setPreviewPhoto(null);
@@ -547,9 +630,21 @@ export default function ProfilePage() {
     "Personal Details",
     "Employment Details",
     "Documents",
+    "Security",
   ];
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (currentEmpId) {
+      try {
+        await updateDoc(fsDoc(db, "employees", currentEmpId), {
+          phone: draft.phone,
+          emergencyContact: draft.emergencyContact,
+          name: draft.fullName,
+          currentAddress: draft.currentAddress,
+          permanentAddress: draft.permanentAddress,
+        });
+      } catch { /* ignore — UI still updates */ }
+    }
     setForm({ ...draft });
     setEditing(false);
   };
@@ -607,15 +702,15 @@ export default function ProfilePage() {
                 )
               ) : (
                 <div className="bg-[#F5F3FF] rounded-xl p-8 space-y-4 font-mono text-sm text-gray-700">
-                  <p className="text-center font-bold text-base text-gray-900">HR Pulse Technologies</p>
+                  <p className="text-center font-bold text-base text-gray-900">Woways</p>
                   <hr className="border-[#4F3CC9]/20" />
                   <p><span className="text-gray-400">Document:</span> {viewDoc.name}</p>
                   <p><span className="text-gray-400">Employee:</span> —</p>
                   <p><span className="text-gray-400">Department:</span> —</p>
                   <p><span className="text-gray-400">Date Issued:</span> {new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" })}</p>
                   <hr className="border-[#4F3CC9]/20" />
-                  <p className="text-gray-500 text-xs leading-relaxed">This is an official document issued by HR Pulse Technologies to the above-named employee. This document is confidential and intended solely for the use of the individual named. For queries, please contact the HR department.</p>
-                  <p className="text-center text-xs text-[#4F3CC9] font-semibold mt-4">✦ Verified & Sealed by HR Pulse ✦</p>
+                  <p className="text-gray-500 text-xs leading-relaxed">This is an official document issued by Woways to the above-named employee. This document is confidential and intended solely for the use of the individual named. For queries, please contact the HR department.</p>
+                  <p className="text-center text-xs text-[#4F3CC9] font-semibold mt-4">✦ Verified & Sealed by Woways ✦</p>
                 </div>
               )}
             </div>
@@ -752,10 +847,11 @@ export default function ProfilePage() {
 
             <div className="mt-6 flex items-center gap-3">
               <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-2 border border-gray-200 text-gray-700 px-5 py-2.5 rounded-full text-sm font-medium hover:bg-gray-50 transition-colors"
+                onClick={() => !photoUploading && fileInputRef.current?.click()}
+                disabled={photoUploading}
+                className="flex items-center gap-2 border border-gray-200 text-gray-700 px-5 py-2.5 rounded-full text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-60"
               >
-                <Upload size={15} /> Edit Profile Photo
+                <Upload size={15} /> {photoUploading ? "Uploading…" : "Edit Profile Photo"}
               </button>
               {profilePhoto && (
                 <button
@@ -1092,10 +1188,10 @@ export default function ProfilePage() {
           </div>
 
           {/* Work Experience */}
-          <WorkExperienceSection />
+          <WorkExperienceSection currentEmpId={currentEmpId} />
 
           {/* Skills & Languages */}
-          <SkillsSection />
+          <SkillsSection currentEmpId={currentEmpId} />
 
           {/* Government IDs */}
           <GovtIdSection initData={{
@@ -1103,7 +1199,7 @@ export default function ProfilePage() {
             bloodGroup: empData.bloodGroup, maritalStatus: empData.maritalStatus,
             nationality: empData.nationality,
             pan: empData.panNumber, aadhar: empData.aadharNumber,
-          }} />
+          }} currentEmpId={currentEmpId} />
 
           {/* Documents — View Only */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
@@ -1198,7 +1294,27 @@ export default function ProfilePage() {
               <Briefcase size={16} className="text-[#4F3CC9]" />
               Work Role History
             </h3>
-            <p className="text-sm text-gray-400">No role history available.</p>
+            {empData && Array.isArray((empData as Record<string, unknown>).roleHistory) && ((empData as Record<string, unknown>).roleHistory as unknown[]).length > 0 ? (
+              <div className="space-y-3">
+                {((empData as Record<string, unknown>).roleHistory as Record<string, string>[]).map((r, i) => (
+                  <div key={i} className="flex items-start gap-3 border-l-2 border-[#4F3CC9] pl-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{r.role ?? r.designation ?? "—"}</p>
+                      <p className="text-xs text-gray-400">{r.from ?? ""}{r.to ? ` — ${r.to}` : " — Present"}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : empData ? (
+              <div className="flex items-start gap-3 border-l-2 border-[#4F3CC9] pl-3">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{empData.designation || "—"}</p>
+                  <p className="text-xs text-gray-400">{empData.doj ? `From ${empData.doj}` : ""} — Present</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">No role history available.</p>
+            )}
           </div>
 
           {/* Manager History */}
@@ -1207,7 +1323,27 @@ export default function ProfilePage() {
               <User size={16} className="text-[#4F3CC9]" />
               Manager History
             </h3>
-            <p className="text-sm text-gray-400">No manager history available.</p>
+            {empData && Array.isArray((empData as Record<string, unknown>).managerHistory) && ((empData as Record<string, unknown>).managerHistory as unknown[]).length > 0 ? (
+              <div className="space-y-3">
+                {((empData as Record<string, unknown>).managerHistory as Record<string, string>[]).map((m, i) => (
+                  <div key={i} className="flex items-start gap-3 border-l-2 border-[#4F3CC9] pl-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{m.manager ?? m.name ?? "—"}</p>
+                      <p className="text-xs text-gray-400">{m.from ?? ""}{m.to ? ` — ${m.to}` : " — Present"}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : empData?.reportingManager ? (
+              <div className="flex items-start gap-3 border-l-2 border-[#4F3CC9] pl-3">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{empData.reportingManager}</p>
+                  <p className="text-xs text-gray-400">{empData.doj ? `From ${empData.doj}` : ""} — Present</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">No manager history available.</p>
+            )}
           </div>
 
         </div>
@@ -1269,21 +1405,24 @@ export default function ProfilePage() {
                           {!doc.hrOnly && (
                             <button
                               onClick={async () => {
-                                if (doc.isExtra) {
-                                  setDocs(prev => prev.filter(d => d.id !== doc.id));
-                                  if (currentEmpId) await updateDoc(
-                                    fsDoc(db, "employeeDocuments", currentEmpId),
-                                    { [doc.id]: deleteField() }
-                                  ).catch(() => {});
-                                } else {
-                                  setDocs(prev => prev.map(d => d.id === doc.id ? { ...d, status: "Pending", fileUrl: undefined, fileName: undefined, fileExt: undefined } : d));
-                                  if (currentEmpId) {
+                                if (!currentEmpId) return;
+                                try {
+                                  if (doc.isExtra) {
+                                    await updateDoc(
+                                      fsDoc(db, "employeeDocuments", currentEmpId),
+                                      { [doc.id]: deleteField() }
+                                    );
+                                    setDocs(prev => prev.filter(d => d.id !== doc.id));
+                                  } else {
                                     const slotDef = PREDEFINED_DOCS.find(pd => pd.id === doc.id);
                                     await updateDoc(
                                       fsDoc(db, "employeeDocuments", currentEmpId),
                                       { [doc.id]: { name: slotDef?.name ?? doc.name, category: slotDef?.category ?? "Other", status: "Pending", hrOnly: slotDef?.hrOnly ?? false } }
-                                    ).catch(() => {});
+                                    );
+                                    setDocs(prev => prev.map(d => d.id === doc.id ? { ...d, status: "Pending", fileUrl: undefined, fileName: undefined, fileExt: undefined } : d));
                                   }
+                                } catch {
+                                  showDocToast("Delete failed. Please try again.");
                                 }
                               }}
                               className="p-1.5 rounded-full text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
@@ -1401,6 +1540,120 @@ export default function ProfilePage() {
             )}
             <p className="text-xs text-gray-400 mt-4">Accepted formats: PDF, DOC, DOCX, PNG, JPG, JPEG, TXT · Max size: 5 MB</p>
           </div>
+        </div>
+      )}
+
+      {/* Security Tab */}
+      {activeTab === "Security" && (
+        <div className="space-y-5">
+
+          {/* Change Password */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#EDE9FF] flex items-center justify-center shrink-0">
+                <Lock size={18} className="text-[#4F3CC9]" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-gray-900">Change Password</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Update your account password</p>
+              </div>
+            </div>
+
+            {pwSuccess && (
+              <div className="flex items-center gap-3 px-4 py-3.5 rounded-xl bg-green-50 border border-green-200">
+                <CheckCircle size={16} className="text-green-600 shrink-0" />
+                <p className="text-sm font-medium text-green-800">Password updated successfully!</p>
+              </div>
+            )}
+
+            <div className="space-y-4 max-w-md">
+              {/* Current password */}
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1.5">Current Password</label>
+                <div className="relative">
+                  <input type={showPw.current ? "text" : "password"} placeholder="Enter current password"
+                    value={passwordForm.current}
+                    onChange={(e) => { setPasswordForm({ ...passwordForm, current: e.target.value }); setPwErrors({}); setPwSuccess(false); }}
+                    className={`pr-10 pl-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 w-full font-mono ${pwErrors.current ? "border-red-300 focus:ring-red-200" : "border-gray-200 focus:ring-[#4F3CC9]/30"}`} />
+                  <button type="button" onClick={() => setShowPw({ ...showPw, current: !showPw.current })}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {showPw.current ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+                {pwErrors.current && <p className="text-xs text-red-500 mt-1">{pwErrors.current}</p>}
+              </div>
+
+              {/* New password */}
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1.5">New Password</label>
+                <div className="relative">
+                  <input type={showPw.newPw ? "text" : "password"} placeholder="Min. 8 characters"
+                    value={passwordForm.newPw}
+                    onChange={(e) => { setPasswordForm({ ...passwordForm, newPw: e.target.value }); setPwErrors({}); setPwSuccess(false); }}
+                    className={`pr-10 pl-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 w-full font-mono ${pwErrors.newPw ? "border-red-300 focus:ring-red-200" : "border-gray-200 focus:ring-[#4F3CC9]/30"}`} />
+                  <button type="button" onClick={() => setShowPw({ ...showPw, newPw: !showPw.newPw })}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {showPw.newPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+                {pwErrors.newPw && <p className="text-xs text-red-500 mt-1">{pwErrors.newPw}</p>}
+              </div>
+
+              {/* Confirm password */}
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1.5">Confirm New Password</label>
+                <div className="relative">
+                  <input type={showPw.confirm ? "text" : "password"} placeholder="Re-enter new password"
+                    value={passwordForm.confirm}
+                    onChange={(e) => { setPasswordForm({ ...passwordForm, confirm: e.target.value }); setPwErrors({}); setPwSuccess(false); }}
+                    className={`pr-10 pl-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 w-full font-mono ${pwErrors.confirm ? "border-red-300 focus:ring-red-200" : "border-gray-200 focus:ring-[#4F3CC9]/30"}`} />
+                  <button type="button" onClick={() => setShowPw({ ...showPw, confirm: !showPw.confirm })}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {showPw.confirm ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+                {pwErrors.confirm && <p className="text-xs text-red-500 mt-1">{pwErrors.confirm}</p>}
+              </div>
+
+              <button onClick={handlePasswordUpdate} disabled={pwSaving}
+                className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-[#3d2fa3] disabled:opacity-60 flex items-center justify-center gap-2 transition-colors">
+                {pwSaving ? <><AlertCircle size={14} className="animate-pulse" />Updating…</> : <><Lock size={14} />Update Password</>}
+              </button>
+            </div>
+          </div>
+
+          {/* Forgot Password */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                <AlertCircle size={18} className="text-blue-600" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-gray-900">Forgot Password?</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Can&apos;t remember your password? We&apos;ll send a reset link to your email</p>
+              </div>
+            </div>
+
+            {resetSent && (
+              <div className="flex items-start gap-3 px-4 py-3.5 rounded-xl bg-green-50 border border-green-200">
+                <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-green-800">Reset email sent!</p>
+                  <p className="text-xs text-green-700 mt-0.5">Check your inbox at <span className="font-semibold">{auth.currentUser?.email}</span> — click the link to set a new password. Expires in 1 hour.</p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 max-w-md">
+              <span className="text-sm text-gray-600 flex-1">{auth.currentUser?.email ?? "—"}</span>
+              <button onClick={handleForgotPassword}
+                className="bg-blue-600 text-white rounded-lg px-4 py-1.5 text-xs font-medium hover:bg-blue-700 flex items-center gap-1.5 transition-colors shrink-0">
+                Send Reset Link
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 max-w-md">After clicking, check your inbox and spam folder. Click the link to set a new password, then log back in.</p>
+          </div>
+
         </div>
       )}
     </div>

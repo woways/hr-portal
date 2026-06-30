@@ -66,7 +66,7 @@ export default function NotificationsPage() {
   // Real-time notifications listener
   useEffect(() => {
     if (!empId) return;
-    const q = query(collection(db, "notifications"), where("userId", "==", empId));
+    const q = query(collection(db, "notifications"), where("userId", "in", [empId, "all"]));
     const unsub = onSnapshot(q, (snap) => {
       const data: Notification[] = snap.docs.map((d) => ({
         id:        d.id,
@@ -85,17 +85,27 @@ export default function NotificationsPage() {
 
   async function markAsRead(id: string) {
     setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
-    try { await updateDoc(doc(db, "notifications", id), { read: true }); } catch { /* ignore */ }
+    try {
+      await updateDoc(doc(db, "notifications", id), { read: true });
+    } catch {
+      setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: false } : n));
+    }
   }
 
   async function markAllRead() {
     const unread = notifications.filter((n) => !n.read);
+    if (unread.length === 0) return;
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     try {
       const batch = writeBatch(db);
       unread.forEach((n) => batch.update(doc(db, "notifications", n.id), { read: true }));
       await batch.commit();
-    } catch { /* ignore */ }
+    } catch {
+      // revert optimistic update on failure
+      setNotifications((prev) =>
+        prev.map((n) => (unread.some((u) => u.id === n.id) ? { ...n, read: false } : n))
+      );
+    }
   }
 
   const filtered = notifications.filter((n) => {

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, onSnapshot, updateDoc, doc, addDoc } from "firebase/firestore";
+import { collection, onSnapshot, updateDoc, doc, addDoc, getDocs, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { Eye, Pencil, X, CheckCircle, XCircle, Wifi, Loader2, Clock } from "lucide-react";
 
@@ -96,10 +96,11 @@ export default function LeavePage() {
 
   // Real-time listener — replaces polling; HR sees employee submissions instantly
   useEffect(() => {
+    let snapUnsub: (() => void) | null = null;
     const authUnsub = onAuthStateChanged(auth, (user) => {
       if (!user) { setReady(true); return; }
 
-      const snapUnsub = onSnapshot(collection(db, "leaveRequests"), (snap) => {
+      snapUnsub = onSnapshot(collection(db, "leaveRequests"), (snap) => {
         const docs: LeaveRequest[] = snap.docs.map(d => {
           const r = d.data() as Record<string, unknown>;
           return {
@@ -118,11 +119,29 @@ export default function LeavePage() {
         });
         setRequests(docs.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn)));
         setReady(true);
+        Promise.all([
+          getDocs(collection(db, "employees")),
+          getDoc(doc(db, "settings", "leavePolicies")),
+        ]).then(([empSnap, policySnap]) => {
+          const policyList: Array<{type: string; days: number}> = policySnap.exists() ? (policySnap.data().list ?? []) : [];
+          const defaultDays: Record<string, number> = { "Casual Leave": 6, "Sick Leave": 10, "Emergency Leave": 2, "Paid Leave": 18, "Annual Leave": 18 };
+          const getTotal = (type: string) => policyList.find(p => p.type === type)?.days ?? defaultDays[type] ?? 6;
+          const typeToKey: Record<string, string> = { "Casual Leave": "casual", "Sick Leave": "sick", "Emergency Leave": "emergency", "Paid Leave": "paid", "Annual Leave": "paid" };
+          const usedMap: Record<string, Record<string, number>> = {};
+          docs.filter(r => r.status === "Approved").forEach(r => {
+            if (!usedMap[r.empId!]) usedMap[r.empId!] = {};
+            const key = typeToKey[r.leaveType] ?? "casual";
+            usedMap[r.empId!][key] = (usedMap[r.empId!][key] ?? 0) + r.days;
+          });
+          const computed: LeaveBalance[] = empSnap.docs.map(d => {
+            const used = usedMap[d.id] ?? {};
+            return { id: d.id, name: (d.data().name as string) ?? "", casual: { used: used.casual ?? 0, total: getTotal("Casual Leave") }, sick: { used: used.sick ?? 0, total: getTotal("Sick Leave") }, emergency: { used: used.emergency ?? 0, total: getTotal("Emergency Leave") }, paid: { used: used.paid ?? 0, total: getTotal("Paid Leave") } };
+          });
+          setBalances(computed);
+        }).catch(() => {});
       }, () => setReady(true));
-
-      return snapUnsub;
     });
-    return () => authUnsub();
+    return () => { authUnsub(); snapUnsub?.(); };
   }, []);
 
   function showToast(msg: string, ok = true) {
@@ -153,8 +172,7 @@ export default function LeavePage() {
       }
       setHrComments(p => { const n = { ...p }; delete n[id]; return n; });
       showToast("Approved — employee will see the update instantly.");
-    } catch (err) {
-      console.error("[HR Leave] approve error:", err);
+    } catch {
       showToast("Failed to approve. Please check your connection.", false);
     }
   }
@@ -181,8 +199,7 @@ export default function LeavePage() {
       }
       setHrComments(p => { const n = { ...p }; delete n[id]; return n; });
       showToast("Rejected — employee will see the update instantly.");
-    } catch (err) {
-      console.error("[HR Leave] reject error:", err);
+    } catch {
       showToast("Failed to reject. Please check your connection.", false);
     }
   }
@@ -209,10 +226,56 @@ export default function LeavePage() {
     setEditBal(b);
     setEditBalForm({ ...b, casual: { ...b.casual }, sick: { ...b.sick }, emergency: { ...b.emergency }, paid: { ...b.paid } });
   }
-  function saveEditBal() {
+  async function saveEditBal() {
     if (!editBalForm) return;
+    const previous = balances.find(b => b.id === editBalForm.id);
     setBalances(balances.map(b => b.id === editBalForm.id ? editBalForm : b));
-    setEditBal(null); setEditBalForm(null);
+    try {
+      await updateDoc(doc(db, "leaveBalances", editBalForm.id), {
+        casual:    editBalForm.casual,
+        sick:      editBalForm.sick,
+        emergency: editBalForm.emergency,
+        paid:      editBalForm.paid,
+        updatedAt: new Date().toISOString(),
+      });
+      setEditBal(null); setEditBalForm(null);
+    } catch {
+      if (previous) setBalances(balances.map(b => b.id === previous.id ? previous : b));
+      showToast("Failed to save balance. Please try again.", false);
+    }
+  }
+
+  async function handleEmergencyOverride() {
+    if (!overrideForm.employee || !overrideForm.startDate || !overrideForm.endDate) {
+      showToast("Please fill in employee name, start date and end date.", false);
+      return;
+    }
+    const start = new Date(overrideForm.startDate + "T00:00:00");
+    const end   = new Date(overrideForm.endDate   + "T00:00:00");
+    if (end < start) { showToast("End date must be after start date.", false); return; }
+    const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+    try {
+      const found = balances.find(b => b.name.toLowerCase().trim() === overrideForm.employee.toLowerCase().trim());
+      const empId = found?.id ?? "";
+      await addDoc(collection(db, "leaveRequests"), {
+        empName:   overrideForm.employee,
+        empId,
+        leaveType: "Emergency Leave",
+        startDate: overrideForm.startDate,
+        endDate:   overrideForm.endDate,
+        days,
+        reason:    overrideForm.reason || "Emergency override by HR",
+        status:    overrideForm.approveImmediately ? "Approved" : "Pending",
+        appliedOn: new Date().toISOString().slice(0, 10),
+        hrComment: "Created via Emergency Override",
+        createdAt: new Date().toISOString(),
+      });
+      setShowOverride(false);
+      setOverrideForm({ employee: "", startDate: "", endDate: "", reason: "", approveImmediately: false });
+      showToast(`Emergency leave ${overrideForm.approveImmediately ? "approved" : "submitted"} for ${overrideForm.employee}.`);
+    } catch {
+      showToast("Failed to save override. Please try again.", false);
+    }
   }
 
   return (
@@ -540,7 +603,7 @@ export default function LeavePage() {
             <div className="flex gap-3 p-5 pt-0">
               <button onClick={() => setShowOverride(false)}
                 className="flex-1 border border-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm hover:bg-gray-50">Cancel</button>
-              <button onClick={() => { setShowOverride(false); showToast("Override submitted successfully."); }}
+              <button onClick={handleEmergencyOverride}
                 className="flex-1 bg-red-500 text-white px-4 py-2 rounded-full text-sm hover:bg-red-600">Submit Override</button>
             </div>
           </div>

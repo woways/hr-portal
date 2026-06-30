@@ -106,9 +106,7 @@ export default function CalendarPage() {
         });
 
         setAttendance(attMap);
-      } catch (err) {
-        console.error("[Calendar] load error:", err);
-      }
+      } catch { /* ignore */ }
       setLoading(false);
     });
     return () => unsub();

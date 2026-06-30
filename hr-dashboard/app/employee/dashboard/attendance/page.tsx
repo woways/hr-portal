@@ -274,8 +274,7 @@ export default function AttendancePage() {
       setReqTarget(null);
       setReqToast("Regularization request submitted to HR!");
       setTimeout(() => setReqToast(null), 4000);
-    } catch (err) {
-      console.error("[Attendance] submitRequest error:", err);
+    } catch {
       setReqToast("Failed to submit. Please check your connection.");
       setTimeout(() => setReqToast(null), 4000);
     }
@@ -329,7 +328,7 @@ export default function AttendancePage() {
           workingHours: "", overtimeHours: "-",
           status: "Present", late, updatedAt: now2,
         }, { merge: true }),
-      ]).catch((err) => console.error("[ClockIn] Firestore error:", err));
+      ]).catch(() => {});
 
     } else {
       const total = workingSeconds;
@@ -352,7 +351,7 @@ export default function AttendancePage() {
           clockOut: timeStr, workingHours: workingHoursStr,
           status: "Present", updatedAt: now2,
         }, { merge: true }),
-      ]).catch((err) => console.error("[ClockOut] Firestore error:", err));
+      ]).catch(() => {});
     }
   }
 

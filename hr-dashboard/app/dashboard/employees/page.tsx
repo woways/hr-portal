@@ -9,7 +9,16 @@ import { createUserProfile } from "@/lib/authService";
 import { getEmployees, upsertEmployee, updateEmployee, deleteEmployee } from "@/lib/firebaseService";
 import { uploadDocFile, saveDocMeta, loadDocMeta, StoredDoc } from "@/lib/documentService";
 
-const DEFAULT_EMP_PASSWORD = "Woways@2026";
+function generateTempPassword(): string {
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower = "abcdefghijkmnpqrstuvwxyz";
+  const digits = "23456789";
+  const special = "@#!";
+  const all = upper + lower + digits + special;
+  const rand = (s: string) => s[Math.floor(Math.random() * s.length)];
+  const base = Array.from({ length: 6 }, () => rand(all)).join("");
+  return rand(upper) + rand(digits) + rand(special) + base;
+}
 
 type EmployeeStatus = "Active" | "On Leave" | "Probation" | "Exited";
 type WorkMode = "Remote" | "On-site" | "Hybrid";
@@ -62,6 +71,7 @@ interface Employee {
   yearOfPassing: string;
   specialization: string;
   skills: string;
+  photoURL?: string;
 }
 
 const empDefaults = {
@@ -745,6 +755,8 @@ export default function EmployeesPage() {
   const [hrPendingSlot, setHrPendingSlot] = useState<string | null>(null);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
   const [deleteEmp, setDeleteEmp] = useState<Employee | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState<FormState>({ ...blankForm });
   const [addToast, setAddToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [editForm, setEditForm] = useState<FormState | null>(null);
@@ -807,7 +819,8 @@ export default function EmployeesPage() {
       });
       setEmployees(data);
     } catch (err) {
-      console.error("[Employees] load error:", err);
+      setAddToast({ msg: "Failed to load employees. Please refresh and try again.", ok: false });
+      setTimeout(() => setAddToast(null), 5000);
     }
     setLoading(false);
   }, []);
@@ -834,7 +847,6 @@ export default function EmployeesPage() {
       setHrDocToast(`"${slot.name}" uploaded successfully!`);
       setTimeout(() => setHrDocToast(null), 3000);
     } catch (err) {
-      console.error("[HR Upload]", err);
       setHrDocToast("Upload failed. Please try again.");
       setTimeout(() => setHrDocToast(null), 3000);
     } finally {
@@ -873,7 +885,6 @@ export default function EmployeesPage() {
       const { id, ...rest } = emp;
       await upsertEmployee(id, { ...rest, employeeId: id });
     } catch (err) {
-      console.error("[Employees] save error:", err);
       const msg = (err as { code?: string }).code === "permission-denied"
         ? "Permission denied — please sign in and try again."
         : "Failed to save employee. Please try again.";
@@ -892,11 +903,14 @@ export default function EmployeesPage() {
     loadEmployees();
 
     // Create Firebase Auth login if email was provided
+    const tempPassword = savedEmail ? generateTempPassword() : "—";
+    let authCreated = false;
     if (savedEmail) {
       try {
         const secondaryApp = initializeApp(firebaseConfig, `emp-create-${Date.now()}`);
         const secondaryAuth = getAuth(secondaryApp);
-        const cred = await createUserWithEmailAndPassword(secondaryAuth, savedEmail, DEFAULT_EMP_PASSWORD);
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, savedEmail, tempPassword);
+        authCreated = true;
         await createUserProfile({
           uid: cred.user.uid,
           email: savedEmail,
@@ -914,28 +928,45 @@ export default function EmployeesPage() {
     }
 
     // Always show the credentials popup after a successful save
-    setCreatedCreds({ name: savedName, email: savedEmail, password: savedEmail ? DEFAULT_EMP_PASSWORD : "—", empId: newId });
+    setCreatedCreds({ name: savedName, email: savedEmail, password: (savedEmail && authCreated) ? tempPassword : "— (use Password Reset to set credentials)", empId: newId });
     setSaving(false);
   }
 
+  function showToast(msg: string, ok = true) {
+    setAddToast({ msg, ok });
+    setTimeout(() => setAddToast(null), 4000);
+  }
+
   async function handleBulkImport(emps: Employee[]) {
-    await Promise.all(emps.map((emp) => {
+    const results = await Promise.allSettled(emps.map((emp) => {
       const { id, ...rest } = emp;
       return upsertEmployee(id, { ...rest, employeeId: id });
     }));
+    const failed = results.filter(r => r.status === "rejected").length;
+    const succeeded = emps.length - failed;
+    if (failed > 0) showToast(succeeded + " imported, " + failed + " failed.", false);
+    else showToast("All " + emps.length + " employees imported.");
     await loadEmployees();
     setShowBulk(false);
   }
 
   async function handleDelete() {
     if (!deleteEmp) return;
+    setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteEmployee(deleteEmp.id);
+      setEmployees(employees.filter((e) => e.id !== deleteEmp.id));
+      setDeleteEmp(null);
     } catch (err) {
-      console.error("[Employees] delete error:", err);
+      const code = (err as { code?: string }).code ?? "";
+      if (code === "permission-denied")
+        setDeleteError("Permission denied. Please sign out and sign in again.");
+      else
+        setDeleteError("Failed to delete. Please try again.");
+    } finally {
+      setDeleting(false);
     }
-    setEmployees(employees.filter((e) => e.id !== deleteEmp.id));
-    setDeleteEmp(null);
   }
 
   function openEdit(emp: Employee) {
@@ -953,7 +984,6 @@ export default function EmployeesPage() {
       setEditForm(null);
       await loadEmployees();
     } catch (err) {
-      console.error("[Employees] edit error:", err);
       setAddToast({ msg: "Failed to save changes. Please try again.", ok: false });
       setTimeout(() => setAddToast(null), 4000);
     }
@@ -1073,9 +1103,13 @@ export default function EmployeesPage() {
                 <tr key={emp.id} className="hover:bg-gray-50 transition">
                   <td className="px-4 py-3 font-mono text-xs text-gray-600">{emp.id}</td>
                   <td className="px-4 py-3">
-                    <div className="w-8 h-8 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center font-semibold text-xs">
-                      {initials(emp.name)}
-                    </div>
+                    {emp.photoURL ? (
+                      <img src={emp.photoURL} alt={emp.name} className="w-8 h-8 rounded-full object-cover" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center font-semibold text-xs">
+                        {initials(emp.name)}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 font-medium text-gray-900">{emp.name}</td>
                   <td className="px-4 py-3 text-gray-600">{emp.designation}</td>
@@ -1141,7 +1175,7 @@ export default function EmployeesPage() {
 
       {/* Delete Confirmation Modal */}
       {deleteEmp && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setDeleteEmp(null)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { if (!deleting) { setDeleteEmp(null); setDeleteError(null); } }}>
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
@@ -1152,15 +1186,20 @@ export default function EmployeesPage() {
                 <p className="text-xs text-gray-400">This action cannot be undone</p>
               </div>
             </div>
-            <p className="text-sm text-gray-600 mb-6">
+            <p className="text-sm text-gray-600 mb-4">
               Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteEmp.name}</span> ({deleteEmp.id})? All their data will be permanently removed.
             </p>
+            {deleteError && (
+              <div className="mb-4 px-3 py-2.5 rounded-xl bg-red-50 border border-red-200 text-sm text-red-600">
+                {deleteError}
+              </div>
+            )}
             <div className="flex gap-3">
-              <button onClick={() => setDeleteEmp(null)} className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50 transition">
+              <button onClick={() => { setDeleteEmp(null); setDeleteError(null); }} disabled={deleting} className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50 transition disabled:opacity-50">
                 Cancel
               </button>
-              <button onClick={handleDelete} className="flex-1 bg-red-500 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-600 transition">
-                Delete
+              <button onClick={handleDelete} disabled={deleting} className="flex-1 bg-red-500 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-600 transition disabled:opacity-60 flex items-center justify-center gap-2">
+                {deleting ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Deleting…</> : "Delete"}
               </button>
             </div>
           </div>
@@ -1246,9 +1285,13 @@ export default function EmployeesPage() {
 
             {/* Profile header */}
             <div className="px-6 py-4 flex items-center gap-4 border-b shrink-0">
-              <div className="w-16 h-16 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center font-bold text-xl shrink-0">
-                {initials(viewEmp.name)}
-              </div>
+              {viewEmp.photoURL ? (
+                <img src={viewEmp.photoURL} alt={viewEmp.name} className="w-16 h-16 rounded-full object-cover shrink-0" />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center font-bold text-xl shrink-0">
+                  {initials(viewEmp.name)}
+                </div>
+              )}
               <div className="min-w-0">
                 <p className="text-lg font-bold text-gray-900">{viewEmp.name}</p>
                 <p className="text-sm text-gray-500">{viewEmp.designation} · {viewEmp.id}</p>
@@ -1315,8 +1358,6 @@ export default function EmployeesPage() {
                   </div>
                   <div className="col-span-2 mt-2">
                     <p className="text-xs text-gray-500">• Joined as {viewEmp.designation || "employee"} on {viewEmp.doj || "N/A"}</p>
-                    <p className="text-xs text-gray-500 mt-1">• Performance review completed — Q1 2025</p>
-                    <p className="text-xs text-gray-500 mt-1">• Increment approved — April 2025</p>
                   </div>
                 </div>
               )}

@@ -1,9 +1,10 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, setDoc,
   getDocs, getDoc, query, where, orderBy, onSnapshot,
-  serverTimestamp,
+  serverTimestamp, writeBatch,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { ref as storageRef, deleteObject } from "firebase/storage";
+import { db, storage } from "./firebase";
 
 // ── Re-export types so consumers import from one place ───────────────────────
 export type { Employee, AttendanceRecord, LeaveRequest, Candidate, Goal, PayrollRecord, Notification } from "./types";
@@ -18,36 +19,12 @@ export async function getEmployees() {
     }
   } catch {}
 
-  // Fallback 1: full scan of employees collection (handles docs missing the employeeId field)
+  // Fallback: full scan of employees collection (handles docs missing the employeeId field)
   const allSnap = await getDocs(collection(db, "employees"));
-  if (!allSnap.empty) {
-    return allSnap.docs
-      .map((d) => ({ ...d.data(), id: d.id }))
-      .sort((a, b) => ((a as Record<string,string>).employeeId ?? (a as Record<string,string>).id ?? "")
-        .localeCompare((b as Record<string,string>).employeeId ?? (b as Record<string,string>).id ?? ""));
-  }
-
-  // Fallback 2: users collection (created via /setup page — role "employee" only)
-  // This handles the case where employees exist in Firebase Auth / users collection
-  // but no records have been added to the employees collection yet.
-  const usersSnap = await getDocs(query(collection(db, "users"), where("role", "==", "employee")));
-  return usersSnap.docs.map((d) => {
-    const data = d.data() as Record<string, unknown>;
-    const empId = (data.employeeId as string) || d.id;
-    return {
-      ...data,
-      id:               empId,
-      employeeId:       empId,
-      name:             (data.name as string)             || "",
-      email:            (data.email as string)            || "",
-      department:       (data.department as string)       || "General",
-      designation:      (data.designation as string)      || "",
-      workMode:         (data.workMode as string)         || "Office",
-      shift:            (data.shift as string)            || "9AM-6PM",
-      reportingManager: (data.reportingManager as string) || "",
-      status:           (data.status as string)           || "Active",
-    };
-  });
+  return allSnap.docs
+    .map((d) => ({ ...d.data(), id: d.id }))
+    .sort((a, b) => ((a as Record<string,string>).employeeId ?? (a as Record<string,string>).id ?? "")
+      .localeCompare((b as Record<string,string>).employeeId ?? (b as Record<string,string>).id ?? ""));
 }
 
 export async function getEmployeeById(employeeId: string) {
@@ -69,8 +46,54 @@ export async function updateEmployee(docId: string, data: Record<string, unknown
   await updateDoc(doc(db, "employees", docId), { ...data, updatedAt: new Date().toISOString() });
 }
 
-export async function deleteEmployee(docId: string) {
-  await deleteDoc(doc(db, "employees", docId));
+export async function deleteEmployee(empId: string) {
+  // Collections where employee data lives, keyed by the field that holds empId
+  const relatedCollections: Array<{ col: string; field: string }> = [
+    { col: "attendance",        field: "empId"      },
+    { col: "leaveRequests",     field: "empId"      },
+    { col: "personalGoals",     field: "empId"      },
+    { col: "notifications",     field: "userId"     },
+    { col: "helpQueries",       field: "empId"      },
+    { col: "compensation",      field: "empId"      },
+    { col: "performanceReviews",field: "empId"      },
+    { col: "onboarding",        field: "empId"      },
+    { col: "regularization",    field: "empId"      },
+    { col: "clockRecords",      field: "empId"      },
+    { col: "leaveBalances",     field: "empId"      },
+    { col: "payroll",           field: "empId"      },
+  ];
+
+  // Delete docs in each related collection in batches of 500
+  for (const { col, field } of relatedCollections) {
+    try {
+      const snap = await getDocs(query(collection(db, col), where(field, "==", empId)));
+      const chunks: typeof snap.docs[] = [];
+      for (let i = 0; i < snap.docs.length; i += 500) chunks.push(snap.docs.slice(i, i + 500));
+      for (const chunk of chunks) {
+        const batch = writeBatch(db);
+        chunk.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+    } catch { /* collection may not exist or have no docs */ }
+  }
+
+  // Delete the users/{uid} document where employeeId matches
+  try {
+    const userSnap = await getDocs(query(collection(db, "users"), where("employeeId", "==", empId)));
+    if (!userSnap.empty) {
+      const batch = writeBatch(db);
+      userSnap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
+  } catch { /* ignore */ }
+
+  // Delete profile photo from Firebase Storage
+  try {
+    await deleteObject(storageRef(storage, `profile-photos/${empId}`));
+  } catch { /* photo may not exist */ }
+
+  // Finally delete the employee document itself
+  await deleteDoc(doc(db, "employees", empId));
 }
 
 // ─── Candidates ──────────────────────────────────────────────────────────────

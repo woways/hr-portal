@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useEffect } from "react";
 import {
-  Users, Briefcase, Clock, CalendarOff, DollarSign, Target,
+  Users, Briefcase, Clock, CalendarOff, IndianRupee, Target,
   GraduationCap, Download, CheckCircle, Loader2, X, FileSpreadsheet,
   TrendingUp, BarChart2,
 } from "lucide-react";
@@ -24,7 +24,7 @@ interface ReportData {
   summary?: { label: string; value: string | number }[];
 }
 
-const today = new Date().toISOString().split("T")[0];
+function getToday() { return new Date().toISOString().split("T")[0]; }
 function fmtDate(d: string) { return d ? d.slice(0, 10) : "—"; }
 function fmtINR(n: number | string) {
   const num = typeof n === "string" ? parseFloat(n) : n;
@@ -95,8 +95,8 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
       const [empDocs, attDocs] = await Promise.all([getEmployees(), getAttendance()]);
       const empMap = new Map<string, string>();
       (empDocs as Record<string, unknown>[]).forEach(d => {
-        const id = ((d.employeeId ?? d.id) as string);
-        empMap.set(id, (d.name as string) ?? id);
+        const id = (d.empId ?? d.employeeId) as string;
+        if (id) empMap.set(id, (d.name as string) ?? id);
       });
       const rows = (attDocs as Record<string, unknown>[]).map((d) => {
         const r = d as Record<string, unknown>;
@@ -277,7 +277,7 @@ function ReportModal({
     const ws = XLSX.utils.aoa_to_sheet([data.headers, ...data.rows.map(row => row.map(String))]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, reportName.slice(0, 30));
-    XLSX.writeFile(wb, `${reportName.replace(/\s+/g, "_")}_${today}.xlsx`);
+    XLSX.writeFile(wb, `${reportName.replace(/\s+/g, "_")}_${getToday()}.xlsx`);
   }
 
   const statusColors: Record<string, string> = {
@@ -311,7 +311,7 @@ function ReportModal({
           </div>
           <div>
             <h2 className="text-base font-bold text-gray-900">{reportName}</h2>
-            <p className="text-xs text-gray-500">Generated on {today} · {data.rows.length} records</p>
+            <p className="text-xs text-gray-500">Generated on {getToday()} · {data.rows.length} records</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -387,21 +387,21 @@ function ReportModal({
       {/* Footer */}
       <div className="px-6 py-3 border-t bg-gray-50 shrink-0 flex items-center justify-between text-xs text-gray-400">
         <span>{data.rows.length} records · {data.headers.length} columns</span>
-        <span>HR Portal · {today}</span>
+        <span>HR Portal · {getToday()}</span>
       </div>
     </div>
   );
 }
 
 // ── Report Cards config ────────────────────────────────────────────────────────
-const reportCards: { id: ReportId; name: string; desc: string; icon: React.FC<{ size: number; className?: string }>; lastGen: string }[] = [
-  { id: "employee",   name: "Employee Report",              desc: "Full employee directory with status, dept, work mode",  icon: Users,         lastGen: "2026-05-22" },
-  { id: "hiring",     name: "Hiring Report",                desc: "Recruitment pipeline and hiring metrics",               icon: Briefcase,     lastGen: "2026-05-20" },
-  { id: "attendance", name: "Attendance Report",            desc: "Daily and monthly attendance summary",                  icon: Clock,         lastGen: "2026-05-23" },
-  { id: "leave",      name: "Leave Report",                 desc: "Leave requests, approvals and balance summary",         icon: CalendarOff,   lastGen: "2026-05-21" },
-  { id: "payroll",    name: "Payroll Report",               desc: "Monthly payroll, incentives and payment status",        icon: DollarSign,    lastGen: "2026-05-31" },
-  { id: "goal",       name: "Goal Performance Report",      desc: "Goal completion rates and KPI metrics",                 icon: Target,        lastGen: "2026-05-18" },
-  { id: "internship", name: "Internship Conversion Report", desc: "Interns converted to full-time employees",             icon: GraduationCap, lastGen: "2026-05-15" },
+const reportCards: { id: ReportId; name: string; desc: string; icon: React.FC<{ size: number; className?: string }> }[] = [
+  { id: "employee",   name: "Employee Report",              desc: "Full employee directory with status, dept, work mode",  icon: Users         },
+  { id: "hiring",     name: "Hiring Report",                desc: "Recruitment pipeline and hiring metrics",               icon: Briefcase     },
+  { id: "attendance", name: "Attendance Report",            desc: "Daily and monthly attendance summary",                  icon: Clock         },
+  { id: "leave",      name: "Leave Report",                 desc: "Leave requests, approvals and balance summary",         icon: CalendarOff   },
+  { id: "payroll",    name: "Payroll Report",               desc: "Monthly payroll, incentives and payment status",        icon: IndianRupee    },
+  { id: "goal",       name: "Goal Performance Report",      desc: "Goal completion rates and KPI metrics",                 icon: Target        },
+  { id: "internship", name: "Internship Conversion Report", desc: "Interns converted to full-time employees",             icon: GraduationCap },
 ];
 
 const PIE_COLORS = ["#4F3CC9", "#7C5CFC", "#A78BFA", "#C4B5FD", "#DDD6FE", "#6366F1"];
@@ -419,7 +419,7 @@ interface AnalyticsData {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ReportsPage() {
   const [lastGenDates, setLastGenDates] = useState<Record<string, string>>(
-    Object.fromEntries(reportCards.map((r) => [r.id, r.lastGen]))
+    Object.fromEntries(reportCards.map((r) => [r.id, ""]))
   );
   const [generating, setGenerating] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -428,6 +428,7 @@ export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState<"Reports" | "Analytics">("Reports");
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState(false);
 
   function showToast(msg: string, ok = true) {
     setToast({ msg, ok });
@@ -487,18 +488,17 @@ export default function ReportsPage() {
         deptCount, hiringFunnel, leaveStatus, goalStatus, payrollTrend, workMode,
         stats: { totalEmp: (emps as unknown[]).length, pendingLeaves, totalGoals: (goals as unknown[]).length, monthlyPayroll: Math.round(monthlyPayroll) },
       });
-    }).catch(console.error).finally(() => setAnalyticsLoading(false));
+    }).catch(() => { setAnalyticsError(true); }).finally(() => setAnalyticsLoading(false));
   }, [activeTab, analytics]);
 
   const handleGenerate = useCallback(async (id: ReportId, name: string) => {
     setGenerating(id);
     try {
       const data = await fetchReportData(id);
-      setLastGenDates((prev) => ({ ...prev, [id]: today }));
+      setLastGenDates((prev) => ({ ...prev, [id]: getToday() }));
       setActiveModal({ id, name, data });
       showToast(`${name} generated — ${data.rows.length} records`);
-    } catch (err) {
-      console.error("[Reports] fetch error:", err);
+    } catch {
       showToast(`Failed to generate ${name}. Check your connection.`, false);
     } finally {
       setGenerating(null);
@@ -509,14 +509,13 @@ export default function ReportsPage() {
     setDownloading(id);
     try {
       const data = await fetchReportData(id);
-      setLastGenDates((prev) => ({ ...prev, [id]: today }));
+      setLastGenDates((prev) => ({ ...prev, [id]: getToday() }));
       const ws = XLSX.utils.aoa_to_sheet([data.headers, ...data.rows.map(r => r.map(String))]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 30));
-      XLSX.writeFile(wb, `${name.replace(/\s+/g, "_")}_${today}.xlsx`);
+      XLSX.writeFile(wb, `${name.replace(/\s+/g, "_")}_${getToday()}.xlsx`);
       showToast(`${name} downloaded`);
-    } catch (err) {
-      console.error("[Reports] download error:", err);
+    } catch {
       showToast(`Download failed. Please try again.`, false);
     } finally {
       setDownloading(null);
@@ -555,7 +554,7 @@ export default function ReportsPage() {
                 const IconComp = r.icon;
                 const isGen  = generating  === r.id;
                 const isDl   = downloading === r.id;
-                const isToday = lastGenDates[r.id] === today;
+                const isToday = lastGenDates[r.id] === getToday();
                 return (
                   <div key={r.id} className={`bg-gray-50 rounded-2xl p-5 flex flex-col gap-4 transition-all ${(isGen || isDl) ? "ring-2 ring-[#4F3CC9]/30" : ""}`}>
                     <div className="w-10 h-10 rounded-xl bg-[#EDE9FF] flex items-center justify-center">
@@ -567,7 +566,7 @@ export default function ReportsPage() {
                       <div className="flex items-center gap-1.5 mt-2">
                         {isToday && <CheckCircle size={11} className="text-green-500 shrink-0" />}
                         <p className={`text-xs ${isToday ? "text-green-600 font-medium" : "text-gray-400"}`}>
-                          Last generated: {lastGenDates[r.id]}
+                          {lastGenDates[r.id] ? `Last generated: ${lastGenDates[r.id]}` : "Not yet generated"}
                         </p>
                       </div>
                     </div>
@@ -599,6 +598,12 @@ export default function ReportsPage() {
         {/* ── Analytics Tab ── */}
         {activeTab === "Analytics" && (
           <div className="p-6 space-y-5">
+            {analyticsError && (
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+                <X size={16} className="shrink-0" />
+                Failed to load analytics data. Please check your connection and try again.
+              </div>
+            )}
             {analyticsLoading ? (
               <div className="flex items-center justify-center py-20 gap-3 text-gray-400">
                 <Loader2 size={22} className="animate-spin text-[#4F3CC9]" />
@@ -612,7 +617,7 @@ export default function ReportsPage() {
                     { label: "Total Employees",  value: analytics.stats.totalEmp,                     icon: Users,       color: "bg-purple-50 text-[#4F3CC9]" },
                     { label: "Pending Leaves",   value: analytics.stats.pendingLeaves,                icon: CalendarOff, color: "bg-yellow-50 text-yellow-600" },
                     { label: "Active Goals",     value: analytics.stats.totalGoals,                   icon: Target,      color: "bg-blue-50 text-blue-600"     },
-                    { label: "Total Payroll",    value: fmtINR(analytics.stats.monthlyPayroll),       icon: DollarSign,  color: "bg-green-50 text-green-600"   },
+                    { label: "Total Payroll",    value: fmtINR(analytics.stats.monthlyPayroll),       icon: IndianRupee,  color: "bg-green-50 text-green-600"   },
                   ].map(({ label, value, icon: Icon, color }) => (
                     <div key={label} className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center gap-3">
                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${color}`}>

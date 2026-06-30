@@ -1,6 +1,9 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { db } from "@/lib/firebase";
+import { doc, onSnapshot } from "firebase/firestore";
 import {
   LayoutDashboard,
   Users,
@@ -8,7 +11,7 @@ import {
   Clock,
   CalendarOff,
   Target,
-  DollarSign,
+  IndianRupee,
   BarChart3,
   Bell,
   Settings,
@@ -24,7 +27,7 @@ const navItems = [
   { label: "Attendance",         href: "/dashboard/attendance",    icon: Clock           },
   { label: "Leave Management",   href: "/dashboard/leave",         icon: CalendarOff     },
   { label: "Goals / KPIs",       href: "/dashboard/goals",         icon: Target          },
-  { label: "Compensation",       href: "/dashboard/compensation",  icon: DollarSign      },
+  { label: "Compensation",       href: "/dashboard/compensation",  icon: IndianRupee      },
   { label: "Documents",          href: "/dashboard/documents",     icon: FolderOpen      },
   { label: "Reports & Analytics",href: "/dashboard/reports",       icon: BarChart3       },
   { label: "Notifications",      href: "/dashboard/notifications", icon: Bell            },
@@ -34,10 +37,28 @@ const navItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [companyLogoUrl, setCompanyLogoUrl] = useState<string | null>(null);
+  const [companyName, setCompanyName] = useState<string>("");
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "company"), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.logoUrl) setCompanyLogoUrl(data.logoUrl as string);
+        if (data.name)    setCompanyName(data.name as string);
+      }
+    }, () => {});
+    return () => unsub();
+  }, []);
+
   return (
     <aside className="w-[260px] h-screen bg-white border-r border-gray-100 flex flex-col py-5 px-4">
       <div className="mb-5 px-2 shrink-0">
-        <img src="/woways-logo.svg" alt="Woways" className="h-9 w-auto" />
+        {companyLogoUrl ? (
+          <img src={companyLogoUrl} alt={companyName || "Company Logo"} className="h-9 w-auto object-contain max-w-[180px]" />
+        ) : (
+          <img src="/woways-logo.svg" alt="Woways" className="h-9 w-auto" />
+        )}
       </div>
       <nav className="flex-1 overflow-y-auto space-y-0.5 pr-1 scrollbar-thin">
         {navItems.map(({ label, href, icon: Icon }) => {

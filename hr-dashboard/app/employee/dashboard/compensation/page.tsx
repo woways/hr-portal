@@ -4,7 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { collection, query, where, getDocs, getDoc, doc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import {
-  DollarSign, TrendingUp, Clock, CheckCircle, Download,
+  IndianRupee, TrendingUp, Clock, CheckCircle, Download,
   Eye, EyeOff, CreditCard, Info, Loader2,
 } from "lucide-react";
 
@@ -234,9 +234,7 @@ export default function CompensationPage() {
           });
 
         setAllSlips(slips);
-      } catch (err) {
-        console.error("[Compensation] load error:", err);
-      }
+      } catch { /* ignore */ }
       setLoading(false);
     });
     return () => unsub();
@@ -504,7 +502,7 @@ export default function CompensationPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-5 gap-4">
         {[
-          { label: "Current Salary",   val: latestSlip ? val(latestSlip.gross) : "—",      sub: latestSlip?.period ?? "No records",   icon: <DollarSign size={15} className="text-[#4F3CC9]" />,  bg: "bg-purple-50" },
+          { label: "Current Salary",   val: latestSlip ? val(latestSlip.gross) : "—",      sub: latestSlip?.period ?? "No records",   icon: <IndianRupee size={15} className="text-[#4F3CC9]" />,  bg: "bg-purple-50" },
           { label: "Last Net Pay",     val: latestSlip ? val(latestSlip.net)   : "—",      sub: latestSlip?.period ?? "No payslips",  icon: <CheckCircle size={15} className="text-green-600" />, bg: "bg-green-50"  },
           { label: "Total TDS (YTD)",  val: totalTds > 0 ? val(totalTds) : "—",            sub: fy,                                   icon: <TrendingUp size={15} className="text-orange-500" />,  bg: "bg-orange-50" },
           { label: "Pending Payments", val: pendingAmt > 0 ? val(pendingAmt) : "₹0",       sub: pendingSlips.length > 0 ? `${pendingSlips.length} pending` : "All paid", icon: <Clock size={15} className="text-yellow-500" />, bg: "bg-yellow-50" },

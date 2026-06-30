@@ -1,14 +1,18 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Pencil, Trash2, X, Check, Save, Loader2, CheckCircle, Upload, ImageIcon, Mail, AlertCircle, KeyRound } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Check, Save, Loader2, CheckCircle, Upload, ImageIcon, Mail, AlertCircle, KeyRound, Eye, EyeOff, Lock, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getSettingsDoc, saveSettingsDoc } from "@/lib/firebaseService";
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { storage, auth } from "@/lib/firebase";
-import { sendPasswordResetEmail } from "firebase/auth";
+import { storage, auth, firebaseConfig } from "@/lib/firebase";
+import { sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
+import { initializeApp, getApps, deleteApp } from "firebase/app";
+import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc, collection, getDocs, query, where } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
-type SettingsTab = "Company" | "Departments" | "Leave Policies" | "Work Timings" | "Attendance Rules" | "Holiday Calendar" | "Password Reset";
+type SettingsTab = "Company" | "Departments" | "Leave Policies" | "Work Timings" | "Attendance Rules" | "Holiday Calendar" | "Password Reset" | "HR Accounts";
 
-const settingsTabs: SettingsTab[] = ["Company", "Departments", "Leave Policies", "Work Timings", "Attendance Rules", "Holiday Calendar", "Password Reset"];
+const settingsTabs: SettingsTab[] = ["Company", "Departments", "Leave Policies", "Work Timings", "Attendance Rules", "Holiday Calendar", "Password Reset", "HR Accounts"];
 
 // ── Default data (used only when Firebase has no data yet) ────────────────────
 const DEFAULT_DEPTS = ["Engineering", "Marketing", "Sales", "HR", "Finance", "Operations", "Design"];
@@ -62,28 +66,124 @@ export default function SettingsPage() {
   const [logoUploading, setLogoUploading] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Password Reset ────────────────────────────────────────────────────────
-  const [resetEmail,   setResetEmail]   = useState("");
+  // ── Password Management ───────────────────────────────────────────────────
+  const [currentPw,     setCurrentPw]     = useState("");
+  const [newPw,         setNewPw]         = useState("");
+  const [confirmPw,     setConfirmPw]     = useState("");
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNewPw,     setShowNewPw]     = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
+  const [pwSaving,      setPwSaving]      = useState(false);
+  const [pwSuccess,     setPwSuccess]     = useState<string | null>(null);
+  const [pwError,       setPwError]       = useState<string | null>(null);
+
   const [resetSending, setResetSending] = useState(false);
   const [resetSuccess, setResetSuccess] = useState<string | null>(null);
   const [resetError,   setResetError]   = useState<string | null>(null);
 
-  async function handlePasswordReset() {
-    setResetError(null);
-    setResetSuccess(null);
-    const trimmed = resetEmail.trim();
-    if (!trimmed) { setResetError("Please enter an email address."); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) { setResetError("Enter a valid email address (e.g. name@gmail.com)."); return; }
-    setResetSending(true);
+  // ── HR Accounts ───────────────────────────────────────────────────────────
+  interface HRAccount { uid: string; email: string; name: string; createdAt: string; }
+  const [hrAccounts,    setHrAccounts]    = useState<HRAccount[]>([]);
+  const [hrLoading,     setHrLoading]     = useState(false);
+  const [newHrEmail,    setNewHrEmail]    = useState("");
+  const [newHrName,     setNewHrName]     = useState("");
+  const [newHrPassword, setNewHrPassword] = useState("");
+  const [showNewHrPw,   setShowNewHrPw]   = useState(false);
+  const [hrCreating,    setHrCreating]    = useState(false);
+  const [hrError,       setHrError]       = useState<string | null>(null);
+  const [hrSuccess,     setHrSuccess]     = useState<string | null>(null);
+
+  async function loadHrAccounts() {
+    setHrLoading(true);
     try {
-      await sendPasswordResetEmail(auth, trimmed);
-      setResetSuccess(trimmed);
-      setResetEmail("");
+      const snap = await getDocs(query(collection(db, "users"), where("role", "==", "hr_admin")));
+      setHrAccounts(snap.docs.map(d => {
+        const data = d.data();
+        return { uid: d.id, email: data.email ?? "", name: data.name ?? data.displayName ?? "", createdAt: data.createdAt ?? "" };
+      }));
+    } catch { /* ignore */ } finally {
+      setHrLoading(false);
+    }
+  }
+
+  async function createHrAccount() {
+    setHrError(null); setHrSuccess(null);
+    if (!newHrEmail.trim()) { setHrError("Email is required."); return; }
+    if (!newHrPassword || newHrPassword.length < 6) { setHrError("Password must be at least 6 characters."); return; }
+    if (!newHrName.trim()) { setHrError("Name is required."); return; }
+    setHrCreating(true);
+    // Use a secondary app instance so current HR session is not affected
+    const secondaryAppName = "hr-create-temp";
+    let secondaryApp;
+    try {
+      secondaryApp = getApps().find(a => a.name === secondaryAppName) ?? initializeApp(firebaseConfig, secondaryAppName);
+      const secondaryAuth = getAuth(secondaryApp);
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, newHrEmail.trim(), newHrPassword);
+      await secondaryAuth.signOut();
+      await setDoc(doc(db, "users", cred.user.uid), {
+        uid: cred.user.uid, email: newHrEmail.trim(), name: newHrName.trim(),
+        role: "hr_admin", createdAt: new Date().toISOString(),
+      });
+      setHrSuccess(`HR account created for ${newHrEmail.trim()}`);
+      setNewHrEmail(""); setNewHrName(""); setNewHrPassword("");
+      loadHrAccounts();
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? "";
-      if (code === "auth/user-not-found")     setResetError("No account found with this email address.");
-      else if (code === "auth/invalid-email") setResetError("The email address is not valid.");
-      else if (code === "auth/too-many-requests") setResetError("Too many requests. Please wait a moment and try again.");
+      if (code === "auth/email-already-in-use") setHrError("This email is already registered.");
+      else if (code === "auth/invalid-email")   setHrError("Invalid email address.");
+      else setHrError("Failed to create account. Please try again.");
+    } finally {
+      setHrCreating(false);
+      if (secondaryApp) { try { await deleteApp(secondaryApp); } catch { /* ignore */ } }
+    }
+  }
+
+  async function handleChangePassword() {
+    setPwError(null);
+    setPwSuccess(null);
+    if (!currentPw) { setPwError("Please enter your current password."); return; }
+    if (!newPw)     { setPwError("Please enter a new password."); return; }
+    if (newPw.length < 6) { setPwError("New password must be at least 6 characters."); return; }
+    if (newPw !== confirmPw) { setPwError("New passwords do not match."); return; }
+    if (currentPw === newPw) { setPwError("New password must be different from current password."); return; }
+
+    const user = auth.currentUser;
+    if (!user || !user.email) { setPwError("Session expired. Please log in again."); return; }
+
+    setPwSaving(true);
+    try {
+      const credential = EmailAuthProvider.credential(user.email, currentPw);
+      await reauthenticateWithCredential(user, credential);
+      await updatePassword(user, newPw);
+      setPwSuccess("Password changed successfully!");
+      setCurrentPw(""); setNewPw(""); setConfirmPw("");
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code ?? "";
+      if (code === "auth/wrong-password" || code === "auth/invalid-credential")
+        setPwError("Current password is incorrect.");
+      else if (code === "auth/too-many-requests")
+        setPwError("Too many attempts. Please wait a moment and try again.");
+      else if (code === "auth/network-request-failed")
+        setPwError("Network error. Please check your connection.");
+      else
+        setPwError("Failed to change password. Please try again.");
+    } finally {
+      setPwSaving(false);
+    }
+  }
+
+  async function handleForgotPassword() {
+    setResetError(null);
+    setResetSuccess(null);
+    const email = auth.currentUser?.email;
+    if (!email) { setResetError("Could not detect your email. Please log in again."); return; }
+    setResetSending(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setResetSuccess(email);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code ?? "";
+      if (code === "auth/too-many-requests") setResetError("Too many requests. Please wait a moment.");
       else setResetError("Failed to send reset email. Please try again.");
     } finally {
       setResetSending(false);
@@ -175,10 +275,12 @@ export default function SettingsPage() {
           if (data?.list) setHolidays(data.list as Holiday[]);
           break;
         }
+        case "HR Accounts": {
+          await loadHrAccounts();
+          break;
+        }
       }
-    } catch (err) {
-      console.error("[Settings] load error:", err);
-    } finally {
+    } catch { /* ignore */ } finally {
       setLoadingTab(null);
     }
   }, []);
@@ -204,10 +306,9 @@ export default function SettingsPage() {
       });
       const url = await getDownloadURL(sRef);
       setLogoUrl(url);
-      await saveSettingsDoc("company", { ...companyForm, logoUrl: url });
+      await saveSettingsDoc("company", { logoUrl: url });
       showToast("Logo uploaded and saved");
     } catch (err) {
-      console.error("[Logo upload]", err);
       showToast("Logo upload failed. Check storage rules.", false);
     } finally {
       setLogoUploading(false);
@@ -221,7 +322,6 @@ export default function SettingsPage() {
       await saveSettingsDoc(docId, data);
       showToast("Changes saved successfully");
     } catch (err) {
-      console.error("[Settings] save error:", err);
       showToast("Failed to save. Please try again.", false);
     } finally {
       setSavingTab(null);
@@ -229,33 +329,33 @@ export default function SettingsPage() {
   }
 
   // ── Departments: immediate Firebase write on every change ─────────────────
-  async function persistDepts(updated: string[]) {
+  async function persistDepts(updated: string[], successMsg: string) {
+    const prev = depts;
     setDepts(updated);
     try {
       await saveSettingsDoc("departments", { list: updated });
-    } catch (err) {
-      console.error("[Settings] dept save error:", err);
+      showToast(successMsg);
+    } catch {
+      setDepts(prev);
       showToast("Failed to save department.", false);
     }
   }
 
   function addDept() {
     if (!newDept.trim()) return;
-    persistDepts([...depts, newDept.trim()]);
+    const updated = [...depts, newDept.trim()];
     setNewDept(""); setAddingDept(false);
-    showToast("Department added");
+    persistDepts(updated, "Department added");
   }
   function removeDept(i: number) {
-    persistDepts(depts.filter((_, idx) => idx !== i));
-    showToast("Department removed");
+    persistDepts(depts.filter((_, idx) => idx !== i), "Department removed");
   }
   function startEditDept(i: number) { setEditDeptIdx(i); setEditDeptVal(depts[i]); }
   function saveEditDept() {
     if (editDeptIdx === null || !editDeptVal.trim()) return;
     const updated = [...depts]; updated[editDeptIdx] = editDeptVal.trim();
-    persistDepts(updated);
     setEditDeptIdx(null);
-    showToast("Department updated");
+    persistDepts(updated, "Department updated");
   }
 
   // ── Leave Policies ────────────────────────────────────────────────────────
@@ -265,24 +365,28 @@ export default function SettingsPage() {
   }
   async function saveEditPolicy() {
     if (!editPolicy) return;
+    const prev = leavePolicies;
     const updated = leavePolicies.map((p) => p.id === editPolicy.id ? { ...p, ...editPolicyForm } : p);
     setLeavePolicies(updated);
-    setEditPolicy(null);
     try {
       await saveSettingsDoc("leavePolicies", { list: updated });
       showToast("Leave policy updated");
+      setEditPolicy(null);
     } catch {
+      setLeavePolicies(prev);
+      setEditPolicy(editPolicy);
       showToast("Failed to save leave policy.", false);
     }
   }
 
   // ── Holidays: immediate Firebase write on every change ────────────────────
   async function persistHolidays(updated: Holiday[]) {
+    const prev = holidays;
     setHolidays(updated);
     try {
       await saveSettingsDoc("holidays", { list: updated });
-    } catch (err) {
-      console.error("[Settings] holiday save error:", err);
+    } catch {
+      setHolidays(prev);
       showToast("Failed to save holiday.", false);
     }
   }
@@ -648,30 +752,238 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* ── Password Reset ── */}
-          {activeTab === "Password Reset" && (
-            <div className="bg-white rounded-2xl shadow-sm p-6 space-y-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#EDE9FF] flex items-center justify-center shrink-0">
-                  <KeyRound size={20} className="text-[#4F3CC9]" />
+          {/* ── HR Accounts ── */}
+          {activeTab === "HR Accounts" && (
+            <div className="space-y-5">
+              {/* Create new HR account */}
+              <div className="bg-white rounded-2xl shadow-sm p-6 space-y-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#EDE9FF] flex items-center justify-center shrink-0">
+                    <UserPlus size={18} className="text-[#4F3CC9]" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-gray-900">Create HR Account</h2>
+                    <p className="text-xs text-gray-400 mt-0.5">Add a new HR admin who can access the HR dashboard</p>
+                  </div>
                 </div>
-                <div>
-                  <h2 className="text-base font-semibold text-gray-900">Password Reset</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">Send a secure password reset link to any employee&apos;s email</p>
+
+                {hrSuccess && (
+                  <div className="flex items-center gap-3 px-4 py-3.5 rounded-xl bg-green-50 border border-green-200">
+                    <CheckCircle size={16} className="text-green-600 shrink-0" />
+                    <p className="text-sm font-medium text-green-800">{hrSuccess}</p>
+                  </div>
+                )}
+                {hrError && (
+                  <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200">
+                    <AlertCircle size={15} className="text-red-500 shrink-0" />
+                    <p className="text-sm text-red-600">{hrError}</p>
+                  </div>
+                )}
+
+                <div className="space-y-4 max-w-md">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1.5">Full Name</label>
+                    <input
+                      value={newHrName}
+                      onChange={(e) => { setNewHrName(e.target.value); setHrError(null); setHrSuccess(null); }}
+                      placeholder="e.g. Ravi Kumar"
+                      className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1.5">Email Address</label>
+                    <div className="relative">
+                      <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="email"
+                        value={newHrEmail}
+                        onChange={(e) => { setNewHrEmail(e.target.value); setHrError(null); setHrSuccess(null); }}
+                        placeholder="e.g. hr2@woways.in"
+                        className="pl-9 w-full py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1.5">Password</label>
+                    <div className="relative">
+                      <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type={showNewHrPw ? "text" : "password"}
+                        value={newHrPassword}
+                        onChange={(e) => { setNewHrPassword(e.target.value); setHrError(null); setHrSuccess(null); }}
+                        placeholder="Min. 6 characters"
+                        className="pl-9 pr-10 w-full py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30 font-mono"
+                      />
+                      <button type="button" onClick={() => setShowNewHrPw(!showNewHrPw)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        {showNewHrPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </div>
+                  <button onClick={createHrAccount} disabled={hrCreating}
+                    className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-[#3d2fa3] disabled:opacity-60 flex items-center justify-center gap-2 transition-colors">
+                    {hrCreating ? <><Loader2 size={14} className="animate-spin" />Creating…</> : <><UserPlus size={14} />Create HR Account</>}
+                  </button>
                 </div>
               </div>
 
-              <div className="max-w-lg space-y-4">
+              {/* Existing HR accounts list */}
+              <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-6 py-4 border-b">
+                  <div className="flex items-center gap-2">
+                    <Users size={16} className="text-[#4F3CC9]" />
+                    <h2 className="text-base font-semibold text-gray-900">Existing HR Accounts</h2>
+                  </div>
+                  <button onClick={loadHrAccounts} disabled={hrLoading}
+                    className="text-xs text-[#4F3CC9] font-medium hover:underline disabled:opacity-50 flex items-center gap-1">
+                    {hrLoading ? <Loader2 size={12} className="animate-spin" /> : null} Refresh
+                  </button>
+                </div>
+                {hrLoading ? (
+                  <div className="flex justify-center py-10"><Loader2 size={24} className="animate-spin text-[#4F3CC9]" /></div>
+                ) : hrAccounts.length === 0 ? (
+                  <p className="text-center text-sm text-gray-400 py-8">No HR accounts found.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
+                        <th className="px-5 py-3 text-left">Name</th>
+                        <th className="px-5 py-3 text-left">Email</th>
+                        <th className="px-5 py-3 text-left">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {hrAccounts.map((acc) => (
+                        <tr key={acc.uid} className="hover:bg-gray-50">
+                          <td className="px-5 py-3 font-medium text-gray-900">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-[#EDE9FF] flex items-center justify-center text-[#4F3CC9] font-bold text-xs shrink-0">
+                                {(acc.name || acc.email).charAt(0).toUpperCase()}
+                              </div>
+                              {acc.name || "—"}
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 text-gray-600">{acc.email}</td>
+                          <td className="px-5 py-3 text-gray-400 text-xs">
+                            {acc.createdAt ? new Date(acc.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Password Management ── */}
+          {activeTab === "Password Reset" && (
+            <div className="space-y-5">
+
+              {/* ── Change Password ── */}
+              <div className="bg-white rounded-2xl shadow-sm p-6 space-y-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#EDE9FF] flex items-center justify-center shrink-0">
+                    <Lock size={18} className="text-[#4F3CC9]" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-gray-900">Change My Password</h2>
+                    <p className="text-xs text-gray-400 mt-0.5">Update your HR admin account password</p>
+                  </div>
+                </div>
+
+                {pwSuccess && (
+                  <div className="flex items-center gap-3 px-4 py-3.5 rounded-xl bg-green-50 border border-green-200">
+                    <CheckCircle size={16} className="text-green-600 shrink-0" />
+                    <p className="text-sm font-medium text-green-800">{pwSuccess}</p>
+                  </div>
+                )}
+                {pwError && (
+                  <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200">
+                    <AlertCircle size={15} className="text-red-500 shrink-0" />
+                    <p className="text-sm text-red-600">{pwError}</p>
+                  </div>
+                )}
+
+                <div className="space-y-4 max-w-md">
+                  {/* Current password */}
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1.5">Current Password</label>
+                    <div className="relative">
+                      <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input type={showCurrentPw ? "text" : "password"} placeholder="Enter current password"
+                        value={currentPw} onChange={(e) => { setCurrentPw(e.target.value); setPwError(null); setPwSuccess(null); }}
+                        className="pl-9 pr-10 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30 w-full font-mono" />
+                      <button type="button" onClick={() => setShowCurrentPw(!showCurrentPw)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        {showCurrentPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* New password */}
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1.5">New Password</label>
+                    <div className="relative">
+                      <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input type={showNewPw ? "text" : "password"} placeholder="Min. 6 characters"
+                        value={newPw} onChange={(e) => { setNewPw(e.target.value); setPwError(null); setPwSuccess(null); }}
+                        className="pl-9 pr-10 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30 w-full font-mono" />
+                      <button type="button" onClick={() => setShowNewPw(!showNewPw)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        {showNewPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Confirm new password */}
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1.5">Confirm New Password</label>
+                    <div className="relative">
+                      <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input type={showConfirmPw ? "text" : "password"} placeholder="Re-enter new password"
+                        value={confirmPw} onChange={(e) => { setConfirmPw(e.target.value); setPwError(null); setPwSuccess(null); }}
+                        className={`pl-9 pr-10 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 w-full font-mono ${
+                          confirmPw && newPw !== confirmPw ? "border-red-300 focus:ring-red-200" : "border-gray-200 focus:ring-[#4F3CC9]/30"
+                        }`} />
+                      <button type="button" onClick={() => setShowConfirmPw(!showConfirmPw)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        {showConfirmPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                    {confirmPw && newPw !== confirmPw && (
+                      <p className="text-xs text-red-500 mt-1">Passwords do not match</p>
+                    )}
+                  </div>
+
+                  <button onClick={handleChangePassword} disabled={pwSaving}
+                    className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-[#3d2fa3] disabled:opacity-60 flex items-center justify-center gap-2 transition-colors">
+                    {pwSaving ? <><Loader2 size={14} className="animate-spin" />Updating…</> : <><Lock size={14} />Update Password</>}
+                  </button>
+                </div>
+              </div>
+
+              {/* ── Forgot / Reset via Email ── */}
+              <div className="bg-white rounded-2xl shadow-sm p-6 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                    <ShieldCheck size={18} className="text-blue-600" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-gray-900">Forgot Password?</h2>
+                    <p className="text-xs text-gray-400 mt-0.5">Can&apos;t remember your current password? Send a reset link to your email</p>
+                  </div>
+                </div>
+
                 {resetSuccess && (
                   <div className="flex items-start gap-3 px-4 py-3.5 rounded-xl bg-green-50 border border-green-200">
                     <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-sm font-medium text-green-800">Reset email sent successfully</p>
-                      <p className="text-xs text-green-700 mt-0.5">A password reset link was delivered to <span className="font-semibold">{resetSuccess}</span>. Ask the employee to check their inbox and spam folder.</p>
+                      <p className="text-sm font-medium text-green-800">Reset email sent!</p>
+                      <p className="text-xs text-green-700 mt-0.5">Check your inbox at <span className="font-semibold">{resetSuccess}</span> — click the link to set a new password. Expires in 1 hour.</p>
                     </div>
                   </div>
                 )}
-
                 {resetError && (
                   <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200">
                     <AlertCircle size={15} className="text-red-500 shrink-0" />
@@ -679,51 +991,17 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1.5">Employee Email Address</label>
-                  <div className="flex gap-3">
-                    <div className="relative flex-1">
-                      <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                      <input
-                        type="email"
-                        placeholder="e.g. employee@woways.in"
-                        value={resetEmail}
-                        onChange={(e) => { setResetEmail(e.target.value); setResetError(null); setResetSuccess(null); }}
-                        onKeyDown={(e) => e.key === "Enter" && handlePasswordReset()}
-                        className={`pl-9 pr-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 w-full transition-all ${
-                          resetError ? "border-red-300 focus:ring-red-200" : "border-gray-200 focus:ring-[#4F3CC9]/30"
-                        }`}
-                      />
-                    </div>
-                    <button
-                      onClick={handlePasswordReset}
-                      disabled={resetSending}
-                      className="bg-[#4F3CC9] text-white rounded-xl px-5 py-2.5 text-sm font-medium hover:bg-[#3d2fa3] disabled:opacity-60 whitespace-nowrap flex items-center gap-2 transition-colors"
-                    >
-                      {resetSending
-                        ? <><Loader2 size={14} className="animate-spin" /> Sending…</>
-                        : "Send Reset Email"
-                      }
-                    </button>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-2">Firebase will send a secure link. The employee clicks it to set a new password. The link expires in 1 hour.</p>
+                <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 max-w-md">
+                  <Mail size={14} className="text-gray-400 shrink-0" />
+                  <span className="text-sm text-gray-600 flex-1">{auth.currentUser?.email ?? "—"}</span>
+                  <button onClick={handleForgotPassword} disabled={resetSending}
+                    className="bg-blue-600 text-white rounded-lg px-4 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-60 flex items-center gap-1.5 transition-colors shrink-0">
+                    {resetSending ? <><Loader2 size={12} className="animate-spin" />Sending…</> : "Send Reset Link"}
+                  </button>
                 </div>
-
-                <div className="bg-gray-50 rounded-xl p-4 space-y-2">
-                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">How it works</p>
-                  {[
-                    "Enter the employee's registered email address above",
-                    'Click "Send Reset Email" - Firebase sends a secure link instantly',
-                    "Employee clicks the link in their inbox to set a new password",
-                    "The reset link expires automatically after 1 hour for security",
-                  ].map((step, i) => (
-                    <div key={i} className="flex items-start gap-2.5">
-                      <span className="w-5 h-5 rounded-full bg-[#4F3CC9] text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
-                      <p className="text-xs text-gray-500">{step}</p>
-                    </div>
-                  ))}
-                </div>
+                <p className="text-xs text-gray-400 max-w-md">After clicking, check your inbox and spam folder. Click the link to set a new password, then log back in.</p>
               </div>
+
             </div>
           )}
         </div>

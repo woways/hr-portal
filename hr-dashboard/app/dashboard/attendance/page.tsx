@@ -6,7 +6,7 @@ import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, PieChart, Pie, Cell,
 } from "recharts";
 import { getAttendance, updateAttendance, getAllClockRecords, updateRegularizationStatus } from "@/lib/firebaseService";
-import { collection, onSnapshot, query, getDocs, where } from "firebase/firestore";
+import { collection, onSnapshot, query, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { backfillAllEmployees } from "@/lib/attendanceBackfill";
 
@@ -22,17 +22,7 @@ interface AttendanceRecord {
 
 // No static initRecords — data loads from /api/attendance (real employees only)
 
-const heatmapData: number[][] = [];
 const heatmapDays = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-const heatmapWeeks: string[] = [];
-
-const absenteeismTrend: { month: string; absent: number; late: number }[] = [];
-
-const overtimeData: { name: string; hours: number }[] = [];
-
-const shiftCompliance: { dept: string; compliance: number }[] = [];
-
-const lateTracker: { name: string; empId: string; lateDays: number; avgDelay: string }[] = [];
 
 const PIE_COLORS = ["#4F3CC9", "#10B981", "#F59E0B", "#EF4444"];
 
@@ -107,21 +97,7 @@ export default function AttendancePage() {
       try {
         const snap = await getDocs(collection(db, "employees"));
         empDocs = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
-        console.log("[Attendance] employees collection:", empDocs.length, "docs");
-      } catch (e) {
-        console.error("[Attendance] employees read error:", e);
-      }
-
-      // ── Step 2: If no employees found, fall back to `users` collection ──
-      if (empDocs.length === 0) {
-        try {
-          const snap = await getDocs(query(collection(db, "users"), where("role", "==", "employee")));
-          empDocs = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
-          console.log("[Attendance] users fallback:", empDocs.length, "docs");
-        } catch (e) {
-          console.error("[Attendance] users read error:", e);
-        }
-      }
+      } catch { /* ignore */ }
 
       const empList = empDocs.map((d) => ({
         id:               String(d.employeeId ?? d.id ?? ""),
@@ -132,17 +108,13 @@ export default function AttendancePage() {
         workMode:         String(d.workMode ?? "Office"),
       })).filter((e) => e.id);   // drop any rows with no id
 
-      console.log("[Attendance] empList:", empList.length, empList.map(e => e.id));
 
       // ── Step 3: Load today's attendance records ──
       let attList: Record<string, unknown>[] = [];
       try {
         const raw = await getAttendance(TODAY);
         attList = raw as Record<string, unknown>[];
-        console.log("[Attendance] attendance records for", TODAY, ":", attList.length);
-      } catch (e) {
-        console.error("[Attendance] attendance read error:", e);
-      }
+      } catch { /* ignore */ }
 
       // Populate work-location ref for syncClockData
       const locMap = new Map<string, WorkLocation>();
@@ -177,7 +149,6 @@ export default function AttendancePage() {
         };
       });
 
-      console.log("[Attendance] merged records:", merged.length);
       setRecords(merged);
       setLoadingRecords(false);
 
@@ -186,7 +157,6 @@ export default function AttendancePage() {
         backfillAllEmployees(empList).catch(() => {});
       }
     } catch (e) {
-      console.error("[Attendance] loadAttendance error:", e);
       setLoadingRecords(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -427,6 +397,49 @@ export default function AttendancePage() {
     }));
   })();
 
+  // Compute heatmap from monthlyAttendance (% present per weekday per week)
+  const computedHeatmap = (() => {
+    const dayMap: Record<string, { present: number; total: number }> = {};
+    for (const r of [...monthlyAttendance, ...records.filter(r2 => r2.date === TODAY)]) {
+      if (!dayMap[r.date]) dayMap[r.date] = { present: 0, total: 0 };
+      dayMap[r.date].total++;
+      if (r.status === "Present" || r.status === "Half Day") dayMap[r.date].present++;
+    }
+    const weekMap = new Map<string, (number | null)[]>();
+    for (const date of Object.keys(dayMap).sort()) {
+      const d = new Date(date + "T00:00:00");
+      const dow = d.getDay();
+      if (dow === 0 || dow === 6) continue;
+      const mon = new Date(d);
+      mon.setDate(d.getDate() - (dow - 1));
+      const wk = `${String(mon.getDate()).padStart(2,"0")}/${String(mon.getMonth()+1).padStart(2,"0")}`;
+      if (!weekMap.has(wk)) weekMap.set(wk, [null,null,null,null,null]);
+      const row = weekMap.get(wk)!;
+      const { present, total } = dayMap[date];
+      row[dow - 1] = total > 0 ? Math.round((present / total) * 100) : 0;
+    }
+    const weeks = Array.from(weekMap.keys());
+    const data = weeks.map(w => weekMap.get(w)!.map(v => v ?? 0));
+    return { data, weeks };
+  })();
+
+  // Compute shift compliance by department from today's records
+  const computedShiftCompliance = (() => {
+    const byDept: Record<string, { onTime: number; total: number }> = {};
+    for (const r of records) {
+      const dept = r.dept || "Unknown";
+      if (!byDept[dept]) byDept[dept] = { onTime: 0, total: 0 };
+      byDept[dept].total++;
+      if ((r.status === "Present" || r.status === "Half Day") && !r.late) byDept[dept].onTime++;
+    }
+    return Object.entries(byDept)
+      .map(([dept, { onTime, total }]) => ({ dept, compliance: total > 0 ? Math.round((onTime / total) * 100) : 0 }))
+      .sort((a, b) => b.compliance - a.compliance);
+  })();
+
+  // Derive unique managers from loaded records
+  const managerOptions = ["All", ...Array.from(new Set(records.map(r => r.manager).filter(Boolean))).sort()];
+
   // Real-time regularization requests — onSnapshot (authenticated HR admin client)
   useEffect(() => {
     const q = query(collection(db, "regularization"));
@@ -595,7 +608,7 @@ export default function AttendancePage() {
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-400">Manager</label>
             <select value={managerFilter} onChange={(e) => setManagerFilter(e.target.value)} className={inputCls}>
-              {["All"].map(m => <option key={m}>{m}</option>)}
+              {managerOptions.map(m => <option key={m}>{m}</option>)}
             </select>
           </div>
           <div className="flex flex-col gap-1">
@@ -686,9 +699,12 @@ export default function AttendancePage() {
                 </tr>
               </thead>
               <tbody>
-                {heatmapData.map((row, wi) => (
+                {computedHeatmap.data.length === 0 && (
+                  <tr><td colSpan={6} className="py-6 text-center text-xs text-gray-400">No attendance data for selected month yet.</td></tr>
+                )}
+                {computedHeatmap.data.map((row, wi) => (
                   <tr key={wi}>
-                    <td className="py-1 pr-3 text-gray-400 text-xs">{heatmapWeeks[wi]}</td>
+                    <td className="py-1 pr-3 text-gray-400 text-xs">{computedHeatmap.weeks[wi]}</td>
                     {row.map((pct, di) => (
                       <td key={di} className="py-1 px-1">
                         <div className={`rounded-lg py-2 text-center font-semibold text-xs cursor-default ${heatColor(pct)}`} title={`${pct}% attendance`}>
@@ -831,7 +847,8 @@ export default function AttendancePage() {
         <div className="bg-white rounded-2xl shadow-sm p-6">
           <h2 className="text-base font-semibold text-gray-900 mb-4">Shift Compliance by Department</h2>
           <div className="space-y-3">
-            {shiftCompliance.map((s) => (
+            {computedShiftCompliance.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No attendance data loaded yet.</p>}
+            {computedShiftCompliance.map((s) => (
               <div key={s.dept} className="flex items-center gap-3">
                 <span className="text-sm text-gray-700 w-28 shrink-0">{s.dept}</span>
                 <div className="flex-1 bg-gray-100 rounded-full h-2.5">
@@ -1060,7 +1077,18 @@ export default function AttendancePage() {
               }).map((m) => <option key={m}>{m}</option>)}
             </select>
             <button
-              onClick={() => exportAttendanceExcel(records, "monthly_attendance")}
+              onClick={() => {
+                if (computedMonthlyReport.length === 0) { alert("No monthly data loaded yet. Please wait or select a different month."); return; }
+                const data = computedMonthlyReport.map(r => ({
+                  "Emp ID": r.empId, "Name": r.name, "Department": r.dept,
+                  "Present": r.present, "Absent": r.absent, "Half Days": r.halfDays,
+                  "Late Days": r.late, "Avg Hours": r.avgHours, "Overtime": r.overtime,
+                }));
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Monthly Report");
+                XLSX.writeFile(wb, `monthly_report_${new Date().toISOString().slice(0,10)}.xlsx`);
+              }}
               className="flex items-center gap-1 text-sm text-[#4F3CC9] hover:underline font-medium"
             >
               <Download size={14} /> Export Excel

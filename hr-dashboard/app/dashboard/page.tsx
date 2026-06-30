@@ -10,7 +10,7 @@ interface Employee {
   id: string; status: string; employmentType: string; department: string;
   doj: string;
 }
-interface AttRecord { status: string; late: boolean; workingHours: string; }
+interface AttRecord { empId: string; status: string; late: boolean; workingHours: string; }
 interface LeaveRequest { status: string; leaveType: string; startDate: string; }
 interface Goal { status: string; }
 
@@ -52,6 +52,7 @@ export default function DashboardPage() {
         doj: (d.doj as string) ?? "",
       })));
       setAttRecords((att as Record<string, unknown>[]).map(d => ({
+        empId: (d.empId as string) ?? "",
         status: (d.status as string) ?? "",
         late: Boolean(d.late),
         workingHours: (d.workingHours as string) ?? "",
@@ -86,11 +87,13 @@ export default function DashboardPage() {
   ];
 
   // ── Attendance overview ───────────────────────────────────────────────────
-  const presentCount  = attRecords.filter(r => r.status === "Present").length;
-  const absentCount   = attRecords.filter(r => r.status === "Absent").length;
-  const lateCount     = attRecords.filter(r => r.late).length;
-  const halfDayCount  = attRecords.filter(r => r.status === "Half Day").length;
-  const hoursArr      = attRecords.map(r => parseWorkingHours(r.workingHours)).filter(h => h > 0);
+  const activeEmpIds = new Set(employees.map(e => e.id));
+  const validAttRecords = attRecords.filter(r => !r.empId || activeEmpIds.has(r.empId));
+  const presentCount  = validAttRecords.filter(r => r.status === "Present").length;
+  const absentCount   = validAttRecords.filter(r => r.status === "Absent").length;
+  const lateCount     = validAttRecords.filter(r => r.late).length;
+  const halfDayCount  = validAttRecords.filter(r => r.status === "Half Day").length;
+  const hoursArr      = validAttRecords.map(r => parseWorkingHours(r.workingHours)).filter(h => h > 0);
   const avgHours      = hoursArr.length ? (hoursArr.reduce((s, h) => s + h, 0) / hoursArr.length).toFixed(1) + "h" : "—";
 
   const attendanceOverview = [

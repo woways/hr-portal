@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
-import { X, Search, Mail, CheckCircle, AlertCircle, Loader2, KeyRound } from "lucide-react";
+import { X, Mail, CheckCircle, AlertCircle, Loader2, KeyRound } from "lucide-react";
 import { sendPasswordResetEmail } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import { saveSettingsDoc } from "@/lib/firebaseService";
 
 const roleCards = [
   { role: "Super Admin", border: "border-purple-400", bg: "bg-purple-50", text: "text-purple-700", desc: "Full access to all modules including settings, access control, payroll, and system configuration.", count: 1 },
@@ -24,10 +25,29 @@ const permissionModules = [
 export default function AccessPage() {
   const [showPerms, setShowPerms]     = useState<string | null>(null);
   const [permissions, setPermissions] = useState<Record<string, boolean>>({});
+  const [permsSaving, setPermsSaving] = useState(false);
+  const [permsSaved,  setPermsSaved]  = useState(false);
   const [email, setEmail]             = useState("");
   const [sending, setSending]         = useState(false);
   const [success, setSuccess]         = useState<string | null>(null);
   const [error, setError]             = useState<string | null>(null);
+
+  async function handleSavePerms() {
+    if (!showPerms) return;
+    setPermsSaving(true);
+    try {
+      const rolePerms = Object.fromEntries(
+        Object.entries(permissions).filter(([k]) => k.startsWith(showPerms + "-"))
+      );
+      await saveSettingsDoc(`permissions_${showPerms.replace(/\s+/g, "_")}`, rolePerms);
+      setPermsSaved(true);
+      setTimeout(() => { setPermsSaved(false); setShowPerms(null); }, 800);
+    } catch {
+      // Keep modal open so user can retry
+    } finally {
+      setPermsSaving(false);
+    }
+  }
 
   function togglePerm(key: string) {
     setPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -179,8 +199,14 @@ export default function AccessPage() {
               ))}
             </div>
             <div className="px-6 pb-6">
-              <button onClick={() => setShowPerms(null)} className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa3] transition-colors">
-                Save Permissions
+              <button
+                onClick={handleSavePerms}
+                disabled={permsSaving || permsSaved}
+                className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa3] transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
+              >
+                {permsSaving ? <><Loader2 size={16} className="animate-spin" /> Saving…</> :
+                 permsSaved  ? <><CheckCircle size={16} /> Saved!</> :
+                 "Save Permissions"}
               </button>
             </div>
           </div>

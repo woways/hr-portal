@@ -216,8 +216,7 @@ export default function RecruitmentPage() {
       setResumeFile(null);
       setShowAddCandidate(false);
       showCandidateToast(`${candidateForm.name} added successfully`);
-    } catch (err) {
-      console.error("[AddCandidate]", err);
+    } catch {
       showCandidateToast("Failed to add candidate. Please try again.");
       setResumeUploading(false);
     } finally {

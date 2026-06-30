@@ -1,8 +1,10 @@
 "use client";
-import { useState } from "react";
-import { DollarSign, Users, TrendingDown, Banknote, Eye } from "lucide-react";
+import { useState, useEffect } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { getDocs, collection, doc, setDoc } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
+import { IndianRupee, Users, TrendingDown, Banknote, Eye, Loader2 } from "lucide-react";
 import { PayrollRecord } from "@/lib/types";
-const mockPayroll: PayrollRecord[] = [];
 
 function getInitials(name: string) {
   const parts = name.trim().split(" ");
@@ -14,12 +16,7 @@ function getInitials(name: string) {
 }
 
 function formatCurrency(n: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(n);
+  return `₹${Number(n || 0).toLocaleString("en-IN")}`;
 }
 
 function generateMonths(count = 12): string[] {
@@ -37,13 +34,74 @@ export default function PayrollPage() {
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[MONTHS.length - 1]);
   const [payrollProcessed, setPayrollProcessed] = useState(false);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [payrollData, setPayrollData] = useState<PayrollRecord[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const totalCost = mockPayroll.reduce((s, r) => s + r.netSalary, 0);
-  const totalPaid = mockPayroll.filter((r) => r.paymentStatus === "Paid").length;
-  const totalDeductions = mockPayroll.reduce((s, r) => s + r.deductions, 0);
-  const netSalaryPaid = mockPayroll
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) { setLoading(false); return; }
+      try {
+        const snap = await getDocs(collection(db, "compensation"));
+        const records: PayrollRecord[] = snap.docs.map((d) => {
+          const data = d.data() as Record<string, unknown>;
+          const salary   = Number(data.salary   ?? 0);
+          const incentive= Number(data.incentive ?? 0);
+          const bonus    = Number(data.bonus     ?? 0);
+          const deductions = Number(data.deductions ?? 0);
+          const basic    = salary;
+          const allowances = incentive + bonus;
+          const netSalary  = Number(data.netPay ?? data.net ?? (salary + incentive + bonus - deductions));
+          return {
+            id:            d.id,
+            employeeId:    String(data.empId      ?? data.employeeId ?? ""),
+            employeeName:  String(data.name       ?? data.employeeName ?? ""),
+            department:    String(data.department ?? ""),
+            month:         String(data.month      ?? ""),
+            basic,
+            allowances,
+            deductions,
+            netSalary,
+            paymentStatus: (data.paymentStatus as "Paid" | "Pending") ?? "Pending",
+            paymentDate:   String(data.paymentDate ?? ""),
+          } satisfies PayrollRecord;
+        });
+        setPayrollData(records);
+      } catch { /* ignore */ } finally { setLoading(false); }
+    });
+    return unsub;
+  }, []);
+
+  const filtered = payrollData.filter((r) => r.month === selectedMonth);
+
+  const totalCost       = filtered.reduce((s, r) => s + r.netSalary, 0);
+  const totalPaid       = filtered.filter((r) => r.paymentStatus === "Paid").length;
+  const totalDeductions = filtered.reduce((s, r) => s + r.deductions, 0);
+  const netSalaryPaid   = filtered
     .filter((r) => r.paymentStatus === "Paid")
     .reduce((s, r) => s + r.netSalary, 0);
+
+  async function handleRunPayroll() {
+    setPayrollProcessed(true);
+    try {
+      await setDoc(
+        doc(db, "payroll", selectedMonth.replace(/\s+/g, "-")),
+        {
+          month:       selectedMonth,
+          processedAt: new Date().toISOString(),
+          processedBy: auth.currentUser?.email ?? "HR",
+        },
+        { merge: true }
+      );
+    } catch { /* ignore */ }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-32">
+        <Loader2 size={32} className="animate-spin text-[#4F3CC9]" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -96,7 +154,7 @@ export default function PayrollPage() {
             button below to calculate and run payroll for all employees.
           </p>
           <button
-            onClick={() => setPayrollProcessed(true)}
+            onClick={handleRunPayroll}
             className="bg-[#4F3CC9] text-white rounded-full px-8 py-3 text-sm font-medium hover:bg-[#3d2fa0] transition-colors"
           >
             Run Payroll for {selectedMonth}
@@ -111,7 +169,7 @@ export default function PayrollPage() {
               {
                 label: "Total Payroll Cost",
                 value: formatCurrency(totalCost),
-                icon: DollarSign,
+                icon: IndianRupee,
                 color: "text-purple-600",
                 bg: "bg-purple-100",
               },
@@ -158,77 +216,91 @@ export default function PayrollPage() {
               <h2 className="text-base font-semibold text-gray-900">Employee Salary Table</h2>
               <span className="text-xs text-gray-400">Period: {selectedMonth}</span>
             </div>
-            <table className="w-full">
-              <thead>
-                <tr className="bg-[#F8F7FF]">
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Emp ID
-                  </th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Employee
-                  </th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Dept
-                  </th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Basic
-                  </th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Allowances
-                  </th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Deductions
-                  </th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Net Salary
-                  </th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {mockPayroll.map((rec) => (
-                  <tr key={rec.id} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="px-5 py-3 text-sm text-gray-600">{rec.employeeId}</td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-[#EDE9FF] flex items-center justify-center text-[#4F3CC9] font-semibold text-xs">
-                          {getInitials(rec.employeeName)}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{rec.employeeName}</p>
-                          <p className="text-xs text-gray-400">
-                            {rec.paymentStatus === "Paid" ? (
-                              <span className="text-green-600">Paid</span>
-                            ) : (
-                              <span className="text-yellow-600">Pending</span>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{rec.department}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{formatCurrency(rec.basic)}</td>
-                    <td className="px-5 py-3 text-sm font-medium text-green-600">
-                      +{formatCurrency(rec.allowances)}
-                    </td>
-                    <td className="px-5 py-3 text-sm font-medium text-red-500">
-                      -{formatCurrency(rec.deductions)}
-                    </td>
-                    <td className="px-5 py-3 text-sm font-bold text-gray-900">
-                      {formatCurrency(rec.netSalary)}
-                    </td>
-                    <td className="px-5 py-3">
-                      <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#4F3CC9] bg-[#EDE9FF] rounded-lg hover:bg-[#DDD6FE] transition-colors">
-                        <Eye size={13} />
-                        View
-                      </button>
-                    </td>
+
+            {filtered.length === 0 ? (
+              <div className="p-16 flex flex-col items-center justify-center text-center">
+                <div className="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
+                  <Banknote size={26} className="text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-700 mb-1">No records found</p>
+                <p className="text-xs text-gray-400 max-w-sm">
+                  No compensation records found for this month. Add compensation records in the
+                  Compensation module first.
+                </p>
+              </div>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-[#F8F7FF]">
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Emp ID
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Employee
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Dept
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Basic
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Allowances
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Deductions
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Net Salary
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
+                      Actions
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {filtered.map((rec) => (
+                    <tr key={rec.id} className="hover:bg-gray-50/50 transition-colors">
+                      <td className="px-5 py-3 text-sm text-gray-600">{rec.employeeId}</td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-[#EDE9FF] flex items-center justify-center text-[#4F3CC9] font-semibold text-xs">
+                            {getInitials(rec.employeeName)}
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">{rec.employeeName}</p>
+                            <p className="text-xs text-gray-400">
+                              {rec.paymentStatus === "Paid" ? (
+                                <span className="text-green-600">Paid</span>
+                              ) : (
+                                <span className="text-yellow-600">Pending</span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-sm text-gray-600">{rec.department}</td>
+                      <td className="px-5 py-3 text-sm text-gray-600">{formatCurrency(rec.basic)}</td>
+                      <td className="px-5 py-3 text-sm font-medium text-green-600">
+                        +{formatCurrency(rec.allowances)}
+                      </td>
+                      <td className="px-5 py-3 text-sm font-medium text-red-500">
+                        -{formatCurrency(rec.deductions)}
+                      </td>
+                      <td className="px-5 py-3 text-sm font-bold text-gray-900">
+                        {formatCurrency(rec.netSalary)}
+                      </td>
+                      <td className="px-5 py-3">
+                        <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#4F3CC9] bg-[#EDE9FF] rounded-lg hover:bg-[#DDD6FE] transition-colors">
+                          <Eye size={13} />
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

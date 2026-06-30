@@ -31,6 +31,7 @@ export default function PayslipPage() {
   const [empName, setEmpName] = useState("");
   const [department, setDepartment] = useState("");
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -81,14 +82,12 @@ export default function PayslipPage() {
           ...(d.data() as Omit<PayslipRecord, "id">),
         }));
 
-        // Sort by createdAt descending (newest first)
-        records.sort((a, b) => (b.month ?? "").localeCompare(a.month ?? ""));
+        // Sort by month descending (newest first)
+        records.sort((a, b) => new Date((b.month ?? "") + " 01").getTime() - new Date((a.month ?? "") + " 01").getTime());
 
         setPayslips(records);
         if (records.length > 0) setSelected(records[0]);
-      } catch (err) {
-        console.error("[Payslip] Failed to load:", err);
-      }
+      } catch { setFetchError(true); }
       finally { setLoading(false); }
     });
     return unsub;
@@ -100,35 +99,62 @@ export default function PayslipPage() {
 
   function handleDownload() {
     if (!selected) return;
-    const lines = [
-      "HR Pulse Technologies",
-      `Salary Slip — ${selected.month}`,
-      "",
-      `Employee Name : ${selected.name}`,
-      `Employee ID   : ${selected.empId}`,
-      `Designation   : ${selected.designation}`,
-      `Emp Type      : ${selected.empType}`,
-      `Payment Date  : ${selected.paymentDate || "—"}`,
-      `Payment Status: ${selected.paymentStatus}`,
-      "",
-      "EARNINGS",
-      `  Basic Salary : ${fmt(selected.salary)}`,
-      selected.incentive > 0 ? `  Incentive    : ${fmt(selected.incentive)}` : "",
-      selected.bonus > 0 ? `  Bonus        : ${fmt(selected.bonus)}` : "",
-      `  Gross Total  : ${fmt(grossEarnings)}`,
-      "",
-      "DEDUCTIONS",
-      `  Total        : ${fmt(selected.deductions)}`,
-      "",
-      `NET PAY: ${fmt(selected.netPay)}`,
-    ].filter((l) => l !== undefined).join("\n");
+    const gross = grossEarnings;
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Payslip – ${selected.month}</title>
+<style>
+  body{font-family:Arial,sans-serif;margin:0;padding:32px;color:#111}
+  .header{background:#4F3CC9;color:#fff;padding:24px 32px;border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center}
+  .co{font-weight:700;font-size:20px}.co-sub{font-size:12px;color:#c4b5fd;margin-top:4px}
+  .period{text-align:right}.period-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#c4b5fd}
+  .period-val{font-weight:700;font-size:20px}
+  .info-band{background:#ede9ff;padding:16px 32px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .label{font-size:11px;color:#6b7280}.val{font-size:13px;font-weight:600;margin-top:2px}
+  .body{padding:24px 32px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+  .section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#374151;margin-bottom:12px}
+  .row{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid #f3f4f6}
+  .row .right{font-weight:500}.row.total{border-top:2px solid #e5e7eb;border-bottom:none;font-weight:700;margin-top:4px;padding-top:10px}
+  .net{margin-top:24px;background:#ede9ff;border-radius:12px;padding:20px 24px;display:flex;justify-content:space-between;align-items:center}
+  .net-label{font-size:12px;color:#6b7280}.net-amount{font-size:28px;font-weight:700;color:#4F3CC9}
+  .footer{margin-top:24px;font-size:10px;color:#9ca3af;text-align:center}
+  @media print{body{padding:0}@page{margin:20mm}}
+</style></head><body>
+<div class="header">
+  <div><div class="co">Woways</div><div class="co-sub">tech@woways.in</div></div>
+  <div class="period"><div class="period-label">Salary Slip</div><div class="period-val">${selected.month.toUpperCase()}</div></div>
+</div>
+<div class="info-band">
+  <div><div class="label">Employee Name</div><div class="val">${empName || selected.name}</div></div>
+  <div><div class="label">Employee ID</div><div class="val">${selected.empId}</div></div>
+  <div><div class="label">Designation</div><div class="val">${selected.designation || "—"}</div></div>
+  <div><div class="label">Department</div><div class="val">${department || "—"}</div></div>
+</div>
+<div class="body">
+  <div class="grid">
+    <div>
+      <div class="section-title">Earnings</div>
+      <div class="row"><span>Basic Salary</span><span class="right">${fmt(selected.salary)}</span></div>
+      ${selected.incentive > 0 ? `<div class="row"><span>Incentive</span><span class="right">${fmt(selected.incentive)}</span></div>` : ""}
+      ${selected.bonus > 0 ? `<div class="row"><span>Bonus</span><span class="right">${fmt(selected.bonus)}</span></div>` : ""}
+      <div class="row total"><span>Gross Salary</span><span class="right">${fmt(gross)}</span></div>
+    </div>
+    <div>
+      <div class="section-title">Deductions</div>
+      ${selected.deductions <= 0 ? `<div class="row"><span style="color:#9ca3af">No deductions this month</span></div>` : ""}
+      <div class="row total"><span>Total Deductions</span><span class="right" style="color:#ef4444">- ${fmt(selected.deductions)}</span></div>
+    </div>
+  </div>
+  <div class="net">
+    <div class="net-label">Net Salary — ${selected.month} (${selected.paymentStatus})</div>
+    <div class="net-amount">${fmt(selected.netPay)}</div>
+  </div>
+</div>
+<div class="footer">This is a system-generated salary slip and does not require a physical signature. | Woways | ${selected.month}</div>
+<script>window.onload=function(){window.print()}<\/script>
+</body></html>`;
 
-    const blob = new Blob([lines], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `Payslip_${selected.empId}_${selected.month.replace(/ /g, "_")}.txt`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    const win = window.open("", "_blank");
+    if (win) { win.document.write(html); win.document.close(); }
   }
 
   return (
@@ -167,8 +193,16 @@ export default function PayslipPage() {
         </div>
       )}
 
+      {/* Fetch error */}
+      {!loading && payslips.length === 0 && fetchError && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-14 text-center max-w-3xl mx-auto">
+          <FileText size={40} className="text-gray-200 mx-auto mb-3" />
+          <p className="text-red-500 font-medium">Failed to load payslips. Please refresh.</p>
+        </div>
+      )}
+
       {/* No payslips yet */}
-      {!loading && payslips.length === 0 && (
+      {!loading && payslips.length === 0 && !fetchError && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-14 text-center max-w-3xl mx-auto">
           <FileText size={40} className="text-gray-200 mx-auto mb-3" />
           <p className="text-gray-500 font-medium">No payslips available yet.</p>
@@ -185,8 +219,8 @@ export default function PayslipPage() {
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg bg-white/20 flex items-center justify-center font-bold text-sm">HR</div>
                 <div>
-                  <p className="font-bold text-lg">HR Pulse Technologies</p>
-                  <p className="text-purple-200 text-xs">tech@hrpulse.com</p>
+                  <p className="font-bold text-lg">Woways</p>
+                  <p className="text-purple-200 text-xs">tech@woways.in</p>
                 </div>
               </div>
               <div className="text-right">

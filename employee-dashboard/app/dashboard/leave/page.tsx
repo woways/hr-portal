@@ -1,24 +1,26 @@
 "use client";
 import { useState, useEffect } from "react";
 import { Plus, X, CheckCircle, Clock, XCircle, CalendarX, Loader2 } from "lucide-react";
-import { collection, query, where, getDocs, addDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, addDoc, getDoc, doc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 
-const LEAVE_TYPES = ["Annual Leave", "Sick Leave", "Casual Leave", "Emergency Leave"];
-
-const LEAVE_CONFIG: Record<string, { total: number; color: string }> = {
-  "Annual Leave":    { total: 18, color: "#4F3CC9" },
-  "Sick Leave":      { total: 10, color: "#10B981" },
-  "Casual Leave":    { total: 6,  color: "#F59E0B" },
-  "Emergency Leave": { total: 2,  color: "#EF4444" },
+const LEAVE_TYPE_COLORS: Record<string, string> = {
+  "Annual Leave":    "#4F3CC9",
+  "Sick Leave":      "#10B981",
+  "Casual Leave":    "#F59E0B",
+  "Emergency Leave": "#EF4444",
+  "Paid Leave":      "#4F3CC9",
 };
+const DEFAULT_COLOR = "#6B7280";
+
+interface LeavePolicy { id: string; type: string; days: number; carryForward: boolean; resetMonth: string; }
 
 interface LeaveRequest {
   id: string;
-  type: string;
-  from: string;
-  to: string;
+  leaveType: string;
+  startDate: string;
+  endDate: string;
   days: number;
   reason: string;
   status: string;
@@ -53,25 +55,71 @@ const statusBadge = (status: string) => {
 
 export default function LeavePage() {
   const [showModal, setShowModal] = useState(false);
-  const [leaveForm, setLeaveForm] = useState({ leaveType: "Annual Leave", startDate: "", endDate: "", reason: "" });
+  const [leaveForm, setLeaveForm] = useState({ leaveType: "", startDate: "", endDate: "", reason: "" });
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
+  const [leavePolicies, setLeavePolicies] = useState<LeavePolicy[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
   const [empId, setEmpId] = useState<string | null>(null);
+  const [empName, setEmpName] = useState("");
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) { setLoading(false); return; }
-      // Get empId from users collection
-      const userSnap = await getDocs(query(collection(db, "users"), where("email", "==", user.email)));
-      const id = userSnap.empty ? user.uid : (userSnap.docs[0].data().employeeId as string ?? user.uid);
-      setEmpId(id);
+      try {
+        // Resolve empId
+        let id = "";
+        const userSnap = await getDocs(query(collection(db, "users"), where("email", "==", user.email)));
+        if (!userSnap.empty) id = (userSnap.docs[0].data().employeeId as string) ?? "";
+        if (!id) id = user.uid;
+        setEmpId(id);
 
-      // Load leave requests for this employee
-      const snap = await getDocs(query(collection(db, "leaveRequests"), where("empId", "==", id)));
-      const loaded = snap.docs.map((d) => ({ id: d.id, ...d.data() } as LeaveRequest));
-      loaded.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn));
-      setRequests(loaded);
+        // Load employee name for leave submission payload
+        try {
+          const empSnap = await getDoc(doc(db, "employees", id));
+          if (empSnap.exists()) {
+            setEmpName((empSnap.data().name as string) ?? "");
+          }
+        } catch { /* ignore */ }
+
+        // Load leave policies from HR settings
+        const policySnap = await getDoc(doc(db, "settings", "leavePolicies"));
+        if (policySnap.exists() && policySnap.data().list) {
+          const policies = policySnap.data().list as LeavePolicy[];
+          setLeavePolicies(policies);
+          setLeaveForm((f) => ({ ...f, leaveType: policies[0]?.type ?? "" }));
+        } else {
+          // Fallback defaults
+          const defaults: LeavePolicy[] = [
+            { id: "1", type: "Annual Leave",    days: 18, carryForward: false, resetMonth: "January" },
+            { id: "2", type: "Sick Leave",      days: 10, carryForward: false, resetMonth: "January" },
+            { id: "3", type: "Casual Leave",    days: 6,  carryForward: false, resetMonth: "January" },
+            { id: "4", type: "Emergency Leave", days: 2,  carryForward: false, resetMonth: "January" },
+          ];
+          setLeavePolicies(defaults);
+          setLeaveForm((f) => ({ ...f, leaveType: defaults[0].type }));
+        }
+
+        // Load leave requests for this employee
+        const snap = await getDocs(query(collection(db, "leaveRequests"), where("empId", "==", id)));
+        const loaded = snap.docs.map((d) => {
+          const r = d.data() as Record<string, unknown>;
+          return {
+            id: d.id,
+            empId: String(r.empId ?? ""),
+            leaveType: String(r.leaveType ?? r.type ?? ""),
+            startDate: String(r.startDate ?? r.from ?? ""),
+            endDate: String(r.endDate ?? r.to ?? ""),
+            days: Number(r.days ?? 0),
+            reason: String(r.reason ?? ""),
+            status: String(r.status ?? "Pending"),
+            appliedOn: String(r.appliedOn ?? ""),
+          } as LeaveRequest;
+        });
+        loaded.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn));
+        setRequests(loaded);
+      } catch { /* ignore */ }
       setLoading(false);
     });
     return () => unsub();
@@ -81,29 +129,45 @@ export default function LeavePage() {
   const usedByType: Record<string, number> = {};
   for (const req of requests) {
     if (req.status === "Approved") {
-      usedByType[req.type] = (usedByType[req.type] ?? 0) + (req.days ?? 0);
+      usedByType[req.leaveType] = (usedByType[req.leaveType] ?? 0) + (req.days ?? 0);
     }
   }
-  const leaveBalances = LEAVE_TYPES.map((type) => {
-    const cfg = LEAVE_CONFIG[type];
-    const used = usedByType[type] ?? 0;
-    return { type, total: cfg.total, remaining: Math.max(0, cfg.total - used), color: cfg.color };
+  const leaveBalances = leavePolicies.map((p) => {
+    const used = usedByType[p.type] ?? 0;
+    return { type: p.type, total: p.days, remaining: Math.max(0, p.days - used), color: LEAVE_TYPE_COLORS[p.type] ?? DEFAULT_COLOR };
   });
+
+  function countWorkdays(start: Date, end: Date): number {
+    let count = 0;
+    const d = new Date(start);
+    while (d <= end) {
+      const day = d.getDay();
+      if (day !== 0 && day !== 6) count++;
+      d.setDate(d.getDate() + 1);
+    }
+    return Math.max(1, count);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!empId || submitting) return;
+    setFormError("");
+    const start = new Date(leaveForm.startDate);
+    const end = new Date(leaveForm.endDate);
+    if (end < start) {
+      setFormError("End date cannot be before the start date.");
+      return;
+    }
     setSubmitting(true);
     try {
-      const start = new Date(leaveForm.startDate);
-      const end = new Date(leaveForm.endDate);
-      const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+      const days = countWorkdays(start, end);
       const appliedOn = new Date().toISOString().split("T")[0];
       const payload = {
         empId,
-        type: leaveForm.leaveType,
-        from: leaveForm.startDate,
-        to: leaveForm.endDate,
+        empName,
+        leaveType: leaveForm.leaveType,
+        startDate: leaveForm.startDate,
+        endDate: leaveForm.endDate,
         days,
         reason: leaveForm.reason,
         status: "Pending",
@@ -113,9 +177,7 @@ export default function LeavePage() {
       setRequests((prev) => [{ id: ref.id, ...payload }, ...prev]);
       setShowModal(false);
       setLeaveForm({ leaveType: "Annual Leave", startDate: "", endDate: "", reason: "" });
-    } catch (err) {
-      console.error("[LeaveSubmit]", err);
-    } finally {
+    } catch { /* ignore */ } finally {
       setSubmitting(false);
     }
   }
@@ -187,9 +249,9 @@ export default function LeavePage() {
               <tbody className="divide-y divide-gray-50">
                 {requests.map((req) => (
                   <tr key={req.id} className="hover:bg-[#F5F3FF] transition-colors">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{req.type}</td>
-                    <td className="px-6 py-4 text-sm text-gray-700">{req.from}</td>
-                    <td className="px-6 py-4 text-sm text-gray-700">{req.to}</td>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{req.leaveType}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">{req.startDate}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">{req.endDate}</td>
                     <td className="px-6 py-4 text-sm text-gray-700">{req.days}</td>
                     <td className="px-6 py-4 text-sm text-gray-500 max-w-[160px] truncate">{req.reason}</td>
                     <td className="px-6 py-4">{statusBadge(req.status)}</td>
@@ -220,7 +282,7 @@ export default function LeavePage() {
                   value={leaveForm.leaveType}
                   onChange={(e) => setLeaveForm({ ...leaveForm, leaveType: e.target.value })}
                 >
-                  {LEAVE_TYPES.map((t) => <option key={t}>{t}</option>)}
+                  {leavePolicies.map((p) => <option key={p.type}>{p.type}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -256,10 +318,13 @@ export default function LeavePage() {
                   onChange={(e) => setLeaveForm({ ...leaveForm, reason: e.target.value })}
                 />
               </div>
+              {formError && (
+                <p className="text-sm text-red-600 bg-red-50 rounded-xl px-3 py-2">{formError}</p>
+              )}
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
+                  onClick={() => { setShowModal(false); setFormError(""); }}
                   className="flex-1 border border-gray-200 text-gray-700 px-4 py-2.5 rounded-full text-sm font-medium hover:bg-gray-50"
                 >
                   Cancel

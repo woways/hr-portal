@@ -5,15 +5,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs, setDoc, updateDoc, addDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-
-// HR portal API base (hr-dashboard runs on port 3000)
-const HR_BASE   = "http://localhost:3000";
-const CLOCK_API = `${HR_BASE}/api/clock`;
-const ATT_API   = `${HR_BASE}/api/attendance`;
-const EMP_API   = `${HR_BASE}/api/employees`;
-const REG_API   = `${HR_BASE}/api/regularization`;
 
 type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
 
@@ -104,6 +97,8 @@ export default function AttendancePage() {
   const [workingSeconds, setWorkingSeconds]   = useState(0);
   const [finalSeconds, setFinalSeconds]       = useState<number | null>(null);
   const [isLate, setIsLate]                   = useState(false);
+  const [lateHour, setLateHour]               = useState(10);
+  const [lateMinute, setLateMinute]           = useState(0);
 
   // UI state
   const [currentTime, setCurrentTime]   = useState("");
@@ -119,7 +114,7 @@ export default function AttendancePage() {
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [selectedMonth, setSelectedMonth]   = useState(getTodayMonthLabel);
 
-  // ── Load employee identity from Firebase Auth → Firestore → HR API ──────────
+  // ── Load employee identity from Firebase Auth → Firestore ───────────────────
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) return;
@@ -130,34 +125,39 @@ export default function AttendancePage() {
         const eid = (userData.employeeId as string) ?? "";
         if (!eid) return;
 
-        const res = await fetch(EMP_API);
-        if (!res.ok) return;
-        const emps = await res.json() as Array<{ id: string; name: string; department: string }>;
-        const emp = emps.find((e) => e.id === eid);
-        if (emp) {
-          setEmpId(emp.id);
-          setEmpName(emp.name);
-          setEmpDept(emp.department);
+        const empSnap = await getDoc(doc(db, "employees", eid));
+        if (!empSnap.exists()) return;
+        const empData = empSnap.data();
+        setEmpId(eid);
+        setEmpName(empData.name ?? "");
+        setEmpDept(empData.department ?? "");
+
+        // Load late threshold from HR settings (e.g. "09:30")
+        const timingsSnap = await getDoc(doc(db, "settings", "workTimings"));
+        if (timingsSnap.exists()) {
+          const threshold = (timingsSnap.data().lateThreshold as string) ?? "10:00";
+          const [h, m] = threshold.split(":").map(Number);
+          if (!isNaN(h)) { setLateHour(h); setLateMinute(m || 0); }
         }
       } catch { /* ignore */ }
     });
     return unsub;
   }, []);
 
-  // ── Restore today's clock state from HR portal on mount ─────────────────────
+  // ── Restore today's clock state from Firestore on mount ─────────────────────
   useEffect(() => {
     if (!empId) return;
-    fetch(`${CLOCK_API}/${empId}`)
-      .then((r) => r.json())
-      .then((rec) => {
-        if (!rec || rec.date !== todayISO()) return;
-        setClockInTime(rec.clockInStr);
-        setClockInTimestamp(rec.clockInTs);
-        setIsLate(rec.isLate ?? false);
-        if (rec.status === "clocked-in") {
+    getDoc(doc(db, "attendance", `${todayISO()}-${empId}`))
+      .then((snap) => {
+        if (!snap.exists()) return;
+        const rec = snap.data();
+        setClockInTime(rec.clockIn ?? null);
+        setClockInTimestamp(rec.clockInTs ?? null);
+        setIsLate(rec.late ?? false);
+        if (rec.clockIn && !rec.clockOut) {
           setIsClockedIn(true);
-        } else if (rec.status === "clocked-out") {
-          setClockOutTime(rec.clockOutStr ?? null);
+        } else if (rec.clockIn && rec.clockOut) {
+          setClockOutTime(rec.clockOut ?? null);
           setFinalSeconds(rec.totalSeconds ?? null);
           setIsClockedIn(false);
         }
@@ -165,18 +165,18 @@ export default function AttendancePage() {
       .catch(() => {});
   }, [empId]);
 
-  // ── Load attendance history (past days) from HR portal ──────────────────────
+  // ── Load attendance history (past days) from Firestore ──────────────────────
   useEffect(() => {
     if (!empId) return;
     const todayIso = todayISO();
-    fetch(`${ATT_API}?empId=${empId}`)
-      .then((r) => r.json())
-      .then((all) => {
-        if (!Array.isArray(all)) return;
+    getDocs(query(collection(db, "attendance"), where("empId", "==", empId)))
+      .then((snap) => {
+        const all = snap.docs.map((d) => d.data());
         const past = all
-          .filter((rec: { date?: string }) => rec.date && rec.date !== todayIso)
-          .map((rec: { date?: string; clockIn?: string; clockOut?: string; workingHours?: string; status?: string; late?: boolean }) => {
-            const d = new Date(rec.date!);
+          .filter((rec) => rec.date && rec.date !== todayIso)
+          .map((rec) => {
+            // Parse as local midnight (avoids UTC-shift on "YYYY-MM-DD" strings)
+            const d = new Date(rec.date + "T00:00:00");
             const dayIdx = d.getDay();
             const isWeekend = dayIdx === 0 || dayIdx === 6;
             const hoursMatch = (rec.workingHours ?? "").match(/(\d+)h\s*(\d+)m/);
@@ -199,14 +199,13 @@ export default function AttendancePage() {
       .catch(() => {});
   }, [empId]);
 
-  // ── Load & poll regularization requests ─────────────────────────────────────
+  // ── Load regularization requests from Firestore ──────────────────────────────
   function loadRequests() {
     if (!empId) return;
-    fetch(REG_API)
-      .then((r) => r.json())
-      .then((all: RegRequest[]) => {
-        if (!Array.isArray(all)) return;
-        setRequests(all.filter((r) => r.empId === empId));
+    getDocs(query(collection(db, "regularization"), where("empId", "==", empId)))
+      .then((snap) => {
+        const all = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RegRequest));
+        setRequests(all);
       })
       .catch(() => {});
   }
@@ -214,8 +213,6 @@ export default function AttendancePage() {
   useEffect(() => {
     if (!empId) return;
     loadRequests();
-    const t = setInterval(loadRequests, 10000);
-    return () => clearInterval(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empId]);
 
@@ -243,7 +240,15 @@ export default function AttendancePage() {
     const date    = todayISO();
 
     if (!isClockedIn) {
-      const late = now.getHours() >= 10;
+      const h = now.getHours(), m = now.getMinutes();
+      const late = h > lateHour || (h === lateHour && m > lateMinute);
+      try {
+        await setDoc(doc(db, "attendance", `${date}-${empId}`), {
+          empId, name: empName, dept: empDept,
+          date, clockIn: timeStr, clockInTs: ts, clockOut: "", workingHours: "",
+          status: "Present", late, updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      } catch { return; }
       setClockInTime(timeStr);
       setClockInTimestamp(ts);
       setClockOutTime(null);
@@ -251,27 +256,21 @@ export default function AttendancePage() {
       setWorkingSeconds(0);
       setIsLate(late);
       setIsClockedIn(true);
-      // POST to HR portal → writes to Firestore attendance + clockRecords
-      fetch(CLOCK_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          empId, empName, department: empDept,
-          date, clockInTs: ts, clockInStr: timeStr, isLate: late, status: "clocked-in",
-        }),
-      }).catch(() => {});
     } else {
       const total = workingSeconds;
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const wh = `${h}h ${String(m).padStart(2, "0")}m`;
+      try {
+        await updateDoc(doc(db, "attendance", `${date}-${empId}`), {
+          clockOut: timeStr, clockOutTs: ts, totalSeconds: total,
+          workingHours: wh, status: "Present", updatedAt: new Date().toISOString(),
+        });
+      } catch { return; }
       setClockOutTime(timeStr);
       setFinalSeconds(total);
       setClockInTimestamp(null);
       setIsClockedIn(false);
-      // PATCH to HR portal → updates Firestore
-      fetch(`${CLOCK_API}/${empId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, clockOutTs: ts, clockOutStr: timeStr, totalSeconds: total }),
-      }).catch(() => {});
     }
   }
 
@@ -279,20 +278,27 @@ export default function AttendancePage() {
   async function submitRequest() {
     if (!reqForm.selectedDate || !reqForm.actualArrival || !reqForm.reason.trim()) return;
     const isoDate = reqForm.selectedDate;
-    const dayLabel = new Date(isoDate).toLocaleDateString("en-IN", { weekday: "short" });
-    const newReq: RegRequest = {
-      id: Date.now().toString(),
+    const dayLabel = new Date(isoDate + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short" });
+    const payload = {
+      empId, empName,
       date: isoDate, day: reqTarget?.day ?? dayLabel,
       reason: reqForm.reason.trim(),
       actualArrival: reqForm.actualArrival,
-      status: "Pending", empId, empName,
+      status: "Pending" as const,
+      updatedAt: new Date().toISOString(),
     };
-    setRequests((prev) => [...prev.filter((r) => r.date !== isoDate), newReq]);
     try {
-      await fetch(REG_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newReq),
+      const docRef = await addDoc(collection(db, "regularization"), payload);
+      const newReq: RegRequest = { id: docRef.id, ...payload };
+      setRequests((prev) => [...prev.filter((r) => r.date !== isoDate), newReq]);
+      // Notify HR
+      await addDoc(collection(db, "notifications"), {
+        userId: "HR",
+        type: "attendance",
+        title: `Attendance Correction — ${empName}`,
+        message: `${empName} has requested attendance correction for ${isoDate}. Reason: ${payload.reason}`,
+        read: false,
+        createdAt: new Date().toISOString(),
       });
     } catch { /* ignore */ }
     setShowReqModal(false);
@@ -339,7 +345,7 @@ export default function AttendancePage() {
         ...entry,
         status: "Present" as const,
         clockIn: `${String(h12).padStart(2, "0")}:${String(m).padStart(2, "0")} ${suffix}`,
-        late: h > 10 || (h === 10 && m > 0),
+        late: h > lateHour || (h === lateHour && m > lateMinute),
       };
     });
   }, [pastLog, todayEntry, requests]);
@@ -370,13 +376,23 @@ export default function AttendancePage() {
   const monthEntries = fullLog.filter(e => e.date.startsWith(mStr) && e.date.endsWith(String(historyYear)));
   const visibleRows  = monthEntries.filter(e => !e.isWeekend || e.clockIn !== "—");
 
-  // Bar chart
+  // Bar chart — built from the full attendance log for the selected month
   const barData = (() => {
-    const currentLabel = getTodayMonthLabel();
-    if (selectedMonth === currentLabel && todayEntry.hoursVal > 0) {
-      return [{ day: String(now.getDate()), hours: parseFloat(todayEntry.hoursVal.toFixed(2)) }];
-    }
-    return [];
+    const [selMonthName, selYear] = selectedMonth.split(" ");
+    const selMonthIdx = new Date(`${selMonthName} 1, ${selYear}`).getMonth();
+    const selYearNum  = parseInt(selYear);
+    return fullLog
+      .filter((e) => {
+        if (e.hoursVal <= 0) return false;
+        const d = new Date(logDateToISO(e.date) + "T00:00:00");
+        return d.getMonth() === selMonthIdx && d.getFullYear() === selYearNum;
+      })
+      .map((e) => {
+        const d = new Date(logDateToISO(e.date) + "T00:00:00");
+        return { day: String(d.getDate()), hours: parseFloat(e.hoursVal.toFixed(2)) };
+      })
+      .sort((a, b) => parseInt(a.day) - parseInt(b.day))
+      .slice(0, 30);
   })();
 
   return (
@@ -521,7 +537,7 @@ export default function AttendancePage() {
           { label: "Present Days",  val: presentCount, sub: `Out of ${totalWorkDays} working days`, icon: <CheckCircle size={18} className="text-green-600" />,  bg: "bg-green-50"  },
           { label: "Absent Days",   val: absentCount,  sub: "Unmarked absences",                    icon: <XCircle size={18} className="text-red-500" />,        bg: "bg-red-50"    },
           { label: "Half Days",     val: halfDayCount, sub: "Partial attendance",                   icon: <AlertCircle size={18} className="text-yellow-500" />, bg: "bg-yellow-50" },
-          { label: "Late Logins",   val: lateCount,    sub: "After 10:00 AM",                       icon: <Clock size={18} className="text-[#4F3CC9]" />,        bg: "bg-purple-50" },
+          { label: "Late Logins",   val: lateCount,    sub: `After ${String(lateHour).padStart(2,"0")}:${String(lateMinute).padStart(2,"0")} AM`,                       icon: <Clock size={18} className="text-[#4F3CC9]" />,        bg: "bg-purple-50" },
         ].map(({ label, val, sub, icon, bg }) => (
           <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-center justify-between mb-3">
@@ -708,7 +724,7 @@ export default function AttendancePage() {
             const selMonthIdx2 = new Date(`${selMonthName} 1, ${selYear}`).getMonth();
             const selYearNum = parseInt(selYear);
             const selEntries = fullLog.filter(e => {
-              const d = new Date(logDateToISO(e.date));
+              const d = new Date(logDateToISO(e.date) + "T00:00:00");
               return d.getMonth() === selMonthIdx2 && d.getFullYear() === selYearNum;
             });
             const selPresent  = selEntries.filter(e => e.status === "Present").length;

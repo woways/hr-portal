@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
-  collection, query, where, onSnapshot, updateDoc, doc, addDoc,
+  collection, query, onSnapshot, updateDoc, doc, addDoc,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import {
@@ -64,12 +64,7 @@ export default function HRHelpPage() {
     const authUnsub = onAuthStateChanged(auth, (user) => {
       if (!user) { setReady(true); return; }
 
-      // Help queries are stored in notifications collection with category:"helpQuery"
-      // This avoids needing a separate Firestore rule for a new collection
-      const q = query(
-        collection(db, "notifications"),
-        where("category", "==", "helpQuery")
-      );
+      const q = query(collection(db, "helpQueries"));
       const snapUnsub = onSnapshot(q, (snap) => {
         const docs: HelpQuery[] = snap.docs.map(d => {
           const r = d.data() as Record<string, unknown>;
@@ -109,8 +104,8 @@ export default function HRHelpPage() {
 
     setSubmitting(s => ({ ...s, [q.id]: true }));
     try {
-      // Update the help query document (stored in notifications collection)
-      await updateDoc(doc(db, "notifications", q.id), {
+      // Update the help query document
+      await updateDoc(doc(db, "helpQueries", q.id), {
         hrResponse: response || q.hrResponse,
         status:     newStatus,
         updatedAt:  new Date().toISOString(),
@@ -130,8 +125,7 @@ export default function HRHelpPage() {
       setStatuses(s => { const n = { ...s }; delete n[q.id]; return n; });
       if (viewQuery?.id === q.id) setViewQuery(null);
       showToast(`Response sent to ${q.empName}.`);
-    } catch (err) {
-      console.error("[HR Help] respond error:", err);
+    } catch {
       showToast("Failed to send response. Check your connection.", false);
     } finally {
       setSubmitting(s => ({ ...s, [q.id]: false }));

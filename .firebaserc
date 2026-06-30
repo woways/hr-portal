@@ -1,5 +1,13 @@
 {
   "projects": {
     "default": "hrmanagement-6b903"
+  },
+  "targets": {
+    "hrmanagement-6b903": {
+      "hosting": {
+        "hr-dashboard": ["hrmanagement-6b903"],
+        "employee-dashboard": ["woways-employee"]
+      }
+    }
   }
 }

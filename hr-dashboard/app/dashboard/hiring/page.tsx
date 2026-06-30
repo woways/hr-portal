@@ -1,6 +1,9 @@
 "use client";
-import { useState } from "react";
-import { Plus, Globe, Users, Star, BarChart2, Settings, X, Link2 } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Plus, Globe, Users, Star, BarChart2, Settings, X, Link2, Trash2 } from "lucide-react";
+import { onAuthStateChanged } from "firebase/auth";
+import { getDocs, addDoc, deleteDoc, collection, doc } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 import { JobPosting } from "@/lib/types";
 
 const sourcingChannels: { name: string; percentage: number; count: number; icon: typeof Link2; color: string; iconColor: string; barColor: string }[] = [];
@@ -24,12 +27,33 @@ const defaultForm = {
   status: "Draft" as JobPosting["status"],
 };
 
+async function loadPostings(): Promise<JobPosting[]> {
+  const snap = await getDocs(collection(db, "jobPostings"));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as JobPosting));
+}
+
 export default function HiringPage() {
   const [postings, setPostings] = useState<JobPosting[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(defaultForm);
+  const [loading, setLoading] = useState(true);
 
-  function handleAdd() {
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setLoading(true);
+        loadPostings()
+          .then(setPostings)
+          .finally(() => setLoading(false));
+      } else {
+        setPostings([]);
+        setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  async function handleAdd() {
     const newPosting: JobPosting = {
       id: String(Date.now()),
       title: form.title,
@@ -41,6 +65,33 @@ export default function HiringPage() {
     setPostings((prev) => [...prev, newPosting]);
     setForm(defaultForm);
     setShowModal(false);
+
+    try {
+      await addDoc(collection(db, "jobPostings"), {
+        title: newPosting.title,
+        department: newPosting.department,
+        datePosted: newPosting.datePosted,
+        status: newPosting.status,
+        applicants: newPosting.applicants,
+        createdAt: new Date().toISOString(),
+      });
+      const refreshed = await loadPostings();
+      setPostings(refreshed);
+    } catch (err) {
+      console.error("Failed to save job posting:", err);
+      setPostings((prev) => prev.filter((p) => p.id !== newPosting.id));
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setPostings((prev) => prev.filter((p) => p.id !== id));
+    try {
+      await deleteDoc(doc(db, "jobPostings", id));
+    } catch (err) {
+      console.error("Failed to delete job posting:", err);
+      const refreshed = await loadPostings();
+      setPostings(refreshed);
+    }
   }
 
   const totalApplicants = postings.reduce((s, p) => s + p.applicants, 0);
@@ -145,38 +196,54 @@ export default function HiringPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {postings.map((posting) => (
-              <tr key={posting.id} className="hover:bg-gray-50/50 transition-colors">
-                <td className="px-5 py-3">
-                  <p className="text-sm font-medium text-gray-900">{posting.title}</p>
-                </td>
-                <td className="px-5 py-3 text-sm text-gray-600">{posting.department}</td>
-                <td className="px-5 py-3 text-sm text-gray-600">{posting.datePosted}</td>
-                <td className="px-5 py-3">
-                  <StatusBadge status={posting.status} />
-                </td>
-                <td className="px-5 py-3">
-                  <div className="flex items-center gap-2">
-                    <BarChart2 size={14} className="text-[#4F3CC9]" />
-                    <span className="text-sm font-medium text-gray-800">
-                      {posting.applicants}
-                    </span>
-                  </div>
-                </td>
-                <td className="px-5 py-3">
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#4F3CC9] bg-[#EDE9FF] rounded-lg hover:bg-[#DDD6FE] transition-colors">
-                    <Settings size={12} />
-                    Manage
-                  </button>
+            {loading ? (
+              <tr>
+                <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-400">
+                  Loading job postings…
                 </td>
               </tr>
-            ))}
-            {postings.length === 0 && (
+            ) : postings.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-400">
                   No job postings found.
                 </td>
               </tr>
+            ) : (
+              postings.map((posting) => (
+                <tr key={posting.id} className="hover:bg-gray-50/50 transition-colors">
+                  <td className="px-5 py-3">
+                    <p className="text-sm font-medium text-gray-900">{posting.title}</p>
+                  </td>
+                  <td className="px-5 py-3 text-sm text-gray-600">{posting.department}</td>
+                  <td className="px-5 py-3 text-sm text-gray-600">{posting.datePosted}</td>
+                  <td className="px-5 py-3">
+                    <StatusBadge status={posting.status} />
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <BarChart2 size={14} className="text-[#4F3CC9]" />
+                      <span className="text-sm font-medium text-gray-800">
+                        {posting.applicants}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#4F3CC9] bg-[#EDE9FF] rounded-lg hover:bg-[#DDD6FE] transition-colors">
+                        <Settings size={12} />
+                        Manage
+                      </button>
+                      <button
+                        onClick={() => handleDelete(posting.id)}
+                        className="flex items-center justify-center p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Delete posting"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>

@@ -57,9 +57,7 @@ export default function CalendarPage() {
       const holSnap = await getSettingsDoc("holidays");
       const holList: Holiday[] = ((holSnap?.list as Holiday[]) ?? []).sort((a,b)=>a.date.localeCompare(b.date));
       setHolidays(holList);
-    } catch(err) {
-      console.error("[Calendar] holiday load error:", err);
-    }
+    } catch { /* ignore */ }
   }, []);
 
   // ── Load attendance + leaves for a specific employee ──────────────────────
@@ -121,9 +119,7 @@ export default function CalendarPage() {
 
       setAttMap(newAttMap);
       setLeaves(lvRows);
-    } catch(err) {
-      console.error("[Calendar] emp data load error:", err);
-    }
+    } catch { /* ignore */ }
   }, []);
 
   // ── Resolve employee and load ──────────────────────────────────────────────

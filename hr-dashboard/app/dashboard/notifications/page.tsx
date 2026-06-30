@@ -8,7 +8,7 @@ import {
 import { auth, db } from "@/lib/firebase";
 import { getEmployees } from "@/lib/firebaseService";
 import {
-  Plus, X, Bell, CalendarOff, Clock, DollarSign,
+  Plus, X, Bell, CalendarOff, Clock, IndianRupee,
   Megaphone, Target, CheckCheck, Wifi, Loader2, Search, User,
 } from "lucide-react";
 
@@ -33,7 +33,7 @@ const typeIcon: Record<string, React.FC<{ size: number; className?: string }>> =
   attendance: Clock,
   goal:       Target,
   system:     Megaphone,
-  payroll:    DollarSign,
+  payroll:    IndianRupee,
 };
 const typeBg: Record<string, string> = {
   leave:      "bg-yellow-50 text-yellow-600",
@@ -68,6 +68,7 @@ export default function HRNotificationsPage() {
   const [ready,       setReady]       = useState(false);
   const [activeTab,   setActiveTab]   = useState<Tab>("All");
   const [showCompose, setShowCompose] = useState(false);
+  const [toast,       setToast]       = useState<{ msg: string; ok: boolean } | null>(null);
   const [form,        setForm]        = useState({ ...blankForm });
   const [sending,     setSending]     = useState(false);
   const [empList,     setEmpList]     = useState<EmpOption[]>([]);
@@ -122,7 +123,12 @@ export default function HRNotificationsPage() {
   async function markRead(id: string) {
     try {
       await updateDoc(doc(db, "notifications", id), { read: true });
-    } catch (err) { console.error("[HR Notifs] markRead:", err); }
+    } catch { /* ignore */ }
+  }
+
+  function showToast(msg: string, ok = true) {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3000);
   }
 
   // ── Mark all read ─────────────────────────────────────────────────────────
@@ -133,7 +139,10 @@ export default function HRNotificationsPage() {
       const batch = writeBatch(db);
       unreadList.forEach(n => batch.update(doc(db, "notifications", n.id), { read: true }));
       await batch.commit();
-    } catch (err) { console.error("[HR Notifs] markAllRead:", err); }
+      showToast(`${unreadList.length} notification${unreadList.length > 1 ? "s" : ""} marked as read.`);
+    } catch (err) {
+      showToast("Failed to mark all as read. Please try again.", false);
+    }
   }
 
   // ── Send announcement ─────────────────────────────────────────────────────
@@ -141,7 +150,7 @@ export default function HRNotificationsPage() {
     if (!form.title.trim() || !form.message.trim()) return;
     setSending(true);
     try {
-      const userId = selectedEmp ? selectedEmp.email : "all";
+      const userId = selectedEmp ? selectedEmp.empId : "all";
       await addDoc(collection(db, "notifications"), {
         userId,
         type:      form.type,
@@ -156,9 +165,7 @@ export default function HRNotificationsPage() {
       setForm({ ...blankForm });
       setSelectedEmp(null);
       setEmpSearch("");
-    } catch (err) {
-      console.error("[HR Notifs] sendAnnouncement:", err);
-    } finally {
+    } catch { /* ignore */ } finally {
       setSending(false);
     }
   }
@@ -181,6 +188,12 @@ export default function HRNotificationsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-2xl text-white text-sm font-medium shadow-lg flex items-center gap-2 ${toast.ok ? "bg-green-500" : "bg-red-500"}`}>
+          {toast.ok ? <CheckCheck size={15} /> : <Bell size={15} />}
+          {toast.msg}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

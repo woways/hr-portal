@@ -74,7 +74,7 @@ function numberToWords(n: number): string {
     if (num < 1000) return ones[Math.floor(num / 100)] + " Hundred " + helper(num % 100);
     if (num < 100000) return helper(Math.floor(num / 1000)) + "Thousand " + helper(num % 1000);
     if (num < 10000000) return helper(Math.floor(num / 100000)) + "Lakh " + helper(num % 100000);
-    return helper(Math.floor(num / 10000000)) + "Crore " + helper(n % 10000000);
+    return helper(Math.floor(num / 10000000)) + "Crore " + helper(num % 10000000);
   }
   return helper(n).trim() + " Rupees Only";
 }
@@ -200,9 +200,7 @@ export default function CompensationPage() {
         // Set FY to the one with most recent record if current FY has none
         const fyKeys = Object.keys(grouped).sort().reverse();
         if (fyKeys.length > 0 && !grouped[getCurrentFY()]) setFy(fyKeys[0]);
-      } catch (err) {
-        console.error("[Compensation] load error:", err);
-      } finally {
+      } catch { /* ignore */ } finally {
         setLoading(false);
       }
     });
@@ -255,12 +253,12 @@ export default function CompensationPage() {
 <table style="border:1px solid #bbb;border-collapse:collapse;margin-bottom:0">
   <tr>
     <td style="border:1px solid #bbb;padding:12px;width:130px;text-align:center">
-      <div style="background:#4F3CC9;color:#fff;font-weight:800;font-size:18px;padding:10px 14px;border-radius:6px;display:inline-block">HR<br>Pulse</div>
+      <div style="background:#4F3CC9;color:#fff;font-weight:800;font-size:18px;padding:10px 14px;border-radius:6px;display:inline-block">W</div>
     </td>
     <td style="border:1px solid #bbb;padding:10px;text-align:center">
       <div style="font-weight:bold;font-size:12px">Office Address: Plot No 5, East Wing, Ground Floor, Financial District,</div>
       <div style="font-size:11px;margin-top:2px">Nanakramguda, Serilingampalle (M), Hyderabad – 500032, Telangana, India</div>
-      <div style="font-weight:bold;font-size:11px;margin-top:4px">Business Unit: HR Pulse Technologies Pvt. Ltd.</div>
+      <div style="font-weight:bold;font-size:11px;margin-top:4px">Business Unit: Woways</div>
     </td>
   </tr>
   <tr><td colspan="2" style="border:1px solid #bbb;padding:7px;text-align:center;font-weight:bold;font-size:13px;background:#f0f0f0">Salary Slip for ${slip.period}</td></tr>
@@ -319,7 +317,7 @@ export default function CompensationPage() {
     <td colspan="2" style="border:1px solid #bbb;padding:5px 10px;font-style:italic;color:#555;font-size:10px">${numberToWords(slip.totalPay)}</td>
   </tr>
 </table>
-<div class="footer">This is a system-generated salary slip and does not require a physical signature. | HR Pulse Technologies Pvt. Ltd. | ${slip.period}</div>
+<div class="footer">This is a system-generated salary slip and does not require a physical signature. | Woways | ${slip.period}</div>
 </body></html>`;
   }
 
@@ -503,12 +501,12 @@ export default function CompensationPage() {
                 <tbody>
                   <tr>
                     <td className="border border-gray-400 p-3 w-32 align-middle">
-                      <div className="w-20 h-10 bg-[#4F3CC9] rounded flex items-center justify-center text-white font-bold text-sm">HR<br/>Pulse</div>
+                      <div className="w-20 h-10 bg-[#4F3CC9] rounded flex items-center justify-center text-white font-bold text-sm">W</div>
                     </td>
                     <td className="border border-gray-400 p-3 text-center">
                       <p className="font-semibold text-gray-800 text-xs">Office Address: Plot No 5, East Wing, Ground Floor, Financial District,</p>
                       <p className="text-gray-700 text-xs">Nanakramguda, Serilingampalle (M), Hyderabad – 500032, Telangana, India</p>
-                      <p className="font-semibold text-gray-800 text-xs mt-0.5">Business Unit: HR Pulse Technologies Pvt. Ltd.</p>
+                      <p className="font-semibold text-gray-800 text-xs mt-0.5">Business Unit: Woways</p>
                     </td>
                   </tr>
                   <tr>

@@ -1,12 +1,17 @@
 "use client";
-import { useState } from "react";
-import { Target, CheckCircle, Clock, X, Plus } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Target, CheckCircle, Clock, X, Plus, Loader2 } from "lucide-react";
+import { onAuthStateChanged } from "firebase/auth";
+import {
+  collection, query, where, getDocs, getDoc, addDoc, updateDoc, doc,
+} from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 
 type GoalStatus = "In Progress" | "Completed" | "Not Started";
 type GoalCategory = "Daily" | "Weekly" | "Monthly";
 
 interface Goal {
-  id: number;
+  id: string;
   title: string;
   description: string;
   category: GoalCategory;
@@ -16,8 +21,6 @@ interface Goal {
   selfNotes: string;
   managerFeedback?: string;
 }
-
-const initialGoals: Goal[] = [];
 
 const categoryColors: Record<
   GoalCategory,
@@ -64,11 +67,21 @@ const statusBadge = (status: GoalStatus) => {
 };
 
 export default function GoalsPage() {
-  const [goals, setGoals] = useState<Goal[]>(initialGoals);
+  const [empId, setEmpId] = useState<string | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<GoalCategory>("Daily");
   const [progressModal, setProgressModal] = useState<Goal | null>(null);
   const [progressInput, setProgressInput] = useState(0);
+  const [progressSaving, setProgressSaving] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  function showToast(msg: string, ok = true) {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3500);
+  }
   const [newGoal, setNewGoal] = useState({
     title: "",
     description: "",
@@ -77,68 +90,132 @@ export default function GoalsPage() {
   });
 
   const tabs: GoalCategory[] = ["Daily", "Weekly", "Monthly"];
-
   const filteredGoals = goals.filter((g) => g.category === activeTab);
+
+  // Load employee identity + goals from Firestore
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) { setLoading(false); return; }
+      try {
+        let eid = "";
+        if (user.email) {
+          const empSnap = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
+          if (!empSnap.empty) eid = empSnap.docs[0].id;
+        }
+        if (!eid) {
+          const uSnap = await getDoc(doc(db, "users", user.uid));
+          if (uSnap.exists()) eid = String(uSnap.data().employeeId ?? "");
+        }
+        if (!eid && user.email) {
+          const empQ = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
+          if (!empQ.empty) eid = empQ.docs[0].id;
+        }
+        setEmpId(eid);
+
+        const snap = await getDocs(query(collection(db, "personalGoals"), where("empId", "==", eid)));
+        const loaded: Goal[] = snap.docs.map((d) => {
+          const r = d.data() as Record<string, unknown>;
+          return {
+            id:              d.id,
+            title:           String(r.title       ?? ""),
+            description:     String(r.description ?? ""),
+            category:        (r.category ?? "Daily") as GoalCategory,
+            deadline:        String(r.deadline     ?? ""),
+            progress:        Number(r.progress     ?? 0),
+            status:          (r.status ?? "Not Started") as GoalStatus,
+            selfNotes:       String(r.selfNotes    ?? ""),
+            managerFeedback: r.managerFeedback ? String(r.managerFeedback) : undefined,
+          };
+        });
+        setGoals(loaded);
+      } catch { /* ignore */ } finally {
+        setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   const openProgressModal = (goal: Goal) => {
     setProgressModal(goal);
     setProgressInput(goal.progress);
   };
 
-  const handleUpdateProgress = () => {
-    if (!progressModal) return;
-    setGoals((prev) =>
-      prev.map((g) => {
-        if (g.id === progressModal.id) {
-          const newStatus: GoalStatus =
-            progressInput === 100
-              ? "Completed"
-              : progressInput === 0
-              ? "Not Started"
-              : "In Progress";
-          return { ...g, progress: progressInput, status: newStatus };
-        }
-        return g;
-      })
-    );
-    setProgressModal(null);
+  const handleUpdateProgress = async () => {
+    if (!progressModal || !empId) return;
+    const newStatus: GoalStatus =
+      progressInput === 100 ? "Completed" : progressInput === 0 ? "Not Started" : "In Progress";
+    setProgressSaving(true);
+    try {
+      await updateDoc(doc(db, "personalGoals", progressModal.id), {
+        progress: progressInput, status: newStatus,
+      });
+      setGoals((prev) =>
+        prev.map((g) =>
+          g.id === progressModal.id ? { ...g, progress: progressInput, status: newStatus } : g
+        )
+      );
+      setProgressModal(null);
+      showToast("Progress updated!");
+    } catch {
+      showToast("Failed to save progress. Please try again.", false);
+    } finally {
+      setProgressSaving(false);
+    }
   };
 
-  const handleAddGoal = (e: React.FormEvent) => {
+  const handleAddGoal = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newId = Math.max(...goals.map((g) => g.id)) + 1;
-    setGoals([
-      ...goals,
-      {
-        id: newId,
-        title: newGoal.title,
-        description: newGoal.description,
-        category: newGoal.category,
-        deadline: newGoal.deadline
-          ? new Date(newGoal.deadline).toLocaleDateString("en-IN", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })
-          : "",
-        progress: 0,
-        status: "Not Started",
-        selfNotes: "",
-      },
-    ]);
-    setShowAddModal(false);
-    setNewGoal({ title: "", description: "", category: "Daily", deadline: "" });
-    setActiveTab(newGoal.category);
+    if (!empId || adding) return;
+    setAdding(true);
+    try {
+      const deadline = newGoal.deadline ?? "";
+      const payload = {
+        empId,
+        title: newGoal.title, description: newGoal.description,
+        category: newGoal.category, deadline,
+        progress: 0, status: "Not Started" as GoalStatus, selfNotes: "",
+        createdAt: new Date().toISOString(),
+      };
+      const ref = await addDoc(collection(db, "personalGoals"), payload);
+      setGoals((prev) => [...prev, { id: ref.id, ...payload }]);
+      setShowAddModal(false);
+      setNewGoal({ title: "", description: "", category: "Daily", deadline: "" });
+      setActiveTab(newGoal.category);
+      showToast("Goal added!");
+    } catch {
+      showToast("Failed to add goal. Please try again.", false);
+    } finally {
+      setAdding(false);
+    }
   };
 
-  const updateNotes = (id: number, notes: string) => {
-    setGoals((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, selfNotes: notes } : g))
-    );
+  const updateNotes = (id: string, notes: string) => {
+    setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, selfNotes: notes } : g)));
   };
+
+  const saveNotes = async (id: string, notes: string) => {
+    try {
+      await updateDoc(doc(db, "personalGoals", id), { selfNotes: notes });
+    } catch {
+      showToast("Failed to save notes. Please try again.", false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 size={28} className="animate-spin text-[#4F3CC9]" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-2xl text-white text-sm font-medium shadow-lg ${toast.ok ? "bg-green-500" : "bg-red-500"}`}>
+          {toast.msg}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -200,7 +277,10 @@ export default function GoalsPage() {
                     {goal.description}
                   </p>
                   <p className="text-xs text-gray-400 mt-1.5">
-                    Deadline: {goal.deadline}
+                    Deadline:{" "}
+                    {goal.deadline
+                      ? new Date(goal.deadline + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+                      : "—"}
                   </p>
                 </div>
               </div>
@@ -230,6 +310,7 @@ export default function GoalsPage() {
                   rows={2}
                   value={goal.selfNotes}
                   onChange={(e) => updateNotes(goal.id, e.target.value)}
+                  onBlur={(e) => saveNotes(goal.id, e.target.value)}
                   placeholder="Add your performance notes..."
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-[#4F3CC9] resize-none"
                 />
@@ -262,9 +343,13 @@ export default function GoalsPage() {
       {filteredGoals.length === 0 && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
           <Target size={36} className="text-gray-200 mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">
-            No {activeTab.toLowerCase()} goals yet.
-          </p>
+          <p className="text-gray-400 text-sm">No {activeTab.toLowerCase()} goals yet.</p>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="mt-4 text-sm text-[#4F3CC9] font-medium hover:underline"
+          >
+            + Add your first goal
+          </button>
         </div>
       )}
 
@@ -332,9 +417,10 @@ export default function GoalsPage() {
                 </button>
                 <button
                   onClick={handleUpdateProgress}
-                  className="flex-1 bg-[#4F3CC9] text-white px-4 py-2.5 rounded-full text-sm font-medium hover:bg-[#3d2fa3]"
+                  disabled={progressSaving}
+                  className="flex-1 bg-[#4F3CC9] text-white px-4 py-2.5 rounded-full text-sm font-medium hover:bg-[#3d2fa3] disabled:opacity-60 flex items-center justify-center gap-2"
                 >
-                  Save Progress
+                  {progressSaving ? <><Loader2 size={14} className="animate-spin" /> Saving…</> : "Save Progress"}
                 </button>
               </div>
             </div>
@@ -430,9 +516,10 @@ export default function GoalsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 bg-[#4F3CC9] text-white px-4 py-2.5 rounded-full text-sm font-medium hover:bg-[#3d2fa3]"
+                  disabled={adding}
+                  className="flex-1 bg-[#4F3CC9] text-white px-4 py-2.5 rounded-full text-sm font-medium hover:bg-[#3d2fa3] disabled:opacity-60 flex items-center justify-center gap-2"
                 >
-                  Add Goal
+                  {adding ? <><Loader2 size={14} className="animate-spin" /> Adding…</> : "Add Goal"}
                 </button>
               </div>
             </form>

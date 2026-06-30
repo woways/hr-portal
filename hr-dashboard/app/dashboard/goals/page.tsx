@@ -82,7 +82,7 @@ export default function GoalsPage() {
           lastUpdated: (r.lastUpdated as string) ?? undefined,
         };
       }));
-    } catch (err) { console.error("[loadGoals]", err); }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -125,7 +125,6 @@ export default function GoalsPage() {
       setShowAdd(false);
       showMsg(`Goal assigned to ${form.assignedTo}`);
     } catch (err) {
-      console.error("[handleAdd goal]", err);
       showMsg("Failed to save goal — check Firestore rules are deployed.");
     } finally {
       setSubmitting(false);
@@ -163,9 +162,13 @@ export default function GoalsPage() {
   }
 
   async function deleteGoal(id: string) {
-    setGoals((prev) => prev.filter((g) => g.id !== id));
-    await fsDeleteGoal(id);
-    showMsg("Goal deleted");
+    try {
+      await fsDeleteGoal(id);
+      setGoals((prev) => prev.filter((g) => g.id !== id));
+      showMsg("Goal deleted");
+    } catch {
+      showMsg("Failed to delete goal. Please try again.");
+    }
   }
 
   const notStarted = uniqueGoals.filter((g) => g.status === "Not Started").length;
