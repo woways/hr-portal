@@ -66,8 +66,19 @@ export default function DocumentsPage() {
   function showMsg(msg: string) { setToast(msg); setTimeout(() => setToast(null), 3500); }
 
   useEffect(() => {
-    loadAllDocuments()
-      .then(setDocs)
+    Promise.all([loadAllDocuments(), getEmployees()])
+      .then(([allDocs, emps]) => {
+        const activeIds = new Set(
+          (emps as Record<string, unknown>[]).flatMap(e => [
+            String(e.id ?? ""), String(e.employeeId ?? "")
+          ]).filter(Boolean)
+        );
+        // Only show docs belonging to current active employees
+        const filtered = activeIds.size > 0
+          ? allDocs.filter(d => !d.empId || activeIds.has(d.empId))
+          : allDocs;
+        setDocs(filtered);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);

@@ -61,8 +61,12 @@ export default function EmployeeSidebar() {
               applyName(String(ed.name ?? ""), String(ed.designation ?? ed.department ?? "Employee"));
               return;
             }
+            // Employee doc deleted — sign out
+            await signOut(auth);
+            window.location.href = "/";
+            return;
           }
-          // Use name from users doc if employee doc not found
+          // HR admin or non-employee user — show name from users doc
           const uName = String(ud.name ?? ud.displayName ?? "");
           if (uName) { applyName(uName, String(ud.department ?? "Employee")); return; }
         }
@@ -86,8 +90,8 @@ export default function EmployeeSidebar() {
   return (
     <aside className="w-[260px] min-h-screen bg-white border-r border-gray-100 flex flex-col py-6 px-4">
       {/* Logo */}
-      <div className="mb-8 px-2">
-        <img src="/woways-logo.svg" alt="Woways" className="h-9 w-auto" />
+      <div className="mb-6 px-1 flex items-center" style={{ height: "36px" }}>
+        <img src="/woways-logo.svg" alt="Woways" className="max-h-full max-w-full w-auto" />
       </div>
 
       {/* Nav */}

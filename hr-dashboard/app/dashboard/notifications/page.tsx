@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection, query, where, onSnapshot,
-  updateDoc, writeBatch, addDoc, doc,
+  updateDoc, writeBatch, addDoc, doc, getDocs,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { getEmployees } from "@/lib/firebaseService";
@@ -82,9 +82,40 @@ export default function HRNotificationsPage() {
       if (!user) { setReady(true); return; }
 
       const q = query(collection(db, "notifications"), where("userId", "==", "HR_PORTAL"));
-      const snapUnsub = onSnapshot(q, (snap) => {
+      const snapUnsub = onSnapshot(q, async (snap) => {
+        // Cross-reference with active employees to exclude notifications from deleted employees
+        let activeEmpIds = new Set<string>();
+        let activeEmpNames = new Set<string>();
+        try {
+          const empSnap = await getDocs(collection(db, "employees"));
+          empSnap.docs.forEach(d => {
+            const data = d.data();
+            activeEmpIds.add(d.id);
+            if (data.employeeId) activeEmpIds.add(String(data.employeeId));
+            if (data.name) activeEmpNames.add(String(data.name).toLowerCase().trim());
+          });
+        } catch { /* ignore, show all if fetch fails */ }
+
         const docs: LiveNotif[] = snap.docs
-          .filter(d => (d.data() as Record<string, unknown>).category !== "helpQuery") // help queries shown in Help & Support tab
+          .filter(d => {
+            const r = d.data() as Record<string, unknown>;
+            if (r.category === "helpQuery") return false;
+            // If fetch failed, show all
+            if (activeEmpIds.size === 0) return true;
+            // New notifications: has empId field — check directly
+            if (r.empId) return activeEmpIds.has(String(r.empId));
+            // Old notifications without empId: extract from message "(EMPXXX)" or name from title "— Name"
+            const msg = String(r.message ?? "");
+            const msgMatch = msg.match(/\(([A-Z0-9]+)\)/);
+            if (msgMatch && activeEmpIds.has(msgMatch[1])) return true;
+            if (msgMatch && !activeEmpIds.has(msgMatch[1])) return false;
+            // Extract name after "— " in title
+            const title = String(r.title ?? "");
+            const nameAfterDash = title.split("—").pop()?.trim().toLowerCase() ?? "";
+            if (nameAfterDash) return activeEmpNames.has(nameAfterDash);
+            // System/announcement with no employee link — keep
+            return true;
+          })
           .map(d => {
             const r = d.data() as Record<string, unknown>;
             return {

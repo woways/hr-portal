@@ -1,9 +1,8 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Pencil, Trash2, X, Check, Save, Loader2, CheckCircle, Upload, ImageIcon, Mail, AlertCircle, KeyRound, Eye, EyeOff, Lock, ShieldCheck, UserPlus, Users } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Plus, Pencil, Trash2, X, Check, Save, Loader2, CheckCircle, Mail, AlertCircle, KeyRound, Eye, EyeOff, Lock, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getSettingsDoc, saveSettingsDoc } from "@/lib/firebaseService";
-import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { storage, auth, firebaseConfig } from "@/lib/firebase";
+import { auth, firebaseConfig } from "@/lib/firebase";
 import { sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { initializeApp, getApps, deleteApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
@@ -62,9 +61,6 @@ export default function SettingsPage() {
 
   // ── Company ───────────────────────────────────────────────────────────────
   const [companyForm, setCompanyForm] = useState(DEFAULT_COMPANY);
-  const [logoUrl,    setLogoUrl]    = useState<string>("");
-  const [logoUploading, setLogoUploading] = useState(false);
-  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // ── Password Management ───────────────────────────────────────────────────
   const [currentPw,     setCurrentPw]     = useState("");
@@ -233,7 +229,7 @@ export default function SettingsPage() {
               website:  (data.website  as string) ?? "",
               address:  (data.address  as string) ?? "",
             });
-            if (data.logoUrl) setLogoUrl(data.logoUrl as string);
+            // logoUrl intentionally ignored — company logo feature removed
           }
           break;
         }
@@ -292,27 +288,6 @@ export default function SettingsPage() {
   function handleTabClick(tab: SettingsTab) {
     setActiveTab(tab);
     loadTab(tab);
-  }
-
-  // ── Logo upload ───────────────────────────────────────────────────────────
-  async function handleLogoUpload(file: File) {
-    setLogoUploading(true);
-    try {
-      const path = `company/logo_${Date.now()}.${file.name.split(".").pop()}`;
-      const sRef = storageRef(storage, path);
-      await new Promise<void>((resolve, reject) => {
-        const task = uploadBytesResumable(sRef, file);
-        task.on("state_changed", undefined, reject, () => resolve());
-      });
-      const url = await getDownloadURL(sRef);
-      setLogoUrl(url);
-      await saveSettingsDoc("company", { logoUrl: url });
-      showToast("Logo uploaded and saved");
-    } catch (err) {
-      showToast("Logo upload failed. Check storage rules.", false);
-    } finally {
-      setLogoUploading(false);
-    }
   }
 
   // ── Save helpers ──────────────────────────────────────────────────────────
@@ -475,43 +450,7 @@ export default function SettingsPage() {
                       </div>
                     ))}
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-gray-600 block mb-1">Company Logo</label>
-                    <input
-                      ref={logoInputRef}
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp,image/svg+xml"
-                      className="hidden"
-                      onChange={(e) => { const f = e.target.files?.[0]; if (f) handleLogoUpload(f); }}
-                    />
-                    {logoUrl ? (
-                      <div className="border border-gray-200 rounded-xl p-4 flex items-center gap-4">
-                        <img src={logoUrl} alt="Company Logo" className="h-16 w-auto object-contain rounded-lg border border-gray-100" />
-                        <div className="flex flex-col gap-2">
-                          <p className="text-xs text-gray-500">Logo uploaded successfully</p>
-                          <button
-                            onClick={() => logoInputRef.current?.click()}
-                            disabled={logoUploading}
-                            className="flex items-center gap-1.5 text-xs text-[#4F3CC9] font-medium hover:underline disabled:opacity-50"
-                          >
-                            <Upload size={12} /> {logoUploading ? "Uploading…" : "Replace logo"}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => logoInputRef.current?.click()}
-                        disabled={logoUploading}
-                        className="w-full border-2 border-dashed border-gray-200 rounded-xl p-8 flex flex-col items-center gap-2 text-gray-400 hover:border-[#4F3CC9] hover:text-[#4F3CC9] transition-colors disabled:opacity-50 cursor-pointer"
-                      >
-                        {logoUploading
-                          ? <><Loader2 size={22} className="animate-spin" /><span className="text-sm">Uploading…</span></>
-                          : <><ImageIcon size={22} /><span className="text-sm font-medium">Click to upload company logo</span><span className="text-xs">PNG, JPG, SVG supported</span></>
-                        }
-                      </button>
-                    )}
-                  </div>
-                  <SaveBtn tab="Company" docId="company" data={{ ...companyForm, logoUrl }} />
+                  <SaveBtn tab="Company" docId="company" data={{ ...companyForm }} />
                 </>
               )}
             </div>

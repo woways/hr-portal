@@ -262,6 +262,7 @@ export default function AttendancePage() {
       // Notify HR via the notifications collection (already has Firestore rules)
       await addDoc(collection(db, "notifications"), {
         userId:    "HR_PORTAL",
+        empId,
         type:      "attendance",
         title:     `Attendance Correction — ${empName}`,
         message:   `${empName} (${empId}) requested attendance correction for ${isoDate}. Actual arrival: ${reqForm.actualArrival}.`,

@@ -1,8 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 80" fill="none">
-  <!-- Red rounded square -->
-  <rect x="0" y="4" width="74" height="72" rx="12" ry="12" fill="#D32F2F"/>
-  <!-- White lowercase w -->
-  <text x="37" y="62" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="56" fill="white" text-anchor="middle" letter-spacing="-2">w</text>
-  <!-- WOWAYS in dark navy -->
-  <text x="96" y="62" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="52" fill="#1B2B6B" letter-spacing="1" dominant-baseline="auto">WOWAYS</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 52" fill="none">
+  <rect x="1" y="1" width="50" height="50" rx="9" ry="9" fill="#D32F2F"/>
+  <text x="26" y="43" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="42" fill="white" text-anchor="middle" letter-spacing="-1">w</text>
+  <text x="62" y="42" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" fill="#1B2B6B" letter-spacing="1">WOWAYS</text>
 </svg>

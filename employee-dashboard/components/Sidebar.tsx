@@ -54,9 +54,10 @@ export default function Sidebar() {
           const data = empSnap.data();
           setEmp({ name: (data.name as string) ?? "", id: eid });
         } else {
-          // Fallback: use name from users doc if available
-          const userName = userSnap.data().name as string;
-          if (userName) setEmp({ name: userName, id: eid });
+          // Employee was deleted by HR — sign out and redirect to login
+          await signOut(auth);
+          router.push("/login?reason=account-removed");
+          return;
         }
       } catch { /* ignore */ }
       setLoading(false);

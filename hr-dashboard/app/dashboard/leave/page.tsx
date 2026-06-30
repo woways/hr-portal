@@ -101,26 +101,37 @@ export default function LeavePage() {
       if (!user) { setReady(true); return; }
 
       snapUnsub = onSnapshot(collection(db, "leaveRequests"), (snap) => {
-        const docs: LeaveRequest[] = snap.docs.map(d => {
-          const r = d.data() as Record<string, unknown>;
-          return {
-            id:        d.id,
-            empId:     String(r.empId   ?? ""),
-            empName:   String(r.empName ?? r.name ?? "Unknown"),
-            leaveType: String(r.leaveType  ?? ""),
-            startDate: String(r.startDate  ?? ""),
-            endDate:   String(r.endDate    ?? ""),
-            days:      Number(r.days ?? 0),
-            reason:    String(r.reason     ?? ""),
-            status:    (r.status ?? "Pending") as LeaveStatus,
-            appliedOn: String(r.appliedOn  ?? ""),
-            hrComment: r.hrComment ? String(r.hrComment) : undefined,
-          };
-        });
-        setRequests(docs.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn)));
-        setReady(true);
+        // Cross-reference with active employees to exclude deleted employee data
+        getDocs(collection(db, "employees")).then((empSnap) => {
+          const activeEmpIds = new Set(empSnap.docs.flatMap(d => {
+            const data = d.data();
+            return [d.id, String(data.employeeId ?? "")].filter(Boolean);
+          }));
+
+          const allDocs: LeaveRequest[] = snap.docs.map(d => {
+            const r = d.data() as Record<string, unknown>;
+            return {
+              id:        d.id,
+              empId:     String(r.empId   ?? ""),
+              empName:   String(r.empName ?? r.name ?? "Unknown"),
+              leaveType: String(r.leaveType  ?? ""),
+              startDate: String(r.startDate  ?? ""),
+              endDate:   String(r.endDate    ?? ""),
+              days:      Number(r.days ?? 0),
+              reason:    String(r.reason     ?? ""),
+              status:    (r.status ?? "Pending") as LeaveStatus,
+              appliedOn: String(r.appliedOn  ?? ""),
+              hrComment: r.hrComment ? String(r.hrComment) : undefined,
+            };
+          });
+
+          // Only show requests from active (non-deleted) employees
+          const docs = allDocs.filter(r => !r.empId || activeEmpIds.has(r.empId));
+          setRequests(docs.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn)));
+          setReady(true);
+
         Promise.all([
-          getDocs(collection(db, "employees")),
+          Promise.resolve(empSnap),
           getDoc(doc(db, "settings", "leavePolicies")),
         ]).then(([empSnap, policySnap]) => {
           const policyList: Array<{type: string; days: number}> = policySnap.exists() ? (policySnap.data().list ?? []) : [];
@@ -138,6 +149,7 @@ export default function LeavePage() {
             return { id: d.id, name: (d.data().name as string) ?? "", casual: { used: used.casual ?? 0, total: getTotal("Casual Leave") }, sick: { used: used.sick ?? 0, total: getTotal("Sick Leave") }, emergency: { used: used.emergency ?? 0, total: getTotal("Emergency Leave") }, paid: { used: used.paid ?? 0, total: getTotal("Paid Leave") } };
           });
           setBalances(computed);
+        }).catch(() => {});
         }).catch(() => {});
       }, () => setReady(true));
     });

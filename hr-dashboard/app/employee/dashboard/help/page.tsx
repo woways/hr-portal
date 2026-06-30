@@ -211,6 +211,7 @@ export default function HelpPage() {
       // Notify HR via their inbox
       await addDoc(collection(db, "notifications"), {
         userId:    "HR_PORTAL",
+        empId,
         type:      "system",
         title:     `New Query — ${empName}`,
         message:   `[${queryForm.category}] ${queryForm.subject.trim()}`,
@@ -255,6 +256,7 @@ export default function HelpPage() {
       });
       await addDoc(collection(db, "notifications"), {
         userId:    "HR_PORTAL",
+        empId,
         type:      "system",
         title:     `Issue Reported — ${empName}`,
         message:   reportForm.subject.trim(),

@@ -3,7 +3,7 @@ import {
   getDocs, getDoc, query, where, orderBy, onSnapshot,
   serverTimestamp, writeBatch,
 } from "firebase/firestore";
-import { ref as storageRef, deleteObject } from "firebase/storage";
+import { ref as storageRef, deleteObject, listAll } from "firebase/storage";
 import { db, storage } from "./firebase";
 
 // ── Re-export types so consumers import from one place ───────────────────────
@@ -46,51 +46,122 @@ export async function updateEmployee(docId: string, data: Record<string, unknown
   await updateDoc(doc(db, "employees", docId), { ...data, updatedAt: new Date().toISOString() });
 }
 
-export async function deleteEmployee(empId: string) {
-  // Collections where employee data lives, keyed by the field that holds empId
-  const relatedCollections: Array<{ col: string; field: string }> = [
-    { col: "attendance",        field: "empId"      },
-    { col: "leaveRequests",     field: "empId"      },
-    { col: "personalGoals",     field: "empId"      },
-    { col: "notifications",     field: "userId"     },
-    { col: "helpQueries",       field: "empId"      },
-    { col: "compensation",      field: "empId"      },
-    { col: "performanceReviews",field: "empId"      },
-    { col: "onboarding",        field: "empId"      },
-    { col: "regularization",    field: "empId"      },
-    { col: "clockRecords",      field: "empId"      },
-    { col: "leaveBalances",     field: "empId"      },
-    { col: "payroll",           field: "empId"      },
-  ];
-
-  // Delete docs in each related collection in batches of 500
-  for (const { col, field } of relatedCollections) {
-    try {
-      const snap = await getDocs(query(collection(db, col), where(field, "==", empId)));
-      const chunks: typeof snap.docs[] = [];
-      for (let i = 0; i < snap.docs.length; i += 500) chunks.push(snap.docs.slice(i, i + 500));
-      for (const chunk of chunks) {
-        const batch = writeBatch(db);
-        chunk.forEach((d) => batch.delete(d.ref));
-        await batch.commit();
-      }
-    } catch { /* collection may not exist or have no docs */ }
-  }
-
-  // Delete the users/{uid} document where employeeId matches
+async function deleteStorageFolder(path: string) {
   try {
-    const userSnap = await getDocs(query(collection(db, "users"), where("employeeId", "==", empId)));
-    if (!userSnap.empty) {
-      const batch = writeBatch(db);
-      userSnap.docs.forEach((d) => batch.delete(d.ref));
-      await batch.commit();
+    const folder = storageRef(storage, path);
+    const { items, prefixes } = await listAll(folder);
+    await Promise.all([
+      ...items.map((item) => deleteObject(item).catch(() => {})),
+      ...prefixes.map((prefix) => deleteStorageFolder(prefix.fullPath)),
+    ]);
+  } catch { /* folder may not exist */ }
+}
+
+export async function deleteEmployee(empId: string) {
+  // Fetch the employee doc first to get the employeeId field value (e.g. "EMP001")
+  // which may differ from the Firestore doc ID used as empId parameter
+  let fieldEmployeeId = empId; // default to same value
+  let employeeName = "";
+  try {
+    const empDoc = await getDoc(doc(db, "employees", empId));
+    if (empDoc.exists()) {
+      const d = empDoc.data() as Record<string, unknown>;
+      if (d.employeeId) fieldEmployeeId = String(d.employeeId);
+      if (d.name) employeeName = String(d.name);
     }
   } catch { /* ignore */ }
 
-  // Delete profile photo from Firebase Storage
+  // Build the set of all IDs that might reference this employee
+  const allEmpIds = Array.from(new Set([empId, fieldEmployeeId].filter(Boolean)));
+
+  // All Firestore collections that reference this employee
+  const relatedCollections: Array<{ col: string; field: string }> = [
+    { col: "attendance",         field: "empId"  },
+    { col: "leaveRequests",      field: "empId"  },
+    { col: "leaveBalances",      field: "empId"  },
+    { col: "personalGoals",      field: "empId"  },
+    { col: "goals",              field: "empId"  },
+    { col: "notifications",      field: "userId" },
+    { col: "notifications",      field: "empId"  },
+    { col: "helpQueries",        field: "empId"  },
+    { col: "compensation",       field: "empId"  },
+    { col: "incentives",         field: "empId"  },
+    { col: "performanceReviews", field: "empId"  },
+    { col: "onboarding",         field: "empId"  },
+    { col: "regularization",     field: "empId"  },
+    { col: "clockRecords",       field: "empId"  },
+    { col: "payroll",            field: "empId"  },
+    { col: "documents",          field: "empId"  },
+    { col: "employeeDocuments",  field: "empId"  },
+  ];
+
+  // Delete using ALL possible ID values to cover any mismatch between doc ID and employeeId field
+  for (const id of allEmpIds) {
+    for (const { col, field } of relatedCollections) {
+      try {
+        const snap = await getDocs(query(collection(db, col), where(field, "==", id)));
+        if (snap.empty) continue;
+        const chunks: typeof snap.docs[] = [];
+        for (let i = 0; i < snap.docs.length; i += 500) chunks.push(snap.docs.slice(i, i + 500));
+        for (const chunk of chunks) {
+          const batch = writeBatch(db);
+          chunk.forEach((d) => batch.delete(d.ref));
+          await batch.commit();
+        }
+      } catch { /* collection may not exist */ }
+    }
+  }
+
+  // Delete HR_PORTAL notifications sent by this employee
+  // Old records lack empId field — match by empId in message or employee name in title
   try {
-    await deleteObject(storageRef(storage, `profile-photos/${empId}`));
-  } catch { /* photo may not exist */ }
+    const hrNotifSnap = await getDocs(
+      query(collection(db, "notifications"), where("userId", "==", "HR_PORTAL"))
+    );
+    const toDelete = hrNotifSnap.docs.filter(d => {
+      const r = d.data() as Record<string, unknown>;
+      if (allEmpIds.includes(String(r.empId ?? ""))) return true;
+      const msg = String(r.message ?? "");
+      if (allEmpIds.some(id => msg.includes(`(${id})`))) return true;
+      // Match by employee name extracted from title "Something — EmployeeName"
+      if (employeeName) {
+        const title = String(r.title ?? "");
+        const afterDash = title.split("—").pop()?.trim().toLowerCase() ?? "";
+        if (afterDash && afterDash === employeeName.toLowerCase()) return true;
+      }
+      return false;
+    });
+    if (toDelete.length > 0) {
+      const chunks: typeof toDelete[] = [];
+      for (let i = 0; i < toDelete.length; i += 500) chunks.push(toDelete.slice(i, i + 500));
+      for (const chunk of chunks) {
+        const batch = writeBatch(db);
+        chunk.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Delete the users/{uid} document — match by both possible employeeId values
+  try {
+    for (const id of allEmpIds) {
+      const byEmpId = await getDocs(query(collection(db, "users"), where("employeeId", "==", id)));
+      if (!byEmpId.empty) {
+        const batch = writeBatch(db);
+        byEmpId.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Delete all Storage files for this employee (profile photos + documents + certificates)
+  await Promise.all([
+    deleteStorageFolder(`profile-photos/${empId}`),
+    deleteStorageFolder(`employeePhotos/${empId}`),
+    deleteStorageFolder(`documents/${empId}`),
+    deleteStorageFolder(`employeeDocuments/${empId}`),
+    deleteStorageFolder(`employeeCertificates/${empId}`),
+  ]);
 
   // Finally delete the employee document itself
   await deleteDoc(doc(db, "employees", empId));

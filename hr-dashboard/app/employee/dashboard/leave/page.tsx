@@ -208,6 +208,7 @@ export default function LeavePage() {
       // Notify HR — will appear instantly in HR notifications tab
       await addDoc(collection(db, "notifications"), {
         userId:    "HR_PORTAL",
+        empId,
         type:      "leave",
         title:     `New Leave Request — ${empName}`,
         message:   `${empName} (${empId}) applied for ${leaveForm.leaveType} from ${leaveForm.startDate} to ${leaveForm.endDate}. Reason: "${leaveForm.reason.trim()}"`,
