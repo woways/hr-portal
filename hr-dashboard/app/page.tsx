@@ -145,8 +145,8 @@ export default function LoginPage() {
         <div className="absolute bottom-[120px] left-[40px] w-[140px] h-[140px] rounded-full bg-[#1a3a52] opacity-40" />
 
         <div className="relative z-10">
-          <div className="flex items-center gap-3 mb-2">
-            <img src="/woways-logo-white.svg" alt="Woways" className="h-10 w-auto" />
+          <div className="flex items-center mb-2" style={{ height: "36px" }}>
+            <img src="/woways-logo-white.svg" alt="Woways" className="max-h-full w-auto" />
           </div>
           <p className="text-gray-400 text-sm mt-1">Your People Operations Partner</p>
         </div>
