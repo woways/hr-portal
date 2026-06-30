@@ -76,14 +76,8 @@ export default function Sidebar() {
 
   return (
     <aside className="w-[260px] min-h-screen bg-white border-r border-gray-100 flex flex-col py-6 px-4">
-      <div className="flex items-center gap-3 mb-8 px-2">
-        <div className="w-10 h-10 rounded-lg bg-[#4F3CC9] flex items-center justify-center text-white font-bold text-sm">
-          HR
-        </div>
-        <div>
-          <span className="text-xl font-bold text-gray-900">Pulse</span>
-          <p className="text-xs text-gray-400">Employee Portal</p>
-        </div>
+      <div className="mb-6 px-1 flex items-center" style={{ height: "36px" }}>
+        <img src="/woways-logo.svg" alt="Woways" className="max-h-full max-w-full w-auto" />
       </div>
 
       <nav className="flex-1 space-y-1">

@@ -10,8 +10,8 @@ function LoginContent() {
   return (
     <div className="min-h-screen bg-[#F5F3FF] flex items-center justify-center px-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-sm w-full text-center">
-        <div className="w-14 h-14 rounded-xl bg-[#EDE9FF] flex items-center justify-center mx-auto mb-4">
-          <span className="text-2xl font-black text-[#4F3CC9]">HR</span>
+        <div className="flex justify-center mb-4" style={{ height: "36px" }}>
+          <img src="/woways-logo.svg" alt="Woways" className="max-h-full w-auto" />
         </div>
         <h1 className="text-xl font-bold text-gray-900 mb-2">Employee Portal</h1>
         {isRemoved ? (
