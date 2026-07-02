@@ -112,6 +112,14 @@ function initials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
 }
 
+function validatePhone(phone: string): string | null {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length === 0) return null; // optional field — skip if blank
+  if (digits.length !== 10) return "Phone number must be exactly 10 digits.";
+  if (/^[0-5]/.test(digits)) return "Indian phone numbers must start with 6, 7, 8 or 9.";
+  return null;
+}
+
 const statusColor: Record<EmployeeStatus, string> = {
   Active: "bg-green-100 text-green-700",
   "On Leave": "bg-yellow-100 text-yellow-700",
@@ -250,11 +258,29 @@ function FormModal({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className={labelCls}>Phone Number *</label>
-                <input value={form.phone} onChange={(e) => f("phone", e.target.value)} placeholder="+91 9876543210" className={inputCls} />
+                <input
+                  type="tel" inputMode="numeric" maxLength={10}
+                  value={form.phone}
+                  onChange={(e) => f("phone", e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="9876543210"
+                  className={inputCls}
+                />
+                {form.phone && validatePhone(form.phone) && (
+                  <p className="text-xs text-red-500 mt-1">{validatePhone(form.phone)}</p>
+                )}
               </div>
               <div>
                 <label className={labelCls}>Alternate Phone</label>
-                <input value={form.alternatePhone} onChange={(e) => f("alternatePhone", e.target.value)} placeholder="+91 9800000000" className={inputCls} />
+                <input
+                  type="tel" inputMode="numeric" maxLength={10}
+                  value={form.alternatePhone}
+                  onChange={(e) => f("alternatePhone", e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="9800000000"
+                  className={inputCls}
+                />
+                {form.alternatePhone && validatePhone(form.alternatePhone) && (
+                  <p className="text-xs text-red-500 mt-1">{validatePhone(form.alternatePhone)}</p>
+                )}
               </div>
               <div>
                 <label className={labelCls}>Emergency Contact Name</label>
@@ -262,7 +288,16 @@ function FormModal({
               </div>
               <div>
                 <label className={labelCls}>Emergency Contact Number *</label>
-                <input value={form.emergencyContact} onChange={(e) => f("emergencyContact", e.target.value)} placeholder="+91 9876543200" className={inputCls} />
+                <input
+                  type="tel" inputMode="numeric" maxLength={10}
+                  value={form.emergencyContact}
+                  onChange={(e) => f("emergencyContact", e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="9876543200"
+                  className={inputCls}
+                />
+                {form.emergencyContact && validatePhone(form.emergencyContact) && (
+                  <p className="text-xs text-red-500 mt-1">{validatePhone(form.emergencyContact)}</p>
+                )}
               </div>
               <p className={sectionHead}>Current Address</p>
               <div className="col-span-2">
@@ -620,7 +655,18 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                           {row._err && <p className="text-red-500 text-[10px] mt-0.5">{row._err}</p>}
                         </td>
                         <td className="px-2 py-2"><input value={row.email} onChange={(e) => setCell(i, "email", e.target.value)} placeholder="name@woways.in" className={inputCls} /></td>
-                        <td className="px-2 py-2"><input value={row.phone} onChange={(e) => setCell(i, "phone", e.target.value)} placeholder="+91 98..." className={inputCls} /></td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="tel" inputMode="numeric" maxLength={10}
+                            value={row.phone}
+                            onChange={(e) => setCell(i, "phone", e.target.value.replace(/\D/g, "").slice(0, 10))}
+                            placeholder="98XXXXXXXX"
+                            className={inputCls}
+                          />
+                          {row.phone && validatePhone(row.phone) && (
+                            <p className="text-red-500 text-[10px] mt-0.5">{validatePhone(row.phone)}</p>
+                          )}
+                        </td>
                         <td className="px-2 py-2"><input value={row.designation} onChange={(e) => setCell(i, "designation", e.target.value)} placeholder="Software Eng." className={inputCls} /></td>
                         <td className="px-2 py-2">
                           <select value={row.department || "Engineering"} onChange={(e) => setCell(i, "department", e.target.value)} className={selectCls}>
@@ -867,6 +913,24 @@ export default function EmployeesPage() {
       setTimeout(() => setAddToast(null), 3500);
       return;
     }
+    const phoneErr = validatePhone(form.phone);
+    if (phoneErr) {
+      setAddToast({ msg: phoneErr, ok: false });
+      setTimeout(() => setAddToast(null), 4000);
+      return;
+    }
+    const altPhoneErr = validatePhone(form.alternatePhone);
+    if (altPhoneErr) {
+      setAddToast({ msg: `Alternate phone: ${altPhoneErr}`, ok: false });
+      setTimeout(() => setAddToast(null), 4000);
+      return;
+    }
+    const emergencyPhoneErr = validatePhone(form.emergencyContact);
+    if (emergencyPhoneErr) {
+      setAddToast({ msg: `Emergency contact: ${emergencyPhoneErr}`, ok: false });
+      setTimeout(() => setAddToast(null), 4000);
+      return;
+    }
     if (saving) return;
     setSaving(true);
 
@@ -978,6 +1042,12 @@ export default function EmployeesPage() {
 
   async function handleEditSave() {
     if (!editForm || !editEmp) return;
+    const phoneErr = validatePhone(editForm.phone);
+    if (phoneErr) { setAddToast({ msg: phoneErr, ok: false }); setTimeout(() => setAddToast(null), 4000); return; }
+    const altPhoneErr = validatePhone(editForm.alternatePhone);
+    if (altPhoneErr) { setAddToast({ msg: `Alternate phone: ${altPhoneErr}`, ok: false }); setTimeout(() => setAddToast(null), 4000); return; }
+    const emergencyPhoneErr = validatePhone(editForm.emergencyContact);
+    if (emergencyPhoneErr) { setAddToast({ msg: `Emergency contact: ${emergencyPhoneErr}`, ok: false }); setTimeout(() => setAddToast(null), 4000); return; }
     try {
       await updateEmployee(editEmp.id, { ...editForm, employeeId: editEmp.id });
       setEditEmp(null);
