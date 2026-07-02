@@ -37,8 +37,9 @@ export default function Sidebar() {
 
   return (
     <aside className="w-[260px] h-screen bg-white border-r border-gray-100 flex flex-col pt-4 pb-5 px-4">
-      <div className="mb-4 px-1 shrink-0 flex items-center" style={{ height: "36px" }}>
-        <img src="/woways-logo.svg" alt="Woways" className="max-h-full max-w-full w-auto" />
+      <div className="mb-4 px-1 shrink-0 flex items-center">
+        <span className="text-2xl font-black text-[#0B1929] tracking-tight leading-none">WO</span>
+        <span className="text-2xl font-black text-[#14B8A6] tracking-tight leading-none">WAYS</span>
       </div>
       <nav className="flex-1 overflow-y-auto space-y-0.5 pr-1 scrollbar-thin">
         {navItems.map(({ label, href, icon: Icon }) => {
