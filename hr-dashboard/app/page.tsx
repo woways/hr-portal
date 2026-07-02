@@ -129,34 +129,35 @@ export default function LoginPage() {
     <div className="min-h-screen flex">
 
       {/* ── Left panel ── */}
-      <div className="hidden lg:flex w-1/2 bg-[#0B1929] flex-col justify-between p-14 relative overflow-hidden">
+      <div className="hidden lg:flex w-1/2 bg-[#0B1929] flex-col items-center justify-center p-14 relative overflow-hidden">
         {/* Decorative circles */}
         <div className="absolute top-[-100px] left-[-100px] w-[380px] h-[380px] rounded-full bg-[#0d3349] opacity-70" />
-        <div className="absolute bottom-[-80px] right-[-80px] w-[300px] h-[300px] rounded-full bg-[#0a2a40] opacity-80" />
-        <div className="absolute bottom-[160px] left-[20px] w-[180px] h-[180px] rounded-full bg-[#093040] opacity-50" />
+        <div className="absolute top-[-60px] right-[-60px] w-[260px] h-[260px] rounded-full bg-[#0a2a40] opacity-80" />
+        <div className="absolute bottom-[-80px] left-[-40px] w-[240px] h-[240px] rounded-full bg-[#093040] opacity-60" />
 
-        {/* Logo */}
-        <div className="relative z-10">
+        {/* Centered content */}
+        <div className="relative z-10 flex flex-col items-center text-center w-full max-w-sm">
+          {/* Logo */}
           <div className="mb-3">
             <span className="text-5xl font-black text-white tracking-tight">WO</span>
             <span className="text-5xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
           </div>
-          <p className="text-gray-400 text-sm">Your Execution Partner</p>
-        </div>
+          <p className="text-gray-400 text-sm mb-12">Your Execution Partner</p>
 
-        {/* Features */}
-        <div className="relative z-10 space-y-6">
-          {FEATURES.map((f) => (
-            <div key={f.text} className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-[#112233] flex items-center justify-center text-xl shrink-0">
-                {f.icon}
+          {/* Features */}
+          <div className="space-y-5 w-full">
+            {FEATURES.map((f) => (
+              <div key={f.text} className="flex items-center gap-4 text-left">
+                <div className="w-10 h-10 rounded-xl bg-[#112233] flex items-center justify-center text-xl shrink-0">
+                  {f.icon}
+                </div>
+                <p className="text-gray-300 text-sm leading-relaxed">{f.text}</p>
               </div>
-              <p className="text-gray-300 text-sm leading-relaxed pt-1.5">{f.text}</p>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
-        <p className="relative z-10 text-gray-600 text-xs">© 2026 Woways · All rights reserved</p>
+        <p className="absolute bottom-6 z-10 text-gray-600 text-xs">© 2026 Woways · All rights reserved</p>
       </div>
 
       {/* ── Right panel ── */}
