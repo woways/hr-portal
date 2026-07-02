@@ -77,8 +77,8 @@ export default function Sidebar() {
   return (
     <aside className="w-[260px] min-h-screen bg-white border-r border-gray-100 flex flex-col py-6 px-4">
       <div className="mb-6 flex items-center justify-center">
-        <span className="text-2xl font-black text-[#0B1929] tracking-tight leading-none">WO</span>
-        <span className="text-2xl font-black text-[#14B8A6] tracking-tight leading-none">WAYS</span>
+        <span className="text-4xl font-black text-[#0B1929] tracking-tight leading-none">WO</span>
+        <span className="text-4xl font-black text-[#14B8A6] tracking-tight leading-none">WAYS</span>
       </div>
 
       <nav className="flex-1 space-y-1">
