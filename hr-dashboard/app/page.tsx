@@ -7,23 +7,21 @@ import { auth, db } from "@/lib/firebase";
 import { getUserProfile } from "@/lib/authService";
 
 const FEATURES = [
-  { icon: "🚀", text: "Manage employees, attendance & payroll seamlessly" },
-  { icon: "📊", text: "Real-time analytics across teams and departments" },
-  { icon: "🎯", text: "Goal tracking & performance management built-in" },
-  { icon: "🔒", text: "Role-based portals for HR admins and employees" },
+  { icon: "🚀", text: "Embedded execution across Sales, Ops, Marketing & Tech" },
+  { icon: "📊", text: "14-18 day pilots before scaling to full engagement" },
+  { icon: "💰", text: "Commission-based model — we win when you win" },
+  { icon: "🔒", text: "Role-based portals for every stakeholder" },
 ];
 
 type View = "login" | "forgot";
 
 export default function LoginPage() {
-  // Login state
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw]     = useState(false);
   const [error, setError]       = useState("");
   const [loading, setLoading]   = useState(false);
 
-  // Forgot password state
   const [view, setView]               = useState<View>("login");
   const [resetEmail, setResetEmail]   = useState("");
   const [resetStatus, setResetStatus] = useState<"idle" | "sent" | "error">("idle");
@@ -39,7 +37,6 @@ export default function LoginPage() {
     }
     setLoading(true);
 
-    // Step 1: Firebase Authentication
     let uid: string;
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
@@ -52,8 +49,6 @@ export default function LoginPage() {
         setError("Too many failed attempts. Please wait a moment or reset your password.");
       } else if (code === "auth/invalid-email") {
         setError("Please enter a valid email address.");
-      } else if (code === "auth/unauthorized-domain") {
-        setError("This domain is not authorized for sign-in. Please contact your administrator.");
       } else if (code === "auth/network-request-failed") {
         setError("Network error. Please check your connection and try again.");
       } else {
@@ -63,20 +58,16 @@ export default function LoginPage() {
       return;
     }
 
-    // Step 2: Determine destination — users doc role → employees collection → default employee
     try {
       const profile = await getUserProfile(uid);
       if (profile) {
-        // Known role from users collection
         window.location.href = profile.role === "admin" ? "/dashboard" : "/employee/dashboard";
       } else {
-        // No users doc (newly added employee) — check employees collection by email
         const signedInEmail = email.trim().toLowerCase();
         const empSnap = await getDocs(
           query(collection(db, "employees"), where("email", "==", signedInEmail))
         );
         if (!empSnap.empty) {
-          // Self-heal: write the missing users doc so future logins skip this check
           const empData = empSnap.docs[0].data() as Record<string, unknown>;
           setDoc(doc(db, "users", uid), {
             uid,
@@ -86,15 +77,13 @@ export default function LoginPage() {
             employeeId: String(empData.employeeId ?? empSnap.docs[0].id),
             department: String(empData.department ?? ""),
             createdAt:  new Date().toISOString(),
-          }).catch(() => {}); // fire-and-forget, don't block navigation
+          }).catch(() => {});
           window.location.href = "/employee/dashboard";
         } else {
-          // Unknown user — treat as employee
           window.location.href = "/employee/dashboard";
         }
       }
     } catch {
-      // Firestore unavailable — default to employee portal
       window.location.href = "/employee/dashboard";
     }
 
@@ -130,7 +119,7 @@ export default function LoginPage() {
   }
 
   function openForgot() {
-    setResetEmail(email); // pre-fill with whatever they typed on the login form
+    setResetEmail(email);
     setResetStatus("idle");
     setResetMsg("");
     setView("forgot");
@@ -138,23 +127,30 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex">
-      {/* ── Left panel ── */}
-      <div className="hidden lg:flex w-[45%] bg-[#0D1B2A] flex-col justify-between p-12 relative overflow-hidden">
-        <div className="absolute top-[-80px] left-[-80px] w-[340px] h-[340px] rounded-full bg-[#1a2e45] opacity-60" />
-        <div className="absolute bottom-[-60px] right-[-60px] w-[260px] h-[260px] rounded-full bg-[#0e2235] opacity-80" />
-        <div className="absolute bottom-[120px] left-[40px] w-[140px] h-[140px] rounded-full bg-[#1a3a52] opacity-40" />
 
+      {/* ── Left panel ── */}
+      <div className="hidden lg:flex w-1/2 bg-[#0B1929] flex-col justify-between p-14 relative overflow-hidden">
+        {/* Decorative circles */}
+        <div className="absolute top-[-100px] left-[-100px] w-[380px] h-[380px] rounded-full bg-[#0d3349] opacity-70" />
+        <div className="absolute bottom-[-80px] right-[-80px] w-[300px] h-[300px] rounded-full bg-[#0a2a40] opacity-80" />
+        <div className="absolute bottom-[160px] left-[20px] w-[180px] h-[180px] rounded-full bg-[#093040] opacity-50" />
+
+        {/* Logo */}
         <div className="relative z-10">
-          <div className="flex items-center mb-2" style={{ height: "36px" }}>
-            <img src="/woways-logo-white.svg" alt="Woways" className="max-h-full w-auto" />
+          <div className="mb-3">
+            <span className="text-5xl font-black text-white tracking-tight">WO</span>
+            <span className="text-5xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
           </div>
-          <p className="text-gray-400 text-sm mt-1">Your People Operations Partner</p>
+          <p className="text-gray-400 text-sm">Your Execution Partner</p>
         </div>
 
+        {/* Features */}
         <div className="relative z-10 space-y-6">
           {FEATURES.map((f) => (
             <div key={f.text} className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-[#1a2e45] flex items-center justify-center text-xl shrink-0">{f.icon}</div>
+              <div className="w-10 h-10 rounded-xl bg-[#112233] flex items-center justify-center text-xl shrink-0">
+                {f.icon}
+              </div>
               <p className="text-gray-300 text-sm leading-relaxed pt-1.5">{f.text}</p>
             </div>
           ))}
@@ -164,45 +160,42 @@ export default function LoginPage() {
       </div>
 
       {/* ── Right panel ── */}
-      <div className="flex-1 bg-[#F5F3FF] flex items-center justify-center p-8">
-        <div className="w-full max-w-md">
+      <div className="flex-1 bg-white flex items-center justify-center p-10">
+        <div className="w-full max-w-sm">
+
           {/* Mobile logo */}
-          <div className="flex lg:hidden items-center mb-8 justify-center">
-            <img src="/woways-logo.svg" alt="Woways" className="h-9 w-auto" />
+          <div className="flex lg:hidden justify-center mb-8">
+            <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
+            <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
           </div>
 
           {/* ─── LOGIN VIEW ─── */}
           {view === "login" && (
             <>
-              <h1 className="text-3xl font-bold text-gray-900 mb-1">Welcome back</h1>
+              <h1 className="text-3xl font-bold text-[#0B1929] mb-1">Welcome back</h1>
               <p className="text-gray-500 text-sm mb-8">Sign in to your Woways portal</p>
 
               <form onSubmit={handleSignIn} className="space-y-5">
                 {/* Email */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Email address</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                    Email address
+                  </label>
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@woways.in"
                     autoComplete="email"
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] focus:border-transparent"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-transparent"
                   />
                 </div>
 
                 {/* Password */}
                 <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-sm font-medium text-gray-700">Password</label>
-                    <button
-                      type="button"
-                      onClick={openForgot}
-                      className="text-xs text-[#4F3CC9] hover:underline font-medium"
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                    Password
+                  </label>
                   <div className="relative">
                     <input
                       type={showPw ? "text" : "password"}
@@ -210,7 +203,7 @@ export default function LoginPage() {
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
                       autoComplete="current-password"
-                      className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] focus:border-transparent pr-11"
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-transparent pr-11"
                     />
                     <button
                       type="button"
@@ -224,16 +217,16 @@ export default function LoginPage() {
 
                 {/* Error */}
                 {error && (
-                  <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-600 text-xs">
+                  <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-600 text-xs">
                     {error}
                   </div>
                 )}
 
-                {/* Sign in */}
+                {/* Sign in button */}
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-[#4F3CC9] hover:bg-[#3d2fa8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+                  className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
                 >
                   {loading ? (
                     <>
@@ -242,6 +235,17 @@ export default function LoginPage() {
                     </>
                   ) : "Sign in →"}
                 </button>
+
+                {/* Forgot password */}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={openForgot}
+                    className="text-sm text-[#2563EB] hover:underline font-medium"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
               </form>
             </>
           )}
@@ -256,11 +260,11 @@ export default function LoginPage() {
                 <ArrowLeft size={15} /> Back to sign in
               </button>
 
-              <div className="w-12 h-12 rounded-2xl bg-[#EDE9FF] flex items-center justify-center mb-5">
-                <Mail size={22} className="text-[#4F3CC9]" />
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-5">
+                <Mail size={22} className="text-[#2563EB]" />
               </div>
 
-              <h1 className="text-2xl font-bold text-gray-900 mb-1">Reset your password</h1>
+              <h1 className="text-2xl font-bold text-[#0B1929] mb-1">Reset your password</h1>
               <p className="text-gray-500 text-sm mb-8">
                 Enter the email address linked to your account and we&apos;ll send you a reset link.
               </p>
@@ -272,7 +276,7 @@ export default function LoginPage() {
                   <p className="text-green-600 text-xs leading-relaxed">{resetMsg}</p>
                   <button
                     onClick={() => { setView("login"); setResetStatus("idle"); }}
-                    className="mt-5 w-full bg-[#4F3CC9] text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-[#3d2fa8] transition-colors"
+                    className="mt-5 w-full bg-[#2563EB] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#1d4ed8] transition-colors"
                   >
                     Back to sign in
                   </button>
@@ -280,19 +284,21 @@ export default function LoginPage() {
               ) : (
                 <form onSubmit={handleForgotPassword} className="space-y-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Email address</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                      Email address
+                    </label>
                     <input
                       type="email"
                       value={resetEmail}
                       onChange={(e) => setResetEmail(e.target.value)}
                       placeholder="you@woways.in"
                       autoFocus
-                      className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] focus:border-transparent"
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-transparent"
                     />
                   </div>
 
                   {resetStatus === "error" && (
-                    <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-600 text-xs">
+                    <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-600 text-xs">
                       {resetMsg}
                     </div>
                   )}
@@ -300,7 +306,7 @@ export default function LoginPage() {
                   <button
                     type="submit"
                     disabled={resetLoading}
-                    className="w-full bg-[#4F3CC9] hover:bg-[#3d2fa8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+                    className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
                   >
                     {resetLoading ? (
                       <>
