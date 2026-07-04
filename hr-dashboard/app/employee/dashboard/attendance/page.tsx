@@ -7,7 +7,8 @@ import {
 import { collection, query, where, onSnapshot, setDoc, addDoc, doc, getDoc, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
-import { backfillEmployee } from "@/lib/attendanceBackfill";
+import { backfillEmployee, deletePreStartAttendance } from "@/lib/attendanceBackfill";
+import { markEmpNotifRead } from "@/lib/firebaseService";
 
 type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
 
@@ -112,41 +113,48 @@ export default function AttendancePage() {
   const [historyMonthIdx, setHistoryMonthIdx] = useState(() => new Date().getMonth());
   const [showMonthPicker, setShowMonthPicker] = useState(false);
 
-  // Load historical attendance records directly from Firestore (client-side auth — no API route)
+  // Auto-mark unread attendance notifications as read when employee opens this page
+  useEffect(() => { if (empId) markEmpNotifRead("attendance", empId); }, [empId]);
+
+  // Live listener for attendance history — HR changes reflect instantly without page refresh
   useEffect(() => {
     if (!empId) return;
     const todayIso = todayISO();
-    getDocs(query(collection(db, "attendance"), where("empId", "==", empId)))
-      .then((snap) => {
-        const past = snap.docs
-          .map(d => d.data() as Record<string, unknown>)
-          .filter((rec) => rec.date && rec.date !== todayIso)
-          .map((rec) => {
-            const d = new Date(rec.date as string);
-            const dayIdx = d.getDay();
-            const isWeekend = dayIdx === 0 || dayIdx === 6;
-            const hoursMatch = ((rec.workingHours as string) ?? "").match(/(\d+)h\s*(\d+)m/);
-            const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
-            return {
-              date:     `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, "0")}, ${d.getFullYear()}`,
-              day:      DAY_ABBR[dayIdx],
-              clockIn:  (rec.clockIn as string) || "—",
-              clockOut: (rec.clockOut as string) || "—",
-              hours:    (rec.workingHours as string) || "—",
-              hoursVal,
-              status:   ((rec.status as string) || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
-              late:     (rec.late as boolean) ?? false,
-              isWeekend,
-            } as AttEntry;
-          })
-          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        PAST_LOG = past;
-        setPastLog(past);
-      })
-      .catch(() => {});
+    const q = query(collection(db, "attendance"), where("empId", "==", empId), where("date", ">=", "2026-07-01"));
+    const unsub = onSnapshot(q, (snap) => {
+      const past = snap.docs
+        .map(d => d.data() as Record<string, unknown>)
+        .filter((rec) => rec.date && rec.date !== todayIso)
+        .map((rec) => {
+          const d = new Date((rec.date as string) + "T00:00:00");
+          const dayIdx = d.getDay();
+          const isWeekend = dayIdx === 0 || dayIdx === 6;
+          const hoursMatch = ((rec.workingHours as string) ?? "").match(/(\d+)h\s*(\d+)m/);
+          const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
+          return {
+            date:     `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, "0")}, ${d.getFullYear()}`,
+            day:      DAY_ABBR[dayIdx],
+            clockIn:  (rec.clockIn as string) || "—",
+            clockOut: (rec.clockOut as string) || "—",
+            hours:    (rec.workingHours as string) || "—",
+            hoursVal,
+            status:   ((rec.status as string) || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
+            late:     (rec.late as boolean) ?? false,
+            isWeekend,
+          } as AttEntry;
+        })
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      PAST_LOG = past;
+      setPastLog(past);
+    }, () => {});
+    return () => unsub();
   }, [empId]);
 
-  // Restore today's clock state directly from Firestore (client-side auth — no API route)
+  // Ref to track active clock session — prevents HR corrections from overwriting live state
+  const isClockedInRef = useRef(false);
+  useEffect(() => { isClockedInRef.current = isClockedIn; }, [isClockedIn]);
+
+  // Restore today's clock session state from clockRecords on mount
   useEffect(() => {
     if (!empId) return;
     const todayId = `${todayISO()}-${empId}`;
@@ -167,6 +175,30 @@ export default function AttendancePage() {
         }
       })
       .catch(() => {});
+  }, [empId]);
+
+  // ── Live listener for today's attendance doc — reflects HR corrections instantly ──
+  useEffect(() => {
+    if (!empId) return;
+    const unsub = onSnapshot(doc(db, "attendance", `${todayISO()}-${empId}`), (snap) => {
+      if (!snap.exists()) return;
+      // Don't overwrite an active employee clock-in session
+      if (isClockedInRef.current) return;
+      const rec = snap.data() as Record<string, unknown>;
+      const ci = (rec.clockIn as string) ?? null;
+      const co = (rec.clockOut as string) ?? null;
+      if (ci) setClockInTime(ci);
+      if (rec.late !== undefined) setIsLate(rec.late as boolean);
+      if (ci && co) {
+        setClockOutTime(co);
+        const ts = (rec.totalSeconds as number) ?? null;
+        if (ts != null) setFinalSeconds(ts);
+        setIsClockedIn(false);
+      } else if (ci && !co) {
+        setIsClockedIn(true);
+      }
+    }, () => {});
+    return unsub;
   }, [empId]);
 
   // Real-time listener for this employee's regularization requests (client-side auth → no permission issues)
@@ -199,35 +231,77 @@ export default function AttendancePage() {
     if (!empId || backfillDoneRef.current) return;
     backfillDoneRef.current = true;
     const todayIso = todayISO();
-    backfillEmployee({ id: empId, name: empName, department: empDept })
-      .then(() =>
-        getDocs(query(collection(db, "attendance"), where("empId", "==", empId)))
-      )
-      .then((snap) => {
-        const past = snap.docs
-          .map(d => d.data() as Record<string, unknown>)
-          .filter((rec) => rec.date && rec.date !== todayIso)
-          .map((rec) => {
-            const d = new Date(rec.date as string);
-            const dayIdx = d.getDay();
-            const isWeekend = dayIdx === 0 || dayIdx === 6;
-            const hoursMatch = ((rec.workingHours as string) ?? "").match(/(\d+)h\s*(\d+)m/);
-            const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
-            return {
-              date:     `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")}, ${d.getFullYear()}`,
-              day:      DAY_ABBR[dayIdx],
-              clockIn:  (rec.clockIn as string) || "—",
-              clockOut: (rec.clockOut as string) || "—",
-              hours:    (rec.workingHours as string) || "—",
-              hoursVal,
-              status:   ((rec.status as string) || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
-              late:     (rec.late as boolean) ?? false,
-              isWeekend,
-            } as AttEntry;
-          })
-          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        PAST_LOG = past;
-        setPastLog(past);
+    deletePreStartAttendance()
+      .catch(() => {});
+    backfillEmployee({ id: empId, name: empName, department: empDept, doj: doj || undefined })
+      .then(async () => {
+        try {
+          const snap = await getDocs(query(collection(db, "attendance"), where("empId", "==", empId)));
+          const all = snap.docs.map(d => d.data() as Record<string, unknown>);
+          let past = all
+            .filter((rec) => rec.date && rec.date !== todayIso)
+            .map((rec) => {
+              const isoDate = rec.date as string;
+              const d = new Date(isoDate + "T00:00:00");
+              const dayIdx = d.getDay();
+              const isWeekend = dayIdx === 0 || dayIdx === 6;
+              const hoursMatch = ((rec.workingHours as string) ?? "").match(/(\d+)h\s*(\d+)m/);
+              const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
+              return {
+                date:     `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")}, ${d.getFullYear()}`,
+                day:      DAY_ABBR[dayIdx],
+                clockIn:  (rec.clockIn as string) || "—",
+                clockOut: (rec.clockOut as string) || "—",
+                hours:    (rec.workingHours as string) || "—",
+                hoursVal,
+                status:   ((rec.status as string) || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
+                late:     (rec.late as boolean) ?? false,
+                isWeekend,
+                isoDate,
+              } as AttEntry & { isoDate: string };
+            })
+            .sort((a, b) => new Date(b.isoDate).getTime() - new Date(a.isoDate).getTime());
+
+          // Backfill missing clockOut / workingHours from clockRecords
+          const incomplete = past.filter(e => e.clockIn !== "—" && (e.clockOut === "—" || e.hours === "—"));
+          if (incomplete.length > 0) {
+            const dates = [...new Set(incomplete.map(e => e.isoDate))];
+            const chunks: string[][] = [];
+            for (let i = 0; i < dates.length; i += 30) chunks.push(dates.slice(i, i + 30));
+            const crMap: Record<string, { clockIn: string; clockOut: string; totalSeconds: number }> = {};
+            await Promise.all(chunks.map(async chunk => {
+              const crSnap = await getDocs(query(
+                collection(db, "clockRecords"),
+                where("empId", "==", empId),
+                where("date", "in", chunk)
+              ));
+              crSnap.docs.forEach(d2 => {
+                const r = d2.data() as Record<string, unknown>;
+                crMap[r.date as string] = {
+                  clockIn:      (r.clockInStr  as string) ?? "",
+                  clockOut:     (r.clockOutStr as string) ?? "",
+                  totalSeconds: (r.totalSeconds as number) ?? 0,
+                };
+              });
+            }));
+            past = past.map(e => {
+              const cr = crMap[e.isoDate];
+              if (!cr) return e;
+              let updated = { ...e };
+              if (e.clockIn === "—" && cr.clockIn) updated = { ...updated, clockIn: cr.clockIn };
+              if ((e.clockOut === "—" || e.hours === "—") && cr.clockOut && cr.totalSeconds > 0) {
+                const h = Math.floor(cr.totalSeconds / 3600);
+                const m = Math.floor((cr.totalSeconds % 3600) / 60);
+                updated = { ...updated, clockOut: cr.clockOut, hours: `${h}h ${String(m).padStart(2, "0")}m`, hoursVal: h + m / 60 };
+              }
+              return updated;
+            });
+          }
+
+          const finalPast = past.map(({ isoDate: _iso, ...e }) => e as AttEntry);
+          PAST_LOG = finalPast;
+          setPastLog(finalPast);
+        } catch { /* ignore */ }
       })
       .catch(() => {});
   }, [empId, empName, empDept]);

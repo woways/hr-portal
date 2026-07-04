@@ -12,7 +12,7 @@ const dayTypeStyles: Record<DayType, string> = {
   present: "bg-green-100 text-green-700 font-semibold",
   absent:  "bg-red-100 text-red-700 font-semibold",
   late:    "bg-orange-100 text-orange-700 font-semibold",
-  leave:   "bg-yellow-100 text-yellow-700 font-semibold",
+  leave:   "bg-purple-100 text-purple-700 font-semibold",
   holiday: "bg-blue-100 text-blue-700 font-semibold",
   today:   "ring-2 ring-[#4F3CC9] bg-[#EDE9FF] text-[#4F3CC9] font-bold",
   weekend: "text-gray-300",
@@ -95,12 +95,12 @@ export default function CalendarPage() {
           else if (status === "leave") attMap[dateKey] = "leave";
         });
 
-        // Overlay approved leaves (they override absent)
+        // Overlay approved leaves (they override attendance — use local date to avoid UTC-shift in IST)
         lvDocs.filter(l => l.status === "Approved").forEach((l) => {
           const start = new Date(l.startDate + "T00:00:00");
           const end   = new Date(l.endDate   + "T00:00:00");
           for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-            const key = d.toISOString().slice(0, 10);
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
             attMap[key] = "leave";
           }
         });
@@ -112,8 +112,13 @@ export default function CalendarPage() {
     return () => unsub();
   }, []);
 
+  const MIN_YEAR = 2026;
+  const MIN_MONTH = 5; // June (0-indexed)
+  const atMin = currentYear === MIN_YEAR && currentMonth === MIN_MONTH;
+
   // ── Navigation ─────────────────────────────────────────────────────────────
   function goToPrev() {
+    if (atMin) return;
     if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear(y => y - 1); }
     else setCurrentMonth(m => m - 1);
     setTooltip(null);
@@ -130,15 +135,29 @@ export default function CalendarPage() {
   const holidaySet = new Map<string, string>(); // date → name
   holidays.forEach(h => holidaySet.set(h.date, h.name));
 
+  // Build a set of approved-leave dates directly from leave requests (local dates,
+  // case-insensitive status check) so leave always shows yellow regardless of
+  // what status the attendance record happens to have.
+  const leaveSet = new Set<string>();
+  leaves.filter(l => (l.status ?? "").toLowerCase() === "approved").forEach(l => {
+    const start = new Date(l.startDate + "T00:00:00");
+    const end   = new Date(l.endDate   + "T00:00:00");
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      leaveSet.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+    }
+  });
+
   function getDayType(day: number): DayType {
     const dateKey = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    // Holidays take top priority — show blue even on weekends
+    if (holidaySet.has(dateKey)) return "holiday";
     const dow = new Date(currentYear, currentMonth, day).getDay();
     if (dow === 0 || dow === 6) return "weekend";
-    if (holidaySet.has(dateKey)) return "holiday";
-    // Today always gets the "today" ring regardless of attendance
-    if (dateKey === todayKey) return "today";
-    // Show attendance status only if a real record exists — never assume absent
-    return attendance[dateKey] ?? "";
+    // Approved leave always shows purple — checked before attendance map so
+    // Half Day / Late records on leave days don't bleed through as orange
+    if (leaveSet.has(dateKey)) return "leave";
+    // Show real attendance if it exists (today ring is added separately in JSX)
+    return attendance[dateKey] ?? (dateKey === todayKey ? "today" : "");
   }
 
   function getDayInfo(day: number, type: DayType): string {
@@ -200,11 +219,38 @@ export default function CalendarPage() {
           <div className="col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
             {/* Month Navigation */}
             <div className="flex items-center justify-between mb-4">
-              <button onClick={goToPrev} className="w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-[#F5F3FF] transition-colors">
+              <button onClick={goToPrev} disabled={atMin}
+                className={`w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center transition-colors ${atMin ? "opacity-30 cursor-not-allowed" : "hover:bg-[#F5F3FF]"}`}>
                 <ChevronLeft size={18} className="text-gray-600" />
               </button>
-              <h2 className="text-lg font-bold text-gray-900">{MONTHS[currentMonth]} {currentYear}</h2>
-              <button onClick={goToNext} className="w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-[#F5F3FF] transition-colors">
+              <div className="flex items-center gap-2">
+                <select
+                  value={currentMonth}
+                  onChange={e => { setCurrentMonth(Number(e.target.value)); setTooltip(null); }}
+                  className="text-base font-bold text-gray-900 bg-transparent border-none outline-none cursor-pointer appearance-none px-1 hover:text-[#4F3CC9] transition-colors"
+                >
+                  {MONTHS.map((m, i) => {
+                    if (currentYear === MIN_YEAR && i < MIN_MONTH) return null;
+                    return <option key={m} value={i}>{m}</option>;
+                  })}
+                </select>
+                <select
+                  value={currentYear}
+                  onChange={e => {
+                    const y = Number(e.target.value);
+                    setCurrentYear(y);
+                    if (y === MIN_YEAR && currentMonth < MIN_MONTH) setCurrentMonth(MIN_MONTH);
+                    setTooltip(null);
+                  }}
+                  className="text-base font-bold text-gray-900 bg-transparent border-none outline-none cursor-pointer appearance-none px-1 hover:text-[#4F3CC9] transition-colors"
+                >
+                  {Array.from({ length: todayYear - MIN_YEAR + 5 }, (_, i) => MIN_YEAR + i).map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+              <button onClick={goToNext}
+                className="w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-[#F5F3FF] transition-colors">
                 <ChevronRight size={18} className="text-gray-600" />
               </button>
             </div>
@@ -214,7 +260,7 @@ export default function CalendarPage() {
               {[
                 { label: `${presentDays} Present`, cls: "bg-green-50 text-green-700" },
                 { label: `${absentDays} Absent`,   cls: "bg-red-50 text-red-700"   },
-                { label: `${leaveDays} Leave`,     cls: "bg-yellow-50 text-yellow-700" },
+                { label: `${leaveDays} Leave`,     cls: "bg-purple-50 text-purple-700" },
                 { label: `${monthHols} Holiday`,   cls: "bg-blue-50 text-blue-700" },
               ].map(s => (
                 <span key={s.label} className={`text-xs font-medium px-3 py-1 rounded-full ${s.cls}`}>{s.label}</span>
@@ -236,6 +282,9 @@ export default function CalendarPage() {
                 const dtype = getDayType(day);
                 const isHol = dtype === "holiday";
                 const dateKey = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                const isToday = dateKey === todayKey;
+                // Add purple ring for today even when attendance color fills the background
+                const todayRing = (isToday && dtype !== "today" && !isHol) ? "ring-2 ring-[#4F3CC9]" : "";
                 return (
                   <div key={day} className="relative group">
                     <div
@@ -245,7 +294,7 @@ export default function CalendarPage() {
                         if (info) setTooltip(tooltip?.day === day ? null : { day, type: dtype, info });
                       }}
                       className={`aspect-square flex flex-col items-center justify-center rounded-xl text-sm cursor-pointer transition-all
-                        ${dayTypeStyles[dtype]}
+                        ${dayTypeStyles[dtype]} ${todayRing}
                         ${isHol ? "ring-1 ring-blue-300" : ""}`}
                     >
                       <span>{day}</span>
@@ -269,7 +318,7 @@ export default function CalendarPage() {
                 { color: "bg-green-200",                         label: "Present"       },
                 { color: "bg-orange-200",                        label: "Late / Half"   },
                 { color: "bg-red-200",                           label: "Absent"        },
-                { color: "bg-yellow-200",                        label: "Leave"         },
+                { color: "bg-purple-200",                        label: "Leave"         },
                 { color: "bg-blue-200 ring-1 ring-blue-300",     label: "Holiday"       },
                 { color: "ring-2 ring-[#4F3CC9] bg-[#EDE9FF]",  label: "Today"         },
               ].map(item => (
@@ -314,7 +363,7 @@ export default function CalendarPage() {
             {/* Approved Leaves */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-4">
-                <CalendarDays size={16} className="text-yellow-500" />
+                <CalendarDays size={16} className="text-purple-500" />
                 Approved Leaves
               </h3>
               <div className="space-y-3">
@@ -322,7 +371,7 @@ export default function CalendarPage() {
                   <p className="text-sm text-gray-400 text-center py-4">No approved leaves</p>
                 )}
                 {approvedLeaves.map(l => (
-                  <div key={l.id} className="flex items-center justify-between p-3 bg-yellow-50 rounded-xl">
+                  <div key={l.id} className="flex items-center justify-between p-3 bg-purple-50 rounded-xl">
                     <div>
                       <p className="text-sm font-medium text-gray-900">
                         {l.startDate === l.endDate
@@ -331,7 +380,7 @@ export default function CalendarPage() {
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5">{l.leaveType} · {l.days} day{l.days !== 1 ? "s" : ""}</p>
                     </div>
-                    <span className="text-xs font-medium text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded-full">Approved</span>
+                    <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">Approved</span>
                   </div>
                 ))}
               </div>

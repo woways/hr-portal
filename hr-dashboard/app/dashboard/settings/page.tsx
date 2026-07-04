@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Plus, Pencil, Trash2, X, Check, Save, Loader2, CheckCircle, Mail, AlertCircle, KeyRound, Eye, EyeOff, Lock, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getSettingsDoc, saveSettingsDoc } from "@/lib/firebaseService";
+import { DEPARTMENTS } from "@/lib/constants";
 import { auth, firebaseConfig } from "@/lib/firebase";
 import { sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { initializeApp, getApps, deleteApp } from "firebase/app";
@@ -14,7 +15,7 @@ type SettingsTab = "Company" | "Departments" | "Leave Policies" | "Work Timings"
 const settingsTabs: SettingsTab[] = ["Company", "Departments", "Leave Policies", "Work Timings", "Attendance Rules", "Holiday Calendar", "Password Reset", "HR Accounts"];
 
 // ── Default data (used only when Firebase has no data yet) ────────────────────
-const DEFAULT_DEPTS = ["Engineering", "Marketing", "Sales", "HR", "Finance", "Operations", "Design"];
+const DEFAULT_DEPTS = [...DEPARTMENTS];
 
 const DEFAULT_LEAVE_POLICIES = [
   { id: "1", type: "Casual Leave",    days: 12, carryForward: false, resetMonth: "January" },
@@ -92,11 +93,19 @@ export default function SettingsPage() {
   async function loadHrAccounts() {
     setHrLoading(true);
     try {
-      const snap = await getDocs(query(collection(db, "users"), where("role", "==", "hr_admin")));
-      setHrAccounts(snap.docs.map(d => {
+      const [snap1, snap2] = await Promise.all([
+        getDocs(query(collection(db, "users"), where("role", "==", "admin"))),
+        getDocs(query(collection(db, "users"), where("role", "==", "hr_admin"))),
+      ]);
+      const seen = new Set<string>();
+      const accounts: { uid: string; email: string; name: string; createdAt: string }[] = [];
+      [...snap1.docs, ...snap2.docs].forEach(d => {
+        if (seen.has(d.id)) return;
+        seen.add(d.id);
         const data = d.data();
-        return { uid: d.id, email: data.email ?? "", name: data.name ?? data.displayName ?? "", createdAt: data.createdAt ?? "" };
-      }));
+        accounts.push({ uid: d.id, email: data.email ?? "", name: data.name ?? data.displayName ?? "", createdAt: data.createdAt ?? "" });
+      });
+      setHrAccounts(accounts);
     } catch { /* ignore */ } finally {
       setHrLoading(false);
     }

@@ -7,6 +7,7 @@ import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
 import { firebaseConfig, db, storage } from "@/lib/firebase";
 import { createUserProfile } from "@/lib/authService";
 import { getEmployees, upsertEmployee, updateEmployee, deleteEmployee } from "@/lib/firebaseService";
+import { DEPARTMENTS } from "@/lib/constants";
 import { uploadDocFile, saveDocMeta, loadDocMeta, StoredDoc } from "@/lib/documentService";
 
 function generateTempPassword(): string {
@@ -24,11 +25,14 @@ type EmployeeStatus = "Active" | "On Leave" | "Probation" | "Exited";
 type WorkMode = "Remote" | "On-site" | "Hybrid";
 type EmpType = "Full-Time" | "Intern" | "Contract";
 
+const ROLES = ["Manager", "Executive", "Admin", "General Manager"] as const;
+
 interface Employee {
   id: string;
   name: string;
   designation: string;
   department: string;
+  role: string;
   workMode: WorkMode;
   employmentType: EmpType;
   doj: string;
@@ -85,11 +89,11 @@ const empDefaults = {
 
 const initialEmployees: Employee[] = [];
 
-const depts = ["All", "Engineering", "Marketing", "Sales", "HR", "Finance", "Operations"];
+const depts = ["All", ...DEPARTMENTS];
 const managers: string[] = [];
 
 const blankForm: Omit<Employee, "id"> = {
-  name: "", designation: "", department: "Engineering", reportingManager: "",
+  name: "", designation: "", department: DEPARTMENTS[0], role: "", reportingManager: "",
   workMode: "Remote", employmentType: "Full-Time", doj: "", status: "Active",
   email: "", phone: "", emergencyContact: "", emergencyName: "",
   nationality: "Indian", maritalStatus: "Single", fatherSpouseName: "",
@@ -234,7 +238,7 @@ function FormModal({
               </div>
               <div>
                 <label className={labelCls}>Father's / Spouse's Name</label>
-                <input value={form.fatherSpouseName} onChange={(e) => f("fatherSpouseName", e.target.value)} placeholder="Name" className={inputCls} />
+                <textarea value={form.fatherSpouseName} onChange={(e) => f("fatherSpouseName", e.target.value)} placeholder="Name" rows={2} className={textAreaCls} />
               </div>
               <div>
                 <label className={labelCls}>Blood Group</label>
@@ -284,7 +288,7 @@ function FormModal({
               </div>
               <div>
                 <label className={labelCls}>Emergency Contact Name</label>
-                <input value={form.emergencyName} onChange={(e) => f("emergencyName", e.target.value)} placeholder="Parent / Spouse name" className={inputCls} />
+                <textarea value={form.emergencyName} onChange={(e) => f("emergencyName", e.target.value)} placeholder="Parent / Spouse name" rows={2} className={textAreaCls} />
               </div>
               <div>
                 <label className={labelCls}>Emergency Contact Number *</label>
@@ -329,17 +333,55 @@ function FormModal({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className={labelCls}>Designation *</label>
-                <input value={form.designation} onChange={(e) => f("designation", e.target.value)} placeholder="e.g. Software Engineer" className={inputCls} />
+                <textarea value={form.designation} onChange={(e) => f("designation", e.target.value)} placeholder="e.g. Software Engineer" rows={2} className={textAreaCls} />
               </div>
               <div>
                 <label className={labelCls}>Department</label>
                 <select value={form.department} onChange={(e) => f("department", e.target.value)} className={selectCls}>
-                  {["Engineering","Marketing","Sales","HR","Finance","Operations"].map(d => <option key={d}>{d}</option>)}
+                  {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
                 </select>
+              </div>
+              <div className="col-span-2">
+                <label className={labelCls}>Role</label>
+                <p className="text-[11px] text-gray-400 mb-2">Drag a role to the drop area below to assign it</p>
+                <div className="flex gap-2 flex-wrap mb-2">
+                  {ROLES.map(role => (
+                    <div
+                      key={role}
+                      draggable
+                      onDragStart={e => e.dataTransfer.setData("text/plain", role)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold cursor-grab active:cursor-grabbing border select-none transition-colors ${
+                        form.role === role
+                          ? "bg-[#4F3CC9] text-white border-[#4F3CC9]"
+                          : "bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
+                      }`}
+                    >
+                      {role}
+                    </div>
+                  ))}
+                </div>
+                <div
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); f("role", e.dataTransfer.getData("text/plain")); }}
+                  className={`border-2 border-dashed rounded-xl px-4 py-3 text-center text-sm transition-colors ${
+                    form.role ? "border-[#4F3CC9] bg-[#F5F3FF]" : "border-gray-200 hover:border-[#4F3CC9] hover:bg-gray-50"
+                  }`}
+                >
+                  {form.role ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <span className="text-[#4F3CC9] font-semibold">{form.role}</span>
+                      <button type="button" onClick={() => f("role", "")} className="text-gray-400 hover:text-red-500">
+                        <X size={13}/>
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-gray-400 text-xs">Drop a role here to assign</span>
+                  )}
+                </div>
               </div>
               <div>
                 <label className={labelCls}>Reporting Manager</label>
-                <input type="text" placeholder="Enter manager name" value={form.reportingManager} onChange={(e) => f("reportingManager", e.target.value)} className={inputCls} />
+                <textarea placeholder="Enter manager name" value={form.reportingManager} onChange={(e) => f("reportingManager", e.target.value)} rows={2} className={textAreaCls} />
               </div>
               <div>
                 <label className={labelCls}>Branch / Location</label>
@@ -404,11 +446,11 @@ function FormModal({
               </div>
               <div>
                 <label className={labelCls}>Specialization / Stream</label>
-                <input value={form.specialization} onChange={(e) => f("specialization", e.target.value)} placeholder="e.g. Computer Science" className={inputCls} />
+                <textarea value={form.specialization} onChange={(e) => f("specialization", e.target.value)} placeholder="e.g. Computer Science" rows={2} className={textAreaCls} />
               </div>
               <div>
                 <label className={labelCls}>Institution / University</label>
-                <input value={form.institution} onChange={(e) => f("institution", e.target.value)} placeholder="e.g. IIT Bombay" className={inputCls} />
+                <textarea value={form.institution} onChange={(e) => f("institution", e.target.value)} placeholder="e.g. IIT Bombay" rows={2} className={textAreaCls} />
               </div>
               <div>
                 <label className={labelCls}>Year of Passing</label>
@@ -492,7 +534,7 @@ function FormModal({
 
 // ── CSV columns (subset for bulk import) ──────────────────────────────────────
 const CSV_HEADERS = [
-  "name","email","phone","designation","department","workMode","employmentType",
+  "name","email","phone","designation","department","role","workMode","employmentType",
   "doj","gender","dob","reportingManager","branch","shift","ctc","noticePeriod",
   "status","city","state","pinCode","skills",
 ] as const;
@@ -522,7 +564,7 @@ function rowToEmployee(row: BulkRow, id: string): Employee {
     ...empDefaults,
     id,
     name: row.name, email: row.email, phone: row.phone,
-    designation: row.designation, department: row.department || "Engineering",
+    designation: row.designation, department: row.department || DEPARTMENTS[0], role: row.role || "",
     workMode: (row.workMode as WorkMode) || "Remote",
     employmentType: (row.employmentType as EmpType) || "Full-Time",
     doj: row.doj, gender: row.gender || "Male", dob: row.dob,
@@ -669,8 +711,8 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                         </td>
                         <td className="px-2 py-2"><input value={row.designation} onChange={(e) => setCell(i, "designation", e.target.value)} placeholder="Software Eng." className={inputCls} /></td>
                         <td className="px-2 py-2">
-                          <select value={row.department || "Engineering"} onChange={(e) => setCell(i, "department", e.target.value)} className={selectCls}>
-                            {["Engineering","Marketing","Sales","HR","Finance","Operations"].map(d => <option key={d}>{d}</option>)}
+                          <select value={row.department || "Sales"} onChange={(e) => setCell(i, "department", e.target.value)} className={selectCls}>
+                            {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
                           </select>
                         </td>
                         <td className="px-2 py-2">
@@ -820,6 +862,7 @@ export default function EmployeesPage() {
           name: (r.name as string) ?? "",
           designation: (r.designation as string) ?? "",
           department: (r.department as string) ?? "",
+          role: (r.role as string) ?? "",
           workMode: ((r.workMode as WorkMode) ?? "Remote"),
           employmentType: ((r.employmentType as EmpType) ?? "Full-Time"),
           doj: (r.doj as string) ?? "",
@@ -893,8 +936,10 @@ export default function EmployeesPage() {
       setHrDocToast(`"${slot.name}" uploaded successfully!`);
       setTimeout(() => setHrDocToast(null), 3000);
     } catch (err) {
-      setHrDocToast("Upload failed. Please try again.");
-      setTimeout(() => setHrDocToast(null), 3000);
+      const msg = err instanceof Error ? err.message : String(err);
+      setHrDocToast(`Upload failed: ${msg}`);
+      setTimeout(() => setHrDocToast(null), 5000);
+      console.error("[HRDocUpload]", err);
     } finally {
       setHrUploadingSlot(null);
       setHrPendingSlot(null);
@@ -1329,9 +1374,22 @@ export default function EmployeesPage() {
             </div>
 
             {createdCreds.email && (
-              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-4">
-                ⚠️ The employee can change their password after logging in via "Forgot password?"
-              </p>
+              <>
+                <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3">
+                  ⚠️ The employee can change their password after logging in via "Forgot password?"
+                </p>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(`Email: ${createdCreds.email}\nPassword: ${createdCreds.password}`);
+                    setCopiedField("all");
+                    setTimeout(() => setCopiedField(""), 2000);
+                  }}
+                  className="w-full mb-3 border border-[#4F3CC9] text-[#4F3CC9] py-2.5 rounded-xl text-sm font-semibold hover:bg-[#F5F3FF] transition flex items-center justify-center gap-2"
+                >
+                  {copiedField === "all" ? <CheckCircle2 size={15} className="text-green-500" /> : <Copy size={15} />}
+                  {copiedField === "all" ? "Copied!" : "Copy Email & Password"}
+                </button>
+              </>
             )}
 
             <button

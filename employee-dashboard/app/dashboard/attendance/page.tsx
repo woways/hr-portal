@@ -1,12 +1,13 @@
 "use client";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Clock, CheckCircle, XCircle, AlertCircle, ChevronDown, Calendar } from "lucide-react";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, collection, query, where, getDocs, setDoc, updateDoc, addDoc } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs, onSnapshot, setDoc, updateDoc, addDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { markEmpNotifRead } from "@/lib/firebaseService";
 
 type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
 
@@ -114,6 +115,9 @@ export default function AttendancePage() {
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [selectedMonth, setSelectedMonth]   = useState(getTodayMonthLabel);
 
+  // Auto-mark unread attendance notifications as read when employee opens this page
+  useEffect(() => { if (empId) markEmpNotifRead("attendance", empId); }, [empId]);
+
   // ── Load employee identity from Firebase Auth → Firestore ───────────────────
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -144,59 +148,130 @@ export default function AttendancePage() {
     return unsub;
   }, []);
 
-  // ── Restore today's clock state from Firestore on mount ─────────────────────
+  // Ref to track active clock session — prevents HR corrections from overwriting live state
+  const isClockedInRef = useRef(false);
+  useEffect(() => { isClockedInRef.current = isClockedIn; }, [isClockedIn]);
+
+  // ── Live listener for today's record — reflects HR corrections instantly ────
   useEffect(() => {
     if (!empId) return;
-    getDoc(doc(db, "attendance", `${todayISO()}-${empId}`))
-      .then((snap) => {
-        if (!snap.exists()) return;
-        const rec = snap.data();
-        setClockInTime(rec.clockIn ?? null);
-        setClockInTimestamp(rec.clockInTs ?? null);
-        setIsLate(rec.late ?? false);
-        if (rec.clockIn && !rec.clockOut) {
-          setIsClockedIn(true);
-        } else if (rec.clockIn && rec.clockOut) {
-          setClockOutTime(rec.clockOut ?? null);
-          setFinalSeconds(rec.totalSeconds ?? null);
-          setIsClockedIn(false);
-        }
-      })
-      .catch(() => {});
+    const unsub = onSnapshot(doc(db, "attendance", `${todayISO()}-${empId}`), (snap) => {
+      if (!snap.exists()) return;
+      // Never overwrite state while the employee is actively clocked in
+      if (isClockedInRef.current) return;
+      const rec = snap.data();
+      // Prefer stored string; fall back to reconstructing from timestamp
+      const ciStr = String(rec.clockIn  ?? "") || (rec.clockInTs  ? fmtTime(Number(rec.clockInTs))  : "");
+      const coStr = String(rec.clockOut ?? "") || (rec.clockOutTs ? fmtTime(Number(rec.clockOutTs)) : "");
+      setClockInTime(ciStr || null);
+      setClockInTimestamp((rec.clockInTs as number) ?? null);
+      setIsLate(rec.late ?? false);
+      if (ciStr && !coStr) {
+        setIsClockedIn(true);
+      } else if (ciStr && coStr) {
+        setClockOutTime(coStr);
+        setFinalSeconds((rec.totalSeconds as number) ?? null);
+        setIsClockedIn(false);
+      }
+    }, () => {});
+    return unsub;
   }, [empId]);
 
-  // ── Load attendance history (past days) from Firestore ──────────────────────
+  // ── Load attendance history (past days) — live listener so HR changes reflect instantly ──
   useEffect(() => {
     if (!empId) return;
     const todayIso = todayISO();
-    getDocs(query(collection(db, "attendance"), where("empId", "==", empId)))
-      .then((snap) => {
-        const all = snap.docs.map((d) => d.data());
-        const past = all
-          .filter((rec) => rec.date && rec.date !== todayIso)
-          .map((rec) => {
-            // Parse as local midnight (avoids UTC-shift on "YYYY-MM-DD" strings)
-            const d = new Date(rec.date + "T00:00:00");
-            const dayIdx = d.getDay();
-            const isWeekend = dayIdx === 0 || dayIdx === 6;
-            const hoursMatch = (rec.workingHours ?? "").match(/(\d+)h\s*(\d+)m/);
-            const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
-            return {
-              date:     `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, "0")}, ${d.getFullYear()}`,
-              day:      DAY_ABBR[dayIdx],
-              clockIn:  rec.clockIn  || "—",
-              clockOut: rec.clockOut || "—",
-              hours:    rec.workingHours || "—",
-              hoursVal,
-              status:   (rec.status || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
-              late:     rec.late ?? false,
-              isWeekend,
-            } as AttEntry;
-          })
-          .sort((a, b) => new Date(logDateToISO(b.date)).getTime() - new Date(logDateToISO(a.date)).getTime());
-        setPastLog(past);
-      })
-      .catch(() => {});
+
+    async function processAndSet(rawDocs: Record<string, unknown>[]) {
+      let past = rawDocs
+        .filter((rec) => rec.date && rec.date !== todayIso)
+        .map((rec) => {
+          const d = new Date(rec.date + "T00:00:00");
+          const dayIdx = d.getDay();
+          const isWeekend = dayIdx === 0 || dayIdx === 6;
+
+          // Prefer stored formatted strings; fall back to reconstructing from timestamps
+          const clockInStr  = String(rec.clockIn  ?? "");
+          const clockOutStr = String(rec.clockOut ?? "");
+          const whStr       = String(rec.workingHours ?? "");
+          const totalSecs   = Number(rec.totalSeconds ?? 0);
+
+          const clockInFinal  = clockInStr  || (rec.clockInTs  ? fmtTime(Number(rec.clockInTs))  : "");
+          const clockOutFinal = clockOutStr || (rec.clockOutTs ? fmtTime(Number(rec.clockOutTs)) : "");
+          const hoursFinal    = whStr || (totalSecs > 0
+            ? `${Math.floor(totalSecs / 3600)}h ${String(Math.floor((totalSecs % 3600) / 60)).padStart(2, "0")}m`
+            : "");
+
+          const hoursMatch = hoursFinal.match(/(\d+)h\s*(\d+)m/);
+          const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
+          return {
+            date:     `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, "0")}, ${d.getFullYear()}`,
+            day:      DAY_ABBR[dayIdx],
+            clockIn:  clockInFinal  || "—",
+            clockOut: clockOutFinal || "—",
+            hours:    hoursFinal    || "—",
+            hoursVal,
+            status:   (rec.status || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
+            late:     rec.late ?? false,
+            isWeekend,
+            isoDate:  rec.date as string,
+          } as AttEntry & { isoDate: string };
+        })
+        .sort((a, b) => new Date(b.isoDate).getTime() - new Date(a.isoDate).getTime());
+
+      // Backfill missing times from clockRecords for any Present day missing clock data
+      const incomplete = past.filter(e =>
+        e.status === "Present" && (e.clockIn === "—" || e.clockOut === "—" || e.hours === "—")
+      );
+      if (incomplete.length > 0) {
+        const dates = [...new Set(incomplete.map(e => e.isoDate))];
+        const chunks: string[][] = [];
+        for (let i = 0; i < dates.length; i += 30) chunks.push(dates.slice(i, i + 30));
+
+        const crMap: Record<string, { clockIn: string; clockOut: string; totalSeconds: number }> = {};
+        await Promise.all(chunks.map(async chunk => {
+          const crSnap = await getDocs(query(
+            collection(db, "clockRecords"),
+            where("empId", "==", empId),
+            where("date", "in", chunk)
+          ));
+          crSnap.docs.forEach(d => {
+            const r = d.data() as Record<string, unknown>;
+            crMap[r.date as string] = {
+              clockIn:      (r.clockInStr  as string) ?? "",
+              clockOut:     (r.clockOutStr as string) ?? "",
+              totalSeconds: (r.totalSeconds as number) ?? 0,
+            };
+          });
+        }));
+
+        past = past.map(e => {
+          const cr = crMap[(e as AttEntry & { isoDate: string }).isoDate];
+          if (!cr) return e;
+          let updated = { ...e };
+          if (e.clockIn === "—" && cr.clockIn) updated = { ...updated, clockIn: cr.clockIn };
+          if ((e.clockOut === "—" || e.hours === "—") && cr.clockOut && cr.totalSeconds > 0) {
+            const h = Math.floor(cr.totalSeconds / 3600);
+            const m = Math.floor((cr.totalSeconds % 3600) / 60);
+            updated = { ...updated, clockOut: cr.clockOut, hours: `${h}h ${String(m).padStart(2, "0")}m`, hoursVal: h + m / 60 };
+          }
+          return updated;
+        });
+      }
+
+      setPastLog(past.map(({ isoDate: _iso, ...e }) => e as AttEntry));
+    }
+
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const historyStart = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}-01`;
+
+    const unsub = onSnapshot(
+      query(collection(db, "attendance"), where("empId", "==", empId), where("date", ">=", historyStart)),
+      (snap) => { processAndSet(snap.docs.map(d => d.data())).catch(() => {}); },
+      () => {}
+    );
+    return () => unsub();
   }, [empId]);
 
   // ── Load regularization requests from Firestore ──────────────────────────────
@@ -242,11 +317,21 @@ export default function AttendancePage() {
     if (!isClockedIn) {
       const h = now.getHours(), m = now.getMinutes();
       const late = h > lateHour || (h === lateHour && m > lateMinute);
+      const attId = `${date}-${empId}`;
+      const payload = {
+        empId, name: empName, dept: empDept,
+        date, clockIn: timeStr, clockInTs: ts, clockOut: "", workingHours: "", totalSeconds: 0,
+        status: "Present", late, updatedAt: new Date().toISOString(),
+      };
       try {
-        await setDoc(doc(db, "attendance", `${date}-${empId}`), {
-          empId, name: empName, dept: empDept,
-          date, clockIn: timeStr, clockInTs: ts, clockOut: "", workingHours: "",
-          status: "Present", late, updatedAt: new Date().toISOString(),
+        // Write to both attendance (history source) and clockRecords (HR live view + backfill source)
+        await setDoc(doc(db, "attendance",   attId), payload, { merge: true });
+        await setDoc(doc(db, "clockRecords", attId), {
+          empId, empName, date,
+          clockInStr: timeStr, clockInTs: ts,
+          clockOutStr: "", clockOutTs: 0, totalSeconds: 0,
+          status: "clocked-in", isLate: late,
+          updatedAt: new Date().toISOString(),
         }, { merge: true });
       } catch { return; }
       setClockInTime(timeStr);
@@ -261,11 +346,17 @@ export default function AttendancePage() {
       const h = Math.floor(total / 3600);
       const m = Math.floor((total % 3600) / 60);
       const wh = `${h}h ${String(m).padStart(2, "0")}m`;
+      const attId = `${date}-${empId}`;
       try {
-        await updateDoc(doc(db, "attendance", `${date}-${empId}`), {
+        await updateDoc(doc(db, "attendance", attId), {
           clockOut: timeStr, clockOutTs: ts, totalSeconds: total,
           workingHours: wh, status: "Present", updatedAt: new Date().toISOString(),
         });
+        // Persist to clockRecords so history backfill can recover times
+        await setDoc(doc(db, "clockRecords", attId), {
+          clockOutStr: timeStr, clockOutTs: ts, totalSeconds: total,
+          status: "clocked-out", updatedAt: new Date().toISOString(),
+        }, { merge: true });
       } catch { return; }
       setClockOutTime(timeStr);
       setFinalSeconds(total);
@@ -293,7 +384,7 @@ export default function AttendancePage() {
       setRequests((prev) => [...prev.filter((r) => r.date !== isoDate), newReq]);
       // Notify HR
       await addDoc(collection(db, "notifications"), {
-        userId: "HR",
+        userId: "HR_PORTAL",
         type: "attendance",
         title: `Attendance Correction — ${empName}`,
         message: `${empName} has requested attendance correction for ${isoDate}. Reason: ${payload.reason}`,
@@ -376,23 +467,36 @@ export default function AttendancePage() {
   const monthEntries = fullLog.filter(e => e.date.startsWith(mStr) && e.date.endsWith(String(historyYear)));
   const visibleRows  = monthEntries.filter(e => !e.isWeekend || e.clockIn !== "—");
 
-  // Bar chart — built from the full attendance log for the selected month
+  // Bar chart — one bar per working day (weekday) of the selected month up to today
   const barData = (() => {
     const [selMonthName, selYear] = selectedMonth.split(" ");
     const selMonthIdx = new Date(`${selMonthName} 1, ${selYear}`).getMonth();
     const selYearNum  = parseInt(selYear);
-    return fullLog
-      .filter((e) => {
-        if (e.hoursVal <= 0) return false;
-        const d = new Date(logDateToISO(e.date) + "T00:00:00");
-        return d.getMonth() === selMonthIdx && d.getFullYear() === selYearNum;
-      })
-      .map((e) => {
-        const d = new Date(logDateToISO(e.date) + "T00:00:00");
-        return { day: String(d.getDate()), hours: parseFloat(e.hoursVal.toFixed(2)) };
-      })
-      .sort((a, b) => parseInt(a.day) - parseInt(b.day))
-      .slice(0, 30);
+    const todayD      = new Date();
+    const isCurrentMonth = todayD.getMonth() === selMonthIdx && todayD.getFullYear() === selYearNum;
+    const daysInMonth    = new Date(selYearNum, selMonthIdx + 1, 0).getDate();
+    const maxDay         = isCurrentMonth ? todayD.getDate() : daysInMonth;
+
+    // Build lookup: calendar day → log entry
+    const logMap = new Map<number, AttEntry>();
+    fullLog.forEach((e) => {
+      const d = new Date(logDateToISO(e.date) + "T00:00:00");
+      if (d.getMonth() === selMonthIdx && d.getFullYear() === selYearNum) {
+        logMap.set(d.getDate(), e);
+      }
+    });
+
+    const result: { day: string; hours: number; status: string }[] = [];
+    for (let day = 1; day <= maxDay; day++) {
+      const date   = new Date(selYearNum, selMonthIdx, day);
+      const dayIdx = date.getDay();
+      if (dayIdx === 0 || dayIdx === 6) continue; // skip weekends
+      const entry  = logMap.get(day);
+      const hours  = entry ? parseFloat(entry.hoursVal.toFixed(2)) : 0;
+      const status = entry?.status ?? "Absent";
+      result.push({ day: String(day), hours, status });
+    }
+    return result;
   })();
 
   return (
@@ -752,16 +856,45 @@ export default function AttendancePage() {
         </div>
 
         <p className="text-sm text-gray-500 mb-3">Hours Worked — {selectedMonth}</p>
-        <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={barData} barSize={20}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
-            <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
-            <YAxis domain={[0, 10]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
-            <Tooltip contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 4px 20px rgba(0,0,0,0.1)" }}
-              formatter={(value) => [`${value}h`, "Hours Worked"]} />
-            <Bar dataKey="hours" fill="#4F3CC9" radius={[6, 6, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        {barData.length === 0 ? (
+          <div className="h-[200px] flex items-center justify-center text-gray-400 text-sm">No data for this month</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={barData} barSize={barData.length > 20 ? 14 : 20} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
+              <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
+              <YAxis domain={[0, "auto"]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
+              <Tooltip
+                contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 4px 20px rgba(0,0,0,0.1)", fontSize: 12 }}
+                formatter={(value, _name, props) => {
+                  const h = Number(value ?? 0);
+                  const status = (props.payload as { status?: string })?.status ?? "Absent";
+                  return [h > 0 ? `${h}h` : `0h — ${status}`, "Hours Worked"];
+                }}
+                labelFormatter={(label) => `Day ${label}`}
+              />
+              <Bar dataKey="hours" radius={[5, 5, 0, 0]} minPointSize={3}>
+                {barData.map((entry, idx) => (
+                  <Cell
+                    key={idx}
+                    fill={
+                      entry.hours > 0
+                        ? "#4F3CC9"
+                        : entry.status === "Leave"
+                        ? "#F59E0B"
+                        : "#E5E7EB"
+                    }
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+        <div className="flex items-center gap-4 mt-3">
+          <span className="flex items-center gap-1.5 text-xs text-gray-500"><span className="w-3 h-3 rounded-sm bg-[#4F3CC9] inline-block" />Present</span>
+          <span className="flex items-center gap-1.5 text-xs text-gray-500"><span className="w-3 h-3 rounded-sm bg-[#E5E7EB] inline-block" />Absent</span>
+          <span className="flex items-center gap-1.5 text-xs text-gray-500"><span className="w-3 h-3 rounded-sm bg-[#F59E0B] inline-block" />Leave</span>
+        </div>
       </div>
     </div>
     </>

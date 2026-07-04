@@ -1,7 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Pencil, FileText, Plus, X, Search, Loader2 } from "lucide-react";
-import { getCompensation, addCompensation, updateCompensation, getIncentives, addIncentive, getEmployees } from "@/lib/firebaseService";
+import { getCompensation, addCompensation, updateCompensation, getIncentives, addIncentive, getEmployees, markHRNotifRead } from "@/lib/firebaseService";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -57,6 +57,12 @@ export default function CompensationPage() {
   const [empList, setEmpList] = useState<EmpOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [empSearch, setEmpSearch] = useState("");
+  const [empDropOpen, setEmpDropOpen] = useState(false);
+  const empSearchRef = useRef<HTMLDivElement>(null);
+
+  // Auto-mark all unread payroll notifications as read when HR opens this page
+  useEffect(() => { const t = setTimeout(() => markHRNotifRead("payroll"), 10000); return () => clearTimeout(t); }, []);
 
   // Load employees + existing compensation & incentives from Firestore
   useEffect(() => {
@@ -67,7 +73,9 @@ export default function CompensationPage() {
           getCompensation(),
           getIncentives(),
         ]);
-        const emps = empDocs.map((d) => { const r = d as Record<string, unknown>; return { id: (r.employeeId ?? r.id) as string, name: (r.name as string) ?? "", designation: (r.designation as string) ?? "", department: (r.department as string) ?? "" }; });
+        const emps = empDocs
+          .map((d) => { const r = d as Record<string, unknown>; return { id: (r.employeeId ?? r.id) as string, name: (r.name as string) ?? "", designation: (r.designation as string) ?? "", department: (r.department as string) ?? "", status: (r.status as string) ?? "Active" }; })
+          .filter((e) => e.status !== "Exited");
         setEmpList(emps.map((e) => ({ id: e.id, name: e.name, empId: e.id, designation: e.designation, department: e.department })));
         setRecords(comps.map((c) => c as unknown as CompRecord));
         setIncentives(incs.map((i) => i as unknown as Incentive));
@@ -97,6 +105,7 @@ export default function CompensationPage() {
       setRecords((p) => [...p, { id: docId, ...data, paymentStatus: data.paymentStatus as PaymentStatus }]);
       setShowAdd(false);
       setAddForm({ ...blankAdd, empId: "" });
+      setEmpSearch("");
       showMsg("Compensation record saved.");
     } catch { showMsg("Failed to save. Please try again."); }
     finally { setSaving(false); }
@@ -140,8 +149,173 @@ export default function CompensationPage() {
     finally { setSaving(false); }
   }
 
-  // Payslip modal (document button)
+  // Payslip modal — holds the CompRecord for the React card preview
   const [payslipModal, setPayslipModal] = useState<CompRecord | null>(null);
+
+  function numberToWords(n: number): string {
+    const ones = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+    const tens = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+    if (!n || n === 0) return "Zero Rupees Only";
+    function helper(num: number): string {
+      if (num === 0) return "";
+      if (num < 20) return ones[num] + " ";
+      if (num < 100) return tens[Math.floor(num / 10)] + " " + (num % 10 ? ones[num % 10] + " " : "");
+      if (num < 1000) return ones[Math.floor(num / 100)] + " Hundred " + helper(num % 100);
+      if (num < 100000) return helper(Math.floor(num / 1000)) + "Thousand " + helper(num % 1000);
+      if (num < 10000000) return helper(Math.floor(num / 100000)) + "Lakh " + helper(num % 100000);
+      return helper(Math.floor(num / 10000000)) + "Crore " + helper(num % 10000000);
+    }
+    return helper(n).trim() + " Rupees Only";
+  }
+
+  function buildSlipHtml(emp: CompRecord): string {
+    const empDept = empList.find((e) => e.empId === emp.empId)?.department || "—";
+    const gross = emp.salary + emp.incentive + emp.bonus;
+    const totalPay = emp.netPay;
+    const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    const [mon, yr] = emp.month.split(" ");
+    const mIdx = MONTHS.indexOf(mon);
+    const workDays = mIdx >= 0 && yr ? new Date(parseInt(yr), mIdx + 1, 0).getDate() : 30;
+
+    const earningRows: string[] = [
+      `<tr><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Basic Salary</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.salary.toLocaleString("en-IN")}</td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Total Deductions</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.deductions > 0 ? emp.deductions.toLocaleString("en-IN") : ""}</td></tr>`,
+    ];
+    if (emp.incentive > 0) earningRows.push(`<tr><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Incentive</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.incentive.toLocaleString("en-IN")}</td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td></tr>`);
+    if (emp.bonus > 0) earningRows.push(`<tr><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Bonus</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.bonus.toLocaleString("en-IN")}</td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td></tr>`);
+
+    const badgeStyle = emp.paymentStatus?.toLowerCase() === "paid"
+      ? "background:#dcfce7;color:#166534;"
+      : emp.paymentStatus?.toLowerCase() === "processing"
+      ? "background:#dbeafe;color:#1d4ed8;"
+      : "background:#fef9c3;color:#854d0e;";
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Salary Slip - ${emp.month}</title>
+  <style>
+    @page{size:A4;margin:12mm 14mm}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;font-size:12px;color:#1a1a2e;background:#f0f2f5}
+    .page{max-width:860px;margin:20px auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.10)}
+    .header{display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid #e5e7eb}
+    .logo{font-size:28px;font-weight:900;letter-spacing:-1px;line-height:1}
+    .logo .wo{color:#0B1929}.logo .ways{color:#14B8A6}
+    .header-addr{text-align:right;font-size:10px;color:#6b7280;line-height:1.6}
+    .header-addr strong{font-size:11px;color:#374151;display:block;margin-bottom:2px}
+    .title-bar{background:#0d1b2a;color:#fff;padding:12px 28px;display:flex;align-items:center;justify-content:space-between}
+    .title-bar .lbl{font-size:15px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .title-bar .mo{font-size:13px;font-weight:500;opacity:.8}
+    .emp-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-bottom:1px solid #e0e4ef}
+    .emp-cell{padding:9px 16px;border-right:1px solid #e0e4ef;border-bottom:1px solid #e0e4ef}
+    .emp-cell:nth-child(3n){border-right:none}
+    .lbl{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px}
+    .val{font-size:12px;font-weight:700;color:#1B2B6B}
+    .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:10px;font-weight:700}
+    .section-wrap{padding:18px 28px 0}
+    .earnings-table{width:100%;border-collapse:collapse}
+    .earnings-table th{background:#1B2B6B;color:#fff;font-size:11px;font-weight:600;padding:8px 12px;text-align:left;letter-spacing:0.4px}
+    .earnings-table th.amt{text-align:right}
+    .earnings-table td{padding:7px 12px;border:1px solid #e8eaf3;font-size:11px;vertical-align:middle}
+    .earnings-table tr:nth-child(even) td{background:#f8f9fe}
+    .subtotal td{background:#eef0f8!important;font-weight:700;font-size:11px}
+    .subtotal td.amt{color:#1B2B6B}
+    .net-pay{margin:0 28px;background:linear-gradient(135deg,#CC2222 0%,#e03a3a 100%);color:#fff;border-radius:0 0 8px 8px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+    .net-pay .label{font-size:13px;font-weight:700;letter-spacing:0.5px}
+    .net-pay .amount{font-size:22px;font-weight:900;letter-spacing:1px}
+    .net-pay .words{font-size:10px;color:#ffd0d0;margin-top:2px}
+    .sig-row{display:flex;justify-content:space-between;padding:20px 28px 0}
+    .sig-block{text-align:center}
+    .sig-line{width:140px;border-top:1.5px solid #1B2B6B;margin:0 auto 4px}
+    .sig-label{font-size:10px;color:#555;font-weight:600;text-transform:uppercase;letter-spacing:0.4px}
+    .footer{margin:14px 28px 20px;padding:10px 16px;background:#f5f7ff;border-radius:6px;border-left:3px solid #CC2222}
+    .footer p{font-size:9.5px;color:#777;line-height:1.6}
+    @media print{body{background:#fff}.page{box-shadow:none;border-radius:0;margin:0}body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="logo"><span class="wo">WO</span><span class="ways">WAYS</span></div>
+      <div class="header-addr">
+        <strong>Woways Technologies Pvt. Ltd.</strong>
+        Plot No 5, East Wing, Ground Floor, Financial District,<br>
+        Nanakramguda, Serilingampalle (M), Hyderabad – 500032, Telangana, India
+      </div>
+    </div>
+    <div class="title-bar">
+      <span class="lbl">Salary Slip</span>
+      <span class="mo">${emp.month}</span>
+    </div>
+    <div class="emp-grid">
+      <div class="emp-cell"><div class="lbl">Employee Name</div><div class="val">${emp.name}</div></div>
+      <div class="emp-cell"><div class="lbl">Employee Code</div><div class="val">${emp.empId}</div></div>
+      <div class="emp-cell"><div class="lbl">Employee Type</div><div class="val">${emp.empType}</div></div>
+      <div class="emp-cell"><div class="lbl">Designation</div><div class="val">${emp.designation || "—"}</div></div>
+      <div class="emp-cell"><div class="lbl">Department</div><div class="val">${empDept}</div></div>
+      <div class="emp-cell"><div class="lbl">Working Days</div><div class="val">${workDays} / ${workDays}</div></div>
+      <div class="emp-cell"><div class="lbl">Payment Date</div><div class="val">${emp.paymentDate || "—"}</div></div>
+      <div class="emp-cell" style="grid-column:span 2"><div class="lbl">Payment Status</div><div class="val"><span class="badge" style="${badgeStyle}">${emp.paymentStatus}</span></div></div>
+    </div>
+    <div class="section-wrap">
+      <table class="earnings-table">
+        <thead>
+          <tr>
+            <th style="width:30%">Earnings</th>
+            <th class="amt" style="width:20%">Amount (₹)</th>
+            <th style="width:30%">Deductions</th>
+            <th class="amt" style="width:20%">Amount (₹)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${earningRows.join("")}
+          <tr class="subtotal">
+            <td>Gross Earning (A)</td>
+            <td class="amt" style="text-align:right">₹ ${gross.toLocaleString("en-IN")}</td>
+            <td>Total Deductions (B)</td>
+            <td class="amt" style="text-align:right">₹ ${emp.deductions.toLocaleString("en-IN")}</td>
+          </tr>
+          <tr class="subtotal">
+            <td>Net Pay (A – B)</td>
+            <td class="amt" style="text-align:right">₹ ${totalPay.toLocaleString("en-IN")}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="net-pay">
+      <div>
+        <div class="label">Total Take-Home Pay</div>
+        <div class="words">${numberToWords(totalPay)}</div>
+      </div>
+      <div class="amount">₹ ${totalPay.toLocaleString("en-IN")}</div>
+    </div>
+    <div class="sig-row">
+      <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Employee Signature</div></div>
+      <div class="sig-block"><div class="sig-line"></div><div class="sig-label">HR / Authorised Signatory</div></div>
+    </div>
+    <div class="footer">
+      <p>&#9432;&nbsp; This is a computer-generated salary slip and does not require a physical signature. &nbsp;|&nbsp; Woways Technologies Pvt. Ltd. &nbsp;|&nbsp; ${emp.month}</p>
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
+  function downloadSlip(emp: CompRecord) {
+    const html = buildSlipHtml(emp);
+    const blob = new Blob([html], { type: "application/octet-stream" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `Salary_Slip_${emp.name.replace(/\s+/g, "_")}_${emp.month.replace(/\s+/g, "_")}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
 
   const totalPayroll  = records.reduce((s, r) => s + r.netPay, 0);
   const incentivesPaid = records.reduce((s, r) => s + r.incentive, 0);
@@ -168,75 +342,69 @@ export default function CompensationPage() {
   function PayslipCard({ emp }: { emp: CompRecord }) {
     const grossEarnings = emp.salary + emp.incentive + emp.bonus;
     return (
-      <div className="border border-gray-200 rounded-2xl p-6 max-w-2xl mx-auto">
-        <div className="text-center border-b pb-4 mb-4">
-          <h3 className="text-lg font-bold text-[#4F3CC9]">Woways</h3>
-          <p className="text-xs text-gray-400">Payslip for {emp.month}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-sm mb-4">
-          <div><p className="text-xs text-gray-400">Employee Name</p><p className="font-medium">{emp.name}</p></div>
-          <div><p className="text-xs text-gray-400">Employee ID</p><p className="font-medium">{emp.empId}</p></div>
-          <div><p className="text-xs text-gray-400">Designation</p><p className="font-medium">{emp.designation}</p></div>
-          <div><p className="text-xs text-gray-400">Emp Type</p><p className="font-medium">{emp.empType}</p></div>
-          <div><p className="text-xs text-gray-400">Payment Status</p>
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${payStatusColor[emp.paymentStatus]}`}>{emp.paymentStatus}</span>
+      <div className="border border-gray-100 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-gradient-to-br from-[#f5f3ff] to-[#f0fdfa] px-8 py-6 border-b border-gray-100 text-center">
+          <div className="flex items-center justify-center leading-none mb-1.5">
+            <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
+            <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
           </div>
-          <div><p className="text-xs text-gray-400">Payment Date</p><p className="font-medium">{emp.paymentDate || "—"}</p></div>
+          <p className="text-xs text-gray-400">Salary Slip for {emp.month}</p>
         </div>
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Earnings</p>
-            <div className="space-y-1.5 text-sm">
-              <div className="flex justify-between"><span className="text-gray-600">Basic Salary</span><span className="font-medium">{fmt(emp.salary)}</span></div>
-              {emp.incentive > 0 && <div className="flex justify-between"><span className="text-gray-600">Incentive</span><span className="font-medium">{fmt(emp.incentive)}</span></div>}
-              {emp.bonus > 0 && <div className="flex justify-between"><span className="text-gray-600">Bonus</span><span className="font-medium">{fmt(emp.bonus)}</span></div>}
-              <div className="flex justify-between font-semibold border-t pt-1.5 mt-1"><span>Gross Total</span><span>{fmt(grossEarnings)}</span></div>
+        <div className="px-8 py-5 bg-gray-50/60 border-b border-gray-100">
+          <div className="grid grid-cols-2 gap-x-10 gap-y-4">
+            {[
+              { label: "Employee Name", value: emp.name },
+              { label: "Employee ID",   value: emp.empId },
+              { label: "Designation",   value: emp.designation || "—" },
+              { label: "Emp Type",      value: emp.empType },
+            ].map(({ label, value }) => (
+              <div key={label}>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">{label}</p>
+                <p className="text-sm font-semibold text-gray-900">{value}</p>
+              </div>
+            ))}
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Payment Status</p>
+              <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${payStatusColor[emp.paymentStatus]}`}>{emp.paymentStatus}</span>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Payment Date</p>
+              <p className="text-sm font-semibold text-gray-900">{emp.paymentDate || "—"}</p>
             </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Deductions</p>
-            <div className="space-y-1.5 text-sm">
+        </div>
+        <div className="grid grid-cols-2 divide-x divide-gray-100">
+          <div className="px-7 py-5">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Earnings</p>
+            <div className="space-y-2.5 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">Basic Salary</span><span className="font-semibold text-gray-900">{fmt(emp.salary)}</span></div>
+              {emp.incentive > 0 && <div className="flex justify-between"><span className="text-gray-500">Incentive</span><span className="font-semibold text-gray-900">{fmt(emp.incentive)}</span></div>}
+              {emp.bonus > 0 && <div className="flex justify-between"><span className="text-gray-500">Bonus</span><span className="font-semibold text-gray-900">{fmt(emp.bonus)}</span></div>}
+              <div className="flex justify-between font-bold border-t border-gray-100 pt-2.5 mt-1 text-gray-900">
+                <span>Gross Total</span><span>{fmt(grossEarnings)}</span>
+              </div>
+            </div>
+          </div>
+          <div className="px-7 py-5">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Deductions</p>
+            <div className="space-y-2.5 text-sm">
               {emp.deductions > 0
-                ? <div className="flex justify-between"><span className="text-gray-600">Total Deductions</span><span className="font-medium text-red-500">{fmt(emp.deductions)}</span></div>
-                : <div className="text-gray-400 text-xs">No deductions</div>
-              }
-              <div className="flex justify-between font-semibold border-t pt-1.5 mt-1"><span>Total</span><span className="text-red-500">{fmt(emp.deductions)}</span></div>
+                ? <div className="flex justify-between"><span className="text-gray-500">Total Deductions</span><span className="font-semibold text-red-500">{fmt(emp.deductions)}</span></div>
+                : <p className="text-xs text-gray-400 py-1">No deductions this month</p>}
+              <div className="flex justify-between font-bold border-t border-gray-100 pt-2.5 mt-1">
+                <span className="text-gray-900">Total</span><span className="text-red-500">{fmt(emp.deductions)}</span>
+              </div>
             </div>
           </div>
         </div>
-        <div className="mt-4 pt-4 border-t flex items-center justify-between">
+        <div className="px-8 py-5 bg-[#EDE9FF]/50 border-t border-[#4F3CC9]/10 flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-400">Net Pay</p>
-            <p className="text-2xl font-bold text-[#4F3CC9]">{fmt(emp.netPay)}</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Net Pay</p>
+            <p className="text-2xl font-black text-[#4F3CC9]">{fmt(emp.netPay)}</p>
           </div>
           <button
-            onClick={() => {
-              const grossEarnings = emp.salary + emp.incentive + emp.bonus;
-              const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip – ${emp.month}</title>
-<style>body{font-family:Arial,sans-serif;padding:32px;color:#111}h2{color:#4F3CC9;margin:0 0 4px}.sub{color:#6b7280;font-size:12px;margin-bottom:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}.cell .lbl{font-size:11px;color:#6b7280}.cell .val{font-size:13px;font-weight:600}.section{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#374151;margin:16px 0 8px}.row{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid #f3f4f6}.row.total{font-weight:700;border-top:2px solid #e5e7eb;border-bottom:none;margin-top:4px;padding-top:8px}.net{margin-top:20px;background:#ede9ff;border-radius:10px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center}.net-lbl{font-size:12px;color:#6b7280}.net-amt{font-size:26px;font-weight:700;color:#4F3CC9}.footer{margin-top:20px;font-size:10px;color:#9ca3af;text-align:center}@media print{body{padding:0}@page{margin:20mm}}</style></head><body>
-<h2>Woways</h2><div class="sub">Payslip for ${emp.month}</div>
-<div class="grid">
-<div class="cell"><div class="lbl">Employee Name</div><div class="val">${emp.name}</div></div>
-<div class="cell"><div class="lbl">Employee ID</div><div class="val">${emp.empId}</div></div>
-<div class="cell"><div class="lbl">Designation</div><div class="val">${emp.designation || "—"}</div></div>
-<div class="cell"><div class="lbl">Emp Type</div><div class="val">${emp.empType}</div></div>
-<div class="cell"><div class="lbl">Payment Status</div><div class="val">${emp.paymentStatus}</div></div>
-<div class="cell"><div class="lbl">Payment Date</div><div class="val">${emp.paymentDate || "—"}</div></div>
-</div>
-<div class="section">Earnings</div>
-<div class="row"><span>Basic Salary</span><span>₹${emp.salary.toLocaleString("en-IN")}</span></div>
-${emp.incentive > 0 ? `<div class="row"><span>Incentive</span><span>₹${emp.incentive.toLocaleString("en-IN")}</span></div>` : ""}
-${emp.bonus > 0 ? `<div class="row"><span>Bonus</span><span>₹${emp.bonus.toLocaleString("en-IN")}</span></div>` : ""}
-<div class="row total"><span>Gross Salary</span><span>₹${grossEarnings.toLocaleString("en-IN")}</span></div>
-<div class="section">Deductions</div>
-${emp.deductions > 0 ? `<div class="row"><span>Total Deductions</span><span style="color:#ef4444">- ₹${emp.deductions.toLocaleString("en-IN")}</span></div>` : `<div class="row"><span style="color:#9ca3af">No deductions this month</span></div>`}
-<div class="net"><div class="net-lbl">Net Salary</div><div class="net-amt">₹${emp.netPay.toLocaleString("en-IN")}</div></div>
-<div class="footer">This is a system-generated salary slip and does not require a physical signature. | Woways | ${emp.month}</div>
-<script>window.onload=function(){window.print()}<\/script></body></html>`;
-              const win = window.open("", "_blank");
-              if (win) { win.document.write(html); win.document.close(); }
-            }}
-            className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
+            onClick={() => downloadSlip(emp)}
+            className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-[#3d2fa8] transition-colors shadow-sm">
             <FileText size={14} /> Download Payslip
           </button>
         </div>
@@ -649,26 +817,57 @@ ${emp.deductions > 0 ? `<div class="row"><span>Total Deductions</span><span styl
 
       {/* Add Compensation Modal */}
       {showAdd && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowAdd(false)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { setShowAdd(false); setEmpSearch(""); }}>
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b">
               <h2 className="text-lg font-bold">Add Compensation</h2>
-              <button onClick={() => setShowAdd(false)}><X size={20} /></button>
+              <button onClick={() => { setShowAdd(false); setEmpSearch(""); }}><X size={20} /></button>
             </div>
             <div className="p-6 grid grid-cols-2 gap-4">
-              <div className="col-span-2">
+              <div className="col-span-2" ref={empSearchRef}>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Employee</label>
-                <select
-                  value={addForm.empId}
-                  onChange={(e) => {
-                    const emp = empList.find((x) => x.empId === e.target.value);
-                    setAddForm({ ...addForm, empId: e.target.value, name: emp?.name ?? "", designation: emp?.designation ?? addForm.designation });
-                  }}
-                  className={inputCls}
-                >
-                  <option value="">— Select Employee —</option>
-                  {empList.map((e) => <option key={e.empId} value={e.empId}>{e.name} ({e.empId})</option>)}
-                </select>
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search by name or ID…"
+                    value={empSearch}
+                    onFocus={() => setEmpDropOpen(true)}
+                    onChange={(e) => { setEmpSearch(e.target.value); setEmpDropOpen(true); }}
+                    onBlur={() => setTimeout(() => setEmpDropOpen(false), 150)}
+                    className={inputCls}
+                  />
+                  {addForm.empId && !empDropOpen && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#4F3CC9] font-medium pointer-events-none">
+                      {addForm.empId}
+                    </span>
+                  )}
+                  {empDropOpen && (
+                    <ul className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                      {empList
+                        .filter((e) => {
+                          const q = empSearch.toLowerCase();
+                          return !q || e.name.toLowerCase().includes(q) || e.empId.toLowerCase().includes(q);
+                        })
+                        .map((e) => (
+                          <li
+                            key={e.empId}
+                            onMouseDown={() => {
+                              setAddForm({ ...addForm, empId: e.empId, name: e.name, designation: e.designation });
+                              setEmpSearch(`${e.name} (${e.empId})`);
+                              setEmpDropOpen(false);
+                            }}
+                            className="px-4 py-2.5 text-sm cursor-pointer hover:bg-[#F5F3FF] hover:text-[#4F3CC9] flex items-center justify-between"
+                          >
+                            <span>{e.name}</span>
+                            <span className="text-xs text-gray-400">{e.empId}</span>
+                          </li>
+                        ))}
+                      {empList.filter((e) => { const q = empSearch.toLowerCase(); return !q || e.name.toLowerCase().includes(q) || e.empId.toLowerCase().includes(q); }).length === 0 && (
+                        <li className="px-4 py-3 text-sm text-gray-400">No employees found</li>
+                      )}
+                    </ul>
+                  )}
+                </div>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Designation</label>

@@ -13,12 +13,32 @@ service cloud.firestore {
       allow write: if request.auth != null;
     }
 
-    // Leave Requests — employees can create/read own; HR can read/write all
+    // Leave Requests — employees can create/read/update own; HR can read/write all
     match /leaveRequests/{docId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
-      allow delete: if request.auth != null && request.auth.token.role == "hr_admin";
+      // Returns the authenticated user's profile document from the users collection
+      function userProfile() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      }
+      function userProfileExists() {
+        return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      }
+      // HR admin check: custom claim OR role field in users doc
+      function isHRAdmin() {
+        return request.auth.token.role == "hr_admin" ||
+               (userProfileExists() && userProfile().role == "hr_admin");
+      }
+      // Employee can only access leave requests where empId matches their own employeeId
+      function isOwnLeave(empIdField) {
+        return userProfileExists() && userProfile().employeeId == empIdField;
+      }
+      allow read: if request.auth != null &&
+                    (isHRAdmin() || isOwnLeave(resource.data.empId));
+      allow create: if request.auth != null &&
+                      (isHRAdmin() || isOwnLeave(request.resource.data.empId));
+      allow update: if request.auth != null &&
+                      (isHRAdmin() ||
+                       (isOwnLeave(resource.data.empId) && resource.data.status == "Pending"));
+      allow delete: if request.auth != null && isHRAdmin();
     }
 
     // Candidates — any authenticated user (HR portal is authenticated-only)
@@ -64,6 +84,11 @@ service cloud.firestore {
 
     // Documents — single collection for all employee & HR uploaded documents
     match /documents/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Employee dashboard document metadata (employee-dashboard documentService)
+    match /employeeDocuments/{docId} {
       allow read, write: if request.auth != null;
     }
 

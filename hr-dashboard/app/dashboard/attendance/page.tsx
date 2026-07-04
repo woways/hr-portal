@@ -5,10 +5,10 @@ import * as XLSX from "xlsx";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, PieChart, Pie, Cell,
 } from "recharts";
-import { getAttendance, updateAttendance, getAllClockRecords, updateRegularizationStatus } from "@/lib/firebaseService";
-import { collection, onSnapshot, query, getDocs } from "firebase/firestore";
+import { getAttendance, updateAttendance, upsertAttendance, getAllClockRecords, updateRegularizationStatus, markHRNotifRead, getEmployees } from "@/lib/firebaseService";
+import { collection, onSnapshot, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { backfillAllEmployees } from "@/lib/attendanceBackfill";
+import { backfillAllEmployees, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 
 type AttendanceStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
 type WorkLocation = "Office" | "WFH" | "Client Site";
@@ -79,9 +79,16 @@ export default function AttendancePage() {
   const [month, setMonth] = useState(() => new Date().toLocaleString("en-IN", { month: "long", year: "numeric" }));
   const [regRequests, setRegRequests] = useState<RegRequest[]>([]);
   const [hrComment, setHrComment] = useState<Record<string, string>>({});
+  const [clearedReviewedIds, setClearedReviewedIds] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("hr_att_reviewed_cleared") ?? "[]")); }
+    catch { return new Set(); }
+  });
   const [regToast, setRegToast] = useState<string | null>(null);
   const [liveSeconds, setLiveSeconds] = useState(0);
   const [monthlyAttendance, setMonthlyAttendance] = useState<AttendanceRecord[]>([]);
+
+  // Auto-mark all unread attendance notifications as read when HR opens this page
+  useEffect(() => { const t = setTimeout(() => markHRNotifRead("attendance"), 10000); return () => clearTimeout(t); }, []);
 
   // ── Load ALL employees + today's attendance and merge ─────────────────────
   function defaultLocation(workMode: string): WorkLocation {
@@ -106,7 +113,8 @@ export default function AttendancePage() {
         reportingManager: String(d.reportingManager ?? ""),
         shift:            String(d.shift ?? "9AM-6PM"),
         workMode:         String(d.workMode ?? "Office"),
-      })).filter((e) => e.id);   // drop any rows with no id
+        doj:              String(d.doj ?? ""),
+      })).filter((e) => e.id && (!e.doj || e.doj <= TODAY)); // only employees who have joined by today
 
 
       // ── Step 3: Load today's attendance records ──
@@ -129,15 +137,23 @@ export default function AttendancePage() {
 
       // Merge: every employee gets a record (existing or default Absent)
       const merged: AttendanceRecord[] = empList.map((emp) => {
+        const empLoc = defaultLocation(emp.workMode);
         const existing = attMap.get(emp.id);
-        if (existing) return existing;
+        if (existing) {
+          // Employee clocked in from employee-dashboard without writing a location field —
+          // back-fill the location from their workMode so WFH distribution counts are correct.
+          return {
+            ...existing,
+            location: ((existing.location as string) || empLoc) as WorkLocation,
+          };
+        }
         return {
           id:            `${TODAY}-${emp.id}`,
           empId:         emp.id,
           name:          emp.name,
           dept:          emp.department,
           manager:       emp.reportingManager,
-          location:      defaultLocation(emp.workMode),
+          location:      empLoc,
           shift:         emp.shift,
           date:          TODAY,
           clockIn:       "",
@@ -154,7 +170,10 @@ export default function AttendancePage() {
 
       if (!backfillDoneRef.current && empList.length > 0) {
         backfillDoneRef.current = true;
-        backfillAllEmployees(empList).catch(() => {});
+        // Clean up any pre-July records already in Firestore, then backfill from July 1st onwards
+        deletePreStartAttendance()
+          .then(() => backfillAllEmployees(empList))
+          .catch(() => {});
       }
     } catch (e) {
       setLoadingRecords(false);
@@ -163,9 +182,7 @@ export default function AttendancePage() {
   }, []);
 
   useEffect(() => {
-    loadAttendance();
-    const t = setInterval(loadAttendance, 10000);
-    return () => clearInterval(t);
+    loadAttendance(); // single initial load — real-time clock updates handled by onSnapshot below
   }, [loadAttendance]);
 
   // ── Live clock polling — merges real employee clock-in/out into HR records ─
@@ -240,15 +257,30 @@ export default function AttendancePage() {
   }, []);
 
   useEffect(() => {
-    syncClockData();
-    const interval = setInterval(syncClockData, 10000);
-    return () => clearInterval(interval);
+    syncClockData(); // initial population
+    // Real-time listener — fires instantly when any employee clocks in or out
+    const q = query(collection(db, "clockRecords"), where("date", "==", TODAY));
+    const unsub = onSnapshot(q, () => syncClockData(), () => {});
+    return unsub;
   }, [syncClockData]);
 
   // Also tick live working hours every second for clocked-in employees
   useEffect(() => {
     const t = setInterval(() => setLiveSeconds((s) => s + 1), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // ── Department Headcount ─────────────────────────────────────────────────
+  const [deptCount, setDeptCount] = useState<{ dept: string; count: number }[]>([]);
+  useEffect(() => {
+    getEmployees().then((docs) => {
+      const map: Record<string, number> = {};
+      (docs as Record<string, unknown>[]).forEach((e) => {
+        const d = String(e.department ?? "Other");
+        map[d] = (map[d] ?? 0) + 1;
+      });
+      setDeptCount(Object.entries(map).map(([dept, count]) => ({ dept, count })).sort((a, b) => b.count - a.count));
+    }).catch(() => {});
   }, []);
 
   // ── 6-month attendance history for Absenteeism Trends ────────────────────
@@ -475,6 +507,11 @@ export default function AttendancePage() {
       await updateRegularizationStatus(id, action, comment);
     } catch {}
 
+    // Clear the HR_PORTAL badge for this attendance notification
+    if (req) {
+      markHRNotifRead("attendance", req.empId, (msg) => msg.includes(req.empName ?? "") && msg.includes(req.date ?? ""));
+    }
+
     // If approved, update the HR attendance log in real time
     if (action === "Approved" && req) {
       setRecords((prev) =>
@@ -510,34 +547,61 @@ export default function AttendancePage() {
   const wfhCount = filtered.filter(r => r.location === "WFH" && r.status === "Present").length;
   const overtimeCount = filtered.filter(r => r.overtimeHours !== "-").length;
 
+  // WFH distribution — count only employees who actually clocked in, by their location
+  const clocedIn = (r: AttendanceRecord) => !!(r.clockIn && r.clockIn !== "" && r.clockIn !== "—");
   const wfhPieData = [
-    { name: "Office",      value: records.filter(r => r.location === "Office").length },
-    { name: "WFH",         value: records.filter(r => r.location === "WFH").length },
-    { name: "Client Site", value: records.filter(r => r.location === "Client Site").length },
+    { name: "Office",      value: records.filter(r => clocedIn(r) && r.location === "Office").length },
+    { name: "WFH",         value: records.filter(r => clocedIn(r) && r.location === "WFH").length },
+    { name: "Client Site", value: records.filter(r => clocedIn(r) && r.location === "Client Site").length },
   ];
 
   // Geo data derived from real records
   const total = records.length || 1;
   const geoData = [
-    { location: "Office",           count: records.filter(r => r.location === "Office").length,      pct: Math.round(records.filter(r => r.location === "Office").length / total * 100) },
-    { location: "WFH",              count: records.filter(r => r.location === "WFH").length,         pct: Math.round(records.filter(r => r.location === "WFH").length / total * 100) },
-    { location: "Client Site",      count: records.filter(r => r.location === "Client Site").length, pct: Math.round(records.filter(r => r.location === "Client Site").length / total * 100) },
-    { location: "Not Logged In",    count: records.filter(r => !r.clockIn && r.status !== "Leave").length, pct: Math.round(records.filter(r => !r.clockIn && r.status !== "Leave").length / total * 100) },
+    { location: "Office",        count: records.filter(r => clocedIn(r) && r.location === "Office").length,      pct: Math.round(records.filter(r => clocedIn(r) && r.location === "Office").length / total * 100) },
+    { location: "WFH",           count: records.filter(r => clocedIn(r) && r.location === "WFH").length,         pct: Math.round(records.filter(r => clocedIn(r) && r.location === "WFH").length / total * 100) },
+    { location: "Client Site",   count: records.filter(r => clocedIn(r) && r.location === "Client Site").length, pct: Math.round(records.filter(r => clocedIn(r) && r.location === "Client Site").length / total * 100) },
+    { location: "Not Logged In", count: records.filter(r => !clocedIn(r) && r.status !== "Leave").length,        pct: Math.round(records.filter(r => !clocedIn(r) && r.status !== "Leave").length / total * 100) },
   ];
+
+  function to24h(t: string): string {
+    if (!t || t === "—") return "";
+    // Already HH:MM (24h)
+    if (/^\d{2}:\d{2}$/.test(t)) return t;
+    const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!m) return "";
+    let h = parseInt(m[1]), min = parseInt(m[2]);
+    const isPM = /PM/i.test(m[3]);
+    if (isPM && h !== 12) h += 12;
+    if (!isPM && h === 12) h = 0;
+    return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  }
 
   function openEdit(r: AttendanceRecord) {
     setEditRecord(r);
-    setCorrection({ name: r.name, date: r.date, clockIn: r.clockIn, clockOut: r.clockOut, status: r.status, reason: "" });
+    setCorrection({ name: r.name, date: r.date, clockIn: to24h(r.clockIn), clockOut: to24h(r.clockOut), status: r.status, reason: "" });
   }
 
   async function saveCorrection() {
     if (!editRecord) return;
-    const updated = { ...editRecord, clockIn: correction.clockIn, clockOut: correction.clockOut, status: correction.status, late: correction.clockIn > "09:30" };
+    // Preserve existing clock times if HR didn't enter new ones
+    const ciStr = correction.clockIn  || editRecord.clockIn  || "";
+    const coStr = correction.clockOut || editRecord.clockOut || "";
+    const isLate = (() => {
+      const t = ciStr.replace(/\s*(AM|PM)/i, "");
+      const [h, m] = t.split(":").map(Number);
+      if (isNaN(h)) return false;
+      const hr24 = /PM/i.test(ciStr) && h !== 12 ? h + 12 : (/AM/i.test(ciStr) && h === 12 ? 0 : h);
+      return hr24 > 9 || (hr24 === 9 && (m ?? 0) > 30);
+    })();
+    const updated = { ...editRecord, clockIn: ciStr, clockOut: coStr, status: correction.status, late: isLate };
     setRecords(records.map((r) => r.id === editRecord.id ? updated : r));
     setEditRecord(null);
     try {
       const { id: attId, ...rest } = updated;
-      await updateAttendance(attId, rest as Record<string, unknown>);
+      // upsertAttendance (setDoc merge:true) creates the doc if it doesn't exist yet,
+      // which happens when HR marks a default in-memory "Absent" record as Present.
+      await upsertAttendance(attId, rest as Record<string, unknown>);
     } catch {}
   }
 
@@ -665,20 +729,30 @@ export default function AttendancePage() {
       {/* ── Tab Bar ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
         <div className="flex border-b border-gray-100">
-          {TABS.map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-6 py-3.5 text-sm font-medium transition-all relative whitespace-nowrap ${
-                activeTab === tab ? "text-[#4F3CC9]" : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              {tab}
-              {activeTab === tab && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#4F3CC9] rounded-t-full" />
-              )}
-            </button>
-          ))}
+          {TABS.map((tab) => {
+            const pendingCount = tab === "Attendance Requests"
+              ? regRequests.filter((r) => r.status === "Pending").length
+              : 0;
+            return (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-6 py-3.5 text-sm font-medium transition-all relative whitespace-nowrap flex items-center gap-2 ${
+                  activeTab === tab ? "text-[#4F3CC9]" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {tab}
+                {pendingCount > 0 && (
+                  <span className="min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
+                    {pendingCount}
+                  </span>
+                )}
+                {activeTab === tab && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#4F3CC9] rounded-t-full" />
+                )}
+              </button>
+            );
+          })}
         </div>
 
         {/* ── Overview ── */}
@@ -688,19 +762,39 @@ export default function AttendancePage() {
       {/* ── Row 1: Heatmap + WFH vs Office ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Daily Attendance Heatmap */}
-        <div className="bg-white rounded-2xl shadow-sm p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">Daily Attendance Heatmap</h2>
+        <div className="bg-white rounded-2xl shadow-sm p-6 flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-gray-900">Daily Attendance Heatmap</h2>
+            <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">{month}</span>
+          </div>
+
+          {/* Today's quick stats */}
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              { label: "Present",  val: presentCount,  cls: "bg-green-50  text-green-700"  },
+              { label: "Absent",   val: absentCount,   cls: "bg-red-50    text-red-700"    },
+              { label: "Late",     val: lateCount,     cls: "bg-orange-50 text-orange-700" },
+              { label: "On Leave", val: filtered.filter(r => r.status === "Leave").length, cls: "bg-purple-50 text-purple-700" },
+            ].map(s => (
+              <div key={s.label} className={`rounded-xl p-2 text-center ${s.cls}`}>
+                <p className="text-lg font-bold">{s.val}</p>
+                <p className="text-[10px] font-medium opacity-80">{s.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Heatmap grid */}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr>
-                  <th className="py-1 pr-3 text-left text-gray-400 font-normal w-20"></th>
+                  <th className="py-1 pr-3 text-left text-gray-400 font-normal w-16"></th>
                   {heatmapDays.map(d => <th key={d} className="py-1 px-2 text-center text-gray-500 font-medium">{d}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {computedHeatmap.data.length === 0 && (
-                  <tr><td colSpan={6} className="py-6 text-center text-xs text-gray-400">No attendance data for selected month yet.</td></tr>
+                  <tr><td colSpan={6} className="py-4 text-center text-xs text-gray-400">No attendance data for selected month yet.</td></tr>
                 )}
                 {computedHeatmap.data.map((row, wi) => (
                   <tr key={wi}>
@@ -717,12 +811,37 @@ export default function AttendancePage() {
               </tbody>
             </table>
           </div>
-          <div className="flex items-center gap-3 mt-4 flex-wrap">
+
+          {/* Legend */}
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-gray-400">Legend:</span>
             {[["≥95%","bg-green-600 text-white"],["90-94%","bg-green-400 text-white"],["85-89%","bg-green-200 text-green-900"],["80-84%","bg-yellow-200 text-yellow-900"],["<80%","bg-red-200 text-red-900"]].map(([label, cls]) => (
               <span key={label} className={`text-xs px-2 py-0.5 rounded-md font-medium ${cls}`}>{label}</span>
             ))}
           </div>
+
+          {/* Department on-time compliance */}
+          {computedShiftCompliance.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-2">On-Time Compliance by Dept</p>
+              <div className="space-y-2">
+                {computedShiftCompliance.map(s => (
+                  <div key={s.dept} className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600 w-24 shrink-0 truncate">{s.dept}</span>
+                    <div className="flex-1 bg-gray-100 rounded-full h-2">
+                      <div
+                        className={`h-2 rounded-full transition-all ${s.compliance >= 90 ? "bg-green-500" : s.compliance >= 80 ? "bg-yellow-400" : "bg-red-400"}`}
+                        style={{ width: `${s.compliance}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs font-semibold w-8 text-right ${s.compliance >= 90 ? "text-green-700" : s.compliance >= 80 ? "text-yellow-600" : "text-red-600"}`}>
+                      {s.compliance}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* WFH vs Office */}
@@ -762,7 +881,7 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* ── Row 2: Late Login Tracker + Absenteeism Trends ── */}
+      {/* ── Row 2: Late Login Tracker + Department Headcount ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Late Login Tracker */}
         <div className="bg-white rounded-2xl shadow-sm p-6">
@@ -810,90 +929,27 @@ export default function AttendancePage() {
           </div>
         </div>
 
-        {/* Absenteeism Trends */}
+        {/* Department Headcount */}
         <div className="bg-white rounded-2xl shadow-sm p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">Absenteeism Trends (6 Months)</h2>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={absenteeismTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-              <Line type="monotone" dataKey="absent" stroke="#EF4444" strokeWidth={2} dot={{ r: 4 }} name="Absent" />
-              <Line type="monotone" dataKey="late" stroke="#F59E0B" strokeWidth={2} dot={{ r: 4 }} name="Late Logins" />
-            </LineChart>
-          </ResponsiveContainer>
-          <div className="mt-4 grid grid-cols-3 gap-3">
-            <div className="bg-red-50 rounded-xl p-3 text-center">
-              <p className="text-xs text-gray-500">Avg Absent/Month</p>
-              <p className="text-lg font-bold text-red-600">{avgAbsent}</p>
-            </div>
-            <div className="bg-yellow-50 rounded-xl p-3 text-center">
-              <p className="text-xs text-gray-500">Avg Late/Month</p>
-              <p className="text-lg font-bold text-yellow-600">{avgLate}</p>
-            </div>
-            <div className="bg-orange-50 rounded-xl p-3 text-center">
-              <p className="text-xs text-gray-500">Absenteeism Rate</p>
-              <p className="text-lg font-bold text-orange-600">{absenteeismRate}%</p>
-            </div>
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp size={16} className="text-[#4F3CC9]" />
+            <h2 className="text-base font-semibold text-gray-900">Department Headcount</h2>
           </div>
+          {deptCount.length === 0 ? (
+            <p className="text-center text-xs text-gray-400 py-10">No employee data</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={deptCount} margin={{ left: 0, right: 8 }}>
+                <XAxis dataKey="dept" tick={{ fontSize: 11, fill: "#6B7280" }} axisLine={false} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#9CA3AF" }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ borderRadius: "10px", border: "1px solid #e5e7eb", fontSize: "12px" }} />
+                <Bar dataKey="count" name="Employees" fill="#4F3CC9" radius={[5, 5, 0, 0]} barSize={32} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
-      {/* ── Row 3: Shift Compliance + Overtime ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Shift Compliance */}
-        <div className="bg-white rounded-2xl shadow-sm p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">Shift Compliance by Department</h2>
-          <div className="space-y-3">
-            {computedShiftCompliance.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No attendance data loaded yet.</p>}
-            {computedShiftCompliance.map((s) => (
-              <div key={s.dept} className="flex items-center gap-3">
-                <span className="text-sm text-gray-700 w-28 shrink-0">{s.dept}</span>
-                <div className="flex-1 bg-gray-100 rounded-full h-2.5">
-                  <div
-                    className={`h-2.5 rounded-full ${s.compliance >= 90 ? "bg-green-500" : s.compliance >= 80 ? "bg-yellow-400" : "bg-red-400"}`}
-                    style={{ width: `${s.compliance}%` }}
-                  />
-                </div>
-                <span className={`text-sm font-semibold w-10 text-right ${s.compliance >= 90 ? "text-green-700" : s.compliance >= 80 ? "text-yellow-600" : "text-red-600"}`}>
-                  {s.compliance}%
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-4 mt-5">
-            {[["≥90% On Track","bg-green-100 text-green-700"],["80-89% Watch","bg-yellow-100 text-yellow-700"],["<80% Action Needed","bg-red-100 text-red-700"]].map(([l, c]) => (
-              <span key={l} className={`text-xs px-2 py-0.5 rounded-full font-medium ${c}`}>{l}</span>
-            ))}
-          </div>
-        </div>
-
-        {/* Overtime Hours */}
-        <div className="bg-white rounded-2xl shadow-sm p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">Overtime Hours (This Month)</h2>
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={computedOvertimeData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 11 }} unit="h" />
-              <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={55} />
-              <Tooltip formatter={(v) => [`${v}h overtime`]} />
-              <Bar dataKey="hours" fill="#4F3CC9" radius={[0, 6, 6, 0]} name="Overtime (hrs)" />
-            </BarChart>
-          </ResponsiveContainer>
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="bg-purple-50 rounded-xl p-3 text-center">
-              <p className="text-xs text-gray-500">Total OT Hours</p>
-              <p className="text-lg font-bold text-purple-700">{totalOTDisplay}</p>
-            </div>
-            <div className="bg-purple-50 rounded-xl p-3 text-center">
-              <p className="text-xs text-gray-500">Employees with OT</p>
-              <p className="text-lg font-bold text-purple-700">{overtimeCount}</p>
-            </div>
-          </div>
-        </div>
-      </div>
 
           </div>
         )}
@@ -960,31 +1016,81 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {regRequests.filter((r) => r.status !== "Pending").length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-          <div className="px-6 py-3 border-b">
-            <h2 className="text-sm font-semibold text-gray-500">Reviewed Requests ({regRequests.filter((r) => r.status !== "Pending").length})</h2>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {regRequests.filter((r) => r.status !== "Pending").map((req) => (
-              <div key={req.id} className="px-6 py-4 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center text-xs font-bold shrink-0">
-                    {(req.empName ?? "?").split(" ").map((n) => n[0]).join("")}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">{req.empName} <span className="text-gray-400 font-normal">· {req.date}</span></p>
-                    {req.hrComment && <p className="text-xs text-gray-400">Comment: {req.hrComment}</p>}
-                  </div>
-                </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-semibold ${req.status === "Approved" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                  {req.status}
-                </span>
+      {(() => {
+        const reviewed = regRequests.filter((r) => r.status !== "Pending");
+        const visible  = reviewed.filter((r) => !clearedReviewedIds.has(r.id));
+        if (reviewed.length === 0) return null;
+        function clearReviewed() {
+          const next = new Set([...clearedReviewedIds, ...reviewed.map(r => r.id)]);
+          setClearedReviewedIds(next);
+          try { localStorage.setItem("hr_att_reviewed_cleared", JSON.stringify([...next])); } catch { /* ignore */ }
+        }
+        return (
+          <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-gray-100">
+            {/* Header */}
+            <div className="px-6 py-3 border-b flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-gray-700">Reviewed Requests</h2>
+                <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{visible.length}</span>
               </div>
-            ))}
+              {visible.length > 0 && (
+                <button onClick={clearReviewed} className="text-xs font-medium text-red-400 hover:text-red-600">
+                  Clear All
+                </button>
+              )}
+            </div>
+            {visible.length === 0 ? (
+              <p className="text-center text-xs text-gray-400 py-8">All reviewed requests have been cleared.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
+                      <th className="px-5 py-3 text-left">Employee</th>
+                      <th className="px-5 py-3 text-left">Emp ID</th>
+                      <th className="px-5 py-3 text-left">Date</th>
+                      <th className="px-5 py-3 text-left">Day</th>
+                      <th className="px-5 py-3 text-left">Actual Arrival</th>
+                      <th className="px-5 py-3 text-left">Reason</th>
+                      <th className="px-5 py-3 text-left">HR Comment</th>
+                      <th className="px-5 py-3 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {visible.map((req) => (
+                      <tr key={req.id} className={`hover:bg-gray-50 transition-colors ${req.status === "Approved" ? "bg-green-50/20" : "bg-red-50/20"}`}>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center text-xs font-bold shrink-0">
+                              {(req.empName ?? "?").split(" ").map((n) => n[0]).join("")}
+                            </div>
+                            <span className="font-medium text-gray-900 whitespace-nowrap">{req.empName ?? "—"}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-gray-500 text-xs">{req.empId ?? "—"}</td>
+                        <td className="px-5 py-3 text-gray-600 whitespace-nowrap">{req.date}</td>
+                        <td className="px-5 py-3 text-gray-500">{req.day}</td>
+                        <td className="px-5 py-3 text-gray-600">{req.actualArrival || "—"}</td>
+                        <td className="px-5 py-3 text-gray-600 max-w-[180px]">
+                          <span className="block truncate" title={req.reason}>{req.reason || "—"}</span>
+                        </td>
+                        <td className="px-5 py-3 text-gray-500 text-xs max-w-[140px]">
+                          <span className="block truncate" title={req.hrComment}>{req.hrComment || "—"}</span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${req.status === "Approved" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                            {req.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
           </div>
         )}

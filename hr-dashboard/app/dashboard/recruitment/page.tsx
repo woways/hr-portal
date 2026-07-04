@@ -4,6 +4,7 @@ import { Plus, Search, X, Star, Download, Eye, Pencil, Upload, FileText, Loader2
 import { collection, addDoc, getDocs } from "firebase/firestore";
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
+import { DEPARTMENTS } from "@/lib/constants";
 
 type CandidateStatus = "Applied" | "Screening" | "Shortlisted" | "Interview Scheduled" | "Interview Completed" | "Selected" | "Rejected" | "Offer Released" | "Joined";
 type InterviewStatus = "Scheduled" | "Completed" | "Cancelled" | "Rescheduled";
@@ -113,7 +114,7 @@ const offerStatusColor: Record<OfferStatus, string> = {
   Expired: "bg-gray-100 text-gray-600",
 };
 
-const blankCandidate = { name: "", mobile: "", email: "", role: "", department: "Engineering", experience: "Fresher", college: "", linkedin: "", source: "LinkedIn", recruiter: "", notes: "", resumeUrl: "", resumeName: "" };
+const blankCandidate = { name: "", mobile: "", email: "", role: "", department: DEPARTMENTS[0], experience: "Fresher", college: "", linkedin: "", source: "LinkedIn", recruiter: "", notes: "", resumeUrl: "", resumeName: "" };
 const statusPipeline: CandidateStatus[] = ["Applied","Screening","Shortlisted","Interview Scheduled","Interview Completed","Selected","Rejected","Offer Released","Joined"];
 
 function candidateInitials(name: string) {
@@ -136,7 +137,7 @@ export default function RecruitmentPage() {
   const [showAddOffer, setShowAddOffer] = useState(false);
   const [showDocModal, setShowDocModal] = useState<Onboarding | null>(null);
   const [showAddOnboarding, setShowAddOnboarding] = useState(false);
-  const [onboardingForm, setOnboardingForm] = useState({ name: "", email: "", role: "", empId: "", doj: "", department: "Engineering", manager: "", workMode: "Remote" });
+  const [onboardingForm, setOnboardingForm] = useState({ name: "", email: "", role: "", empId: "", doj: "", department: DEPARTMENTS[0], manager: "", workMode: "Remote" });
   const [onboardingToast, setOnboardingToast] = useState("");
   const [viewCandidate, setViewCandidate] = useState<Candidate | null>(null);
   const [editCandidate, setEditCandidate] = useState<Candidate | null>(null);
@@ -144,7 +145,7 @@ export default function RecruitmentPage() {
   const [candidateForm, setCandidateForm] = useState({ ...blankCandidate });
   const [interviewForm, setInterviewForm] = useState({ ...blankInterview });
   const [offerForm, setOfferForm] = useState({ ...blankOffer });
-  const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const [resumeUploading, setResumeUploading] = useState(false);
   const [addingCandidate, setAddingCandidate] = useState(false);
   const [candidateToast, setCandidateToast] = useState<string | null>(null);
@@ -185,18 +186,25 @@ export default function RecruitmentPage() {
     try {
       let resumeUrl = "";
       let resumeName = "";
+      const resumeUrls: string[] = [];
+      const resumeNames: string[] = [];
 
-      // Upload resume if selected
-      if (resumeFile) {
+      // Upload resume files if selected
+      if (resumeFiles.length > 0) {
         setResumeUploading(true);
-        const path = `resumes/${Date.now()}_${resumeFile.name.replace(/\s+/g, "_")}`;
-        const sRef = storageRef(storage, path);
-        await new Promise<void>((resolve, reject) => {
-          const task = uploadBytesResumable(sRef, resumeFile);
-          task.on("state_changed", undefined, reject, () => resolve());
-        });
-        resumeUrl  = await getDownloadURL(sRef);
-        resumeName = resumeFile.name;
+        for (const f of resumeFiles) {
+          const path = `resumes/${Date.now()}_${f.name.replace(/\s+/g, "_")}`;
+          const sRef = storageRef(storage, path);
+          await new Promise<void>((resolve, reject) => {
+            const task = uploadBytesResumable(sRef, f);
+            task.on("state_changed", undefined, reject, () => resolve());
+          });
+          const url = await getDownloadURL(sRef);
+          resumeUrls.push(url);
+          resumeNames.push(f.name);
+        }
+        resumeUrl  = resumeUrls[0];
+        resumeName = resumeNames[0];
         setResumeUploading(false);
       }
 
@@ -204,6 +212,8 @@ export default function RecruitmentPage() {
         ...candidateForm,
         resumeUrl,
         resumeName,
+        resumeUrls,
+        resumeNames,
         status: "Applied" as CandidateStatus,
         createdAt: new Date().toISOString(),
       };
@@ -213,7 +223,7 @@ export default function RecruitmentPage() {
       const newCandidate: Candidate = { id: docRef.id, ...payload };
       setCandidates((prev) => [newCandidate, ...prev]);
       setCandidateForm({ ...blankCandidate });
-      setResumeFile(null);
+      setResumeFiles([]);
       setShowAddCandidate(false);
       showCandidateToast(`${candidateForm.name} added successfully`);
     } catch {
@@ -294,7 +304,7 @@ export default function RecruitmentPage() {
   function handleAddOnboarding() {
     const newId = String(onboarding.length + 1);
     setOnboarding([...onboarding, { id: newId, ...onboardingForm, docs: defaultDocs(), welcomeEmailSent: false, employeeCreated: false }]);
-    setOnboardingForm({ name: "", email: "", role: "", empId: "", doj: "", department: "Engineering", manager: "", workMode: "Remote" });
+    setOnboardingForm({ name: "", email: "", role: "", empId: "", doj: "", department: DEPARTMENTS[0], manager: "", workMode: "Remote" });
     setShowAddOnboarding(false);
   }
 
@@ -678,7 +688,7 @@ export default function RecruitmentPage() {
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
                 <select value={candidateForm.department} onChange={(e) => setCandidateForm({ ...candidateForm, department: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm">
-                  {["Engineering","Marketing","Sales","HR","Finance","Operations"].map((d) => <option key={d}>{d}</option>)}
+                  {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
                 </select>
               </div>
               <div>
@@ -700,30 +710,41 @@ export default function RecruitmentPage() {
                 </select>
               </div>
               <div className="col-span-2">
-                <label className="text-xs font-medium text-gray-600 block mb-1">Resume Upload</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">
+                  Resume & Documents
+                  {resumeFiles.length > 0 && <span className="ml-1 text-[#4F3CC9] font-semibold">{resumeFiles.length} file(s)</span>}
+                </label>
                 <input
                   ref={resumeInputRef}
                   type="file"
-                  accept=".pdf,.doc,.docx"
+                  multiple
+                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
                   className="hidden"
-                  onChange={(e) => setResumeFile(e.target.files?.[0] ?? null)}
+                  onChange={(e) => {
+                    const newFiles = Array.from(e.target.files ?? []);
+                    if (newFiles.length > 0) setResumeFiles(prev => [...prev, ...newFiles]);
+                    if (resumeInputRef.current) resumeInputRef.current.value = "";
+                  }}
                 />
-                {resumeFile ? (
-                  <div className="flex items-center gap-3 border border-green-200 bg-green-50 rounded-xl px-4 py-3">
-                    <FileText size={18} className="text-green-600 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">{resumeFile.name}</p>
-                      <p className="text-xs text-gray-400">{(resumeFile.size / 1024).toFixed(0)} KB</p>
-                    </div>
-                    <button onClick={() => { setResumeFile(null); if (resumeInputRef.current) resumeInputRef.current.value = ""; }}
-                      className="text-gray-400 hover:text-red-500"><X size={14} /></button>
+                {resumeFiles.length > 0 && (
+                  <div className="space-y-1.5 mb-2">
+                    {resumeFiles.map((f, i) => (
+                      <div key={i} className="flex items-center gap-3 border border-green-200 bg-green-50 rounded-xl px-4 py-2.5">
+                        <FileText size={16} className="text-green-600 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{f.name}</p>
+                          <p className="text-xs text-gray-400">{(f.size / 1024).toFixed(0)} KB</p>
+                        </div>
+                        <button onClick={() => setResumeFiles(prev => prev.filter((_, idx) => idx !== i))}
+                          className="text-gray-400 hover:text-red-500"><X size={14} /></button>
+                      </div>
+                    ))}
                   </div>
-                ) : (
-                  <button onClick={() => resumeInputRef.current?.click()}
-                    className="w-full border-2 border-dashed border-gray-200 rounded-xl p-4 text-center text-sm text-gray-400 hover:border-[#4F3CC9] hover:text-[#4F3CC9] transition-colors flex items-center justify-center gap-2">
-                    <Upload size={16} /> Click to upload resume (PDF/DOC)
-                  </button>
                 )}
+                <button onClick={() => resumeInputRef.current?.click()}
+                  className="w-full border-2 border-dashed border-gray-200 rounded-xl p-4 text-center text-sm text-gray-400 hover:border-[#4F3CC9] hover:text-[#4F3CC9] transition-colors flex items-center justify-center gap-2">
+                  <Upload size={16} /> {resumeFiles.length > 0 ? "Add More Documents" : "Click to upload resume / documents (PDF, DOC, JPG)"}
+                </button>
               </div>
             </div>
             <div className="px-6 pb-6">
@@ -733,7 +754,7 @@ export default function RecruitmentPage() {
                 className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {addingCandidate
-                  ? <><Loader2 size={16} className="animate-spin" />{resumeUploading ? "Uploading resume…" : "Saving…"}</>
+                  ? <><Loader2 size={16} className="animate-spin" />{resumeUploading ? "Uploading files…" : "Saving…"}</>
                   : "Add Candidate"
                 }
               </button>
@@ -1053,7 +1074,7 @@ export default function RecruitmentPage() {
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
                 <select value={onboardingForm.department} onChange={(e) => setOnboardingForm({ ...onboardingForm, department: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-                  {["Engineering","Marketing","Sales","HR","Finance","Operations"].map((d) => <option key={d}>{d}</option>)}
+                  {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
                 </select>
               </div>
               <div>
@@ -1254,7 +1275,7 @@ export default function RecruitmentPage() {
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
                 <select value={editCandidateForm.department} onChange={(e) => setEditCandidateForm({ ...editCandidateForm, department: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-                  {["Engineering","Marketing","Sales","HR","Finance","Operations"].map((d) => <option key={d}>{d}</option>)}
+                  {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
                 </select>
               </div>
               <div>

@@ -1,12 +1,12 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection, query, where, getDocs, getDoc, doc,
-  onSnapshot, updateDoc, writeBatch,
+  onSnapshot, updateDoc, writeBatch, deleteDoc,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { Bell, Calendar, Clock, Target, CheckCheck, Megaphone, IndianRupee, Wifi, Loader2 } from "lucide-react";
+import { Bell, Calendar, Clock, Target, CheckCheck, Megaphone, IndianRupee, Wifi, Loader2, X, Trash2 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,12 @@ export default function EmployeeNotificationsPage() {
   const [resolving, setResolving] = useState(true);
   const [liveReady, setLiveReady] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("All");
+  const [toast,     setToast]     = useState<{ msg: string; ok: boolean } | null>(null);
+
+  function showToast(msg: string, ok = true) {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3000);
+  }
 
   // ── Step 1: resolve empId from auth ──────────────────────────────────────
   useEffect(() => {
@@ -62,19 +68,16 @@ export default function EmployeeNotificationsPage() {
 
       let id = "";
       try {
-        // Email → employees collection
-        if (user.email) {
+        // Primary: users/{uid}.employeeId — set explicitly by HR during account creation
+        const uSnap = await getDoc(doc(db, "users", user.uid));
+        if (uSnap.exists()) id = String((uSnap.data() as Record<string, unknown>).employeeId ?? "");
+
+        // Fallback: email lookup in employees collection
+        if (!id && user.email) {
           const snap = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
           if (!snap.empty) id = snap.docs[0].id;
         }
-        // Fallback: users/{uid}.employeeId
-        if (!id) {
-          const uSnap = await getDoc(doc(db, "users", user.uid));
-          if (uSnap.exists()) id = String((uSnap.data() as Record<string, unknown>).employeeId ?? "");
-        }
-        // Last resort: use Firebase Auth UID
-        if (!id) id = user.uid;
-      } catch { id = user.uid; }
+      } catch { /* ignore */ }
 
       setEmpId(id);
       setResolving(false);
@@ -127,11 +130,41 @@ export default function EmployeeNotificationsPage() {
     return () => { unsub1(); unsub2(); };
   }, [empId]);
 
+  // ── Auto-mark visible notifications as read when tab is viewed ───────────
+  const notifsRef = useRef<AppNotification[]>([]);
+  notifsRef.current = notifs;
+
+  useEffect(() => {
+    if (!liveReady) return;
+    if (activeTab === "Unread") return; // skip — would instantly empty the tab
+    const timer = setTimeout(() => {
+      const toMark = notifsRef.current.filter(n => {
+        if (n.read) return false;
+        if (activeTab === "All")           return true;
+        if (activeTab === "Announcements") return n.type === "system";
+        if (activeTab === "Payroll")       return n.type === "payroll";
+        return n.type === activeTab.toLowerCase();
+      });
+      if (!toMark.length) return;
+      const batch = writeBatch(db);
+      toMark.forEach(n => batch.update(doc(db, "notifications", n.id), { read: true }));
+      batch.commit().catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [activeTab, liveReady]);
+
   // ── Mark one as read ──────────────────────────────────────────────────────
   async function markRead(id: string) {
     try {
       await updateDoc(doc(db, "notifications", id), { read: true });
       // onSnapshot will update UI — no manual setState needed
+    } catch { /* ignore */ }
+  }
+
+  // ── Dismiss (delete) notification ────────────────────────────────────────
+  async function dismiss(id: string) {
+    try {
+      await deleteDoc(doc(db, "notifications", id));
     } catch { /* ignore */ }
   }
 
@@ -144,6 +177,26 @@ export default function EmployeeNotificationsPage() {
       unread.forEach(n => batch.update(doc(db, "notifications", n.id), { read: true }));
       await batch.commit();
     } catch { /* ignore */ }
+  }
+
+  // ── Clear all visible notifications ──────────────────────────────────────
+  async function clearAll() {
+    const toClear = notifs.filter(n => {
+      if (activeTab === "All")           return true;
+      if (activeTab === "Unread")        return !n.read;
+      if (activeTab === "Announcements") return n.type === "system";
+      if (activeTab === "Payroll")       return n.type === "payroll";
+      return n.type === (activeTab.toLowerCase() as NotifType);
+    });
+    if (!toClear.length) return;
+    try {
+      const batch = writeBatch(db);
+      toClear.forEach(n => batch.delete(doc(db, "notifications", n.id)));
+      await batch.commit();
+      showToast(`${toClear.length} notification${toClear.length !== 1 ? "s" : ""} cleared.`);
+    } catch {
+      showToast("Failed to clear notifications.", false);
+    }
   }
 
   // ── Filter ────────────────────────────────────────────────────────────────
@@ -167,6 +220,12 @@ export default function EmployeeNotificationsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-2xl text-white text-sm font-medium shadow-lg flex items-center gap-2 ${toast.ok ? "bg-green-500" : "bg-red-500"}`}>
+          {toast.ok ? <CheckCheck size={15}/> : <Bell size={15}/>}
+          {toast.msg}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -191,7 +250,7 @@ export default function EmployeeNotificationsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 flex-wrap border-b border-gray-100">
+      <div className="flex items-center gap-1 flex-wrap border-b border-gray-100">
         {TABS.map(tab => {
           const count = tabCount(tab);
           return (
@@ -204,6 +263,11 @@ export default function EmployeeNotificationsPage() {
             </button>
           );
         })}
+        {notifs.length > 0 && (
+          <button onClick={clearAll} className="ml-auto flex items-center gap-1.5 text-xs text-red-400 font-medium hover:text-red-600 px-3 py-1">
+            <Trash2 size={13} /> Clear All
+          </button>
+        )}
       </div>
 
       {/* Notification List */}
@@ -235,19 +299,25 @@ export default function EmployeeNotificationsPage() {
                       {n.title}
                       {!n.read && <span className="w-2 h-2 rounded-full bg-[#4F3CC9] inline-block shrink-0" />}
                     </p>
-                    {n.read ? (
-                      <span className="flex items-center gap-1 text-xs text-green-500 font-medium whitespace-nowrap shrink-0">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12"/>
-                        </svg>
-                        Read
-                      </span>
-                    ) : (
-                      <button onClick={() => markRead(n.id)}
-                        className="shrink-0 text-xs font-medium text-[#4F3CC9] border border-[#4F3CC9] rounded-full px-3 py-1 hover:bg-[#EDE9FF] transition-colors whitespace-nowrap">
-                        Mark as Read
+                    <div className="flex items-center gap-2 shrink-0">
+                      {n.read ? (
+                        <span className="flex items-center gap-1 text-xs text-green-500 font-medium whitespace-nowrap">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                          </svg>
+                          Read
+                        </span>
+                      ) : (
+                        <button onClick={() => markRead(n.id)}
+                          className="text-xs font-medium text-[#4F3CC9] border border-[#4F3CC9] rounded-full px-3 py-1 hover:bg-[#EDE9FF] transition-colors whitespace-nowrap">
+                          Mark as Read
+                        </button>
+                      )}
+                      <button onClick={() => dismiss(n.id)} title="Dismiss"
+                        className="w-6 h-6 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                        <X size={13} />
                       </button>
-                    )}
+                    </div>
                   </div>
                   <p className="text-sm text-gray-500 mt-0.5 leading-relaxed">{n.message}</p>
                   <p className="text-xs text-gray-400 mt-1.5">{timeAgo(n.createdAt)}</p>

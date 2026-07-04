@@ -272,6 +272,51 @@ export async function markAllNotificationsRead(userId: string) {
   await Promise.all(snap.docs.map((d) => updateDoc(d.ref, { read: true })));
 }
 
+/**
+ * Mark HR_PORTAL notifications as read after HR acts on them.
+ * - type: notification type e.g. "leave", "attendance", "goal"
+ * - empId: when present, narrows the query to that employee's notifications
+ * - msgFilter: optional extra predicate on the message string (e.g. match date)
+ */
+export async function markHRNotifRead(
+  type: string,
+  empId?: string | null,
+  msgFilter?: (msg: string) => boolean,
+): Promise<void> {
+  try {
+    const constraints = [
+      where("userId", "==", "HR_PORTAL"),
+      where("type",   "==", type),
+      where("read",   "==", false),
+      ...(empId ? [where("empId", "==", empId)] : []),
+    ];
+    const snap = await getDocs(query(collection(db, "notifications"), ...constraints));
+    await Promise.all(
+      snap.docs
+        .filter((d) => {
+          if (!msgFilter) return true;
+          return msgFilter((d.data().message as string) ?? "");
+        })
+        .map((d) => updateDoc(d.ref, { read: true }))
+    );
+  } catch { /* non-critical — sidebar will eventually sync */ }
+}
+
+/** Mark all unread notifications of a given type as read for a specific employee (personal + broadcast). */
+export async function markEmpNotifRead(type: string, empId: string): Promise<void> {
+  try {
+    const [personal, broadcast] = await Promise.all([
+      getDocs(query(collection(db, "notifications"), where("userId", "==", empId))),
+      getDocs(query(collection(db, "notifications"), where("userId", "==", "all"))),
+    ]);
+    const toMark = [...personal.docs, ...broadcast.docs].filter(
+      (d) => d.data().type === type && d.data().read !== true,
+    );
+    if (!toMark.length) return;
+    await Promise.all(toMark.map((d) => updateDoc(d.ref, { read: true })));
+  } catch { /* non-critical */ }
+}
+
 // ─── Regularization ───────────────────────────────────────────────────────────
 export async function getRegularization(): Promise<Record<string, unknown>[]> {
   const snap = await getDocs(collection(db, "regularization"));

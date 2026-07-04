@@ -15,7 +15,7 @@ const dayTypeStyles: Record<DayType, string> = {
   present: "bg-green-100 text-green-700 font-semibold",
   absent:  "bg-red-100 text-red-700 font-semibold",
   late:    "bg-orange-100 text-orange-700 font-semibold",
-  leave:   "bg-yellow-100 text-yellow-700 font-semibold",
+  leave:   "bg-purple-100 text-purple-700 font-semibold",
   holiday: "bg-blue-100 text-blue-700 font-semibold",
   today:   "ring-2 ring-[#4F3CC9] bg-[#EDE9FF] text-[#4F3CC9] font-bold",
   weekend: "text-gray-300",
@@ -147,8 +147,13 @@ export default function CalendarPage() {
     return () => unsub();
   }, [loadHolidays, loadEmpData]);
 
+  const MIN_YEAR = 2026;
+  const MIN_MONTH = 5; // June (0-indexed)
+  const atMin = currentYear === MIN_YEAR && currentMonth === MIN_MONTH;
+
   // ── Navigation ─────────────────────────────────────────────────────────────
   function goToPrev() {
+    if (atMin) return;
     setTooltip(null);
     if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear(y => y-1); }
     else setCurrentMonth(m => m-1);
@@ -163,6 +168,17 @@ export default function CalendarPage() {
   const holidayMap = new Map<string, Holiday>();
   holidays.forEach(h => holidayMap.set(h.date, h));
 
+  // Build approved-leave date set (local dates, case-insensitive status) so
+  // leave always renders purple even if the attendance record says Half Day.
+  const leaveSet = new Set<string>();
+  leaves.filter(l => (l.status ?? "").toLowerCase() === "approved").forEach(l => {
+    const start = new Date(l.startDate + "T00:00:00");
+    const end   = new Date(l.endDate   + "T00:00:00");
+    for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      leaveSet.add(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);
+    }
+  });
+
   // ── Day type logic ─────────────────────────────────────────────────────────
   function getDayKey(day: number) {
     return `${currentYear}-${String(currentMonth+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
@@ -170,10 +186,14 @@ export default function CalendarPage() {
 
   function getDayType(day: number): DayType {
     const dk = getDayKey(day);
+    // Holidays take top priority — show blue even on weekends
+    if (holidayMap.has(dk)) return "holiday";
     const dow = new Date(currentYear, currentMonth, day).getDay();
     if (dow === 0 || dow === 6) return "weekend";
-    if (holidayMap.has(dk)) return "holiday";
-    // Attendance status takes priority — "today" is only a fallback when no record exists
+    // Approved leave always shows purple — before attendance map so Half Day
+    // records on leave days don't bleed through as orange
+    if (leaveSet.has(dk)) return "leave";
+    // Attendance status; today ring is added separately in JSX
     if (attMap[dk]) return attMap[dk];
     if (dk === todayKey) return "today";
     return "";
@@ -235,11 +255,38 @@ export default function CalendarPage() {
           <div className="col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
             {/* Navigation */}
             <div className="flex items-center justify-between mb-4">
-              <button onClick={goToPrev} className="w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-[#F5F3FF] transition">
+              <button onClick={goToPrev} disabled={atMin}
+                className={`w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center transition ${atMin ? "opacity-30 cursor-not-allowed" : "hover:bg-[#F5F3FF]"}`}>
                 <ChevronLeft size={18} className="text-gray-600" />
               </button>
-              <h2 className="text-lg font-bold text-gray-900">{MONTHS[currentMonth]} {currentYear}</h2>
-              <button onClick={goToNext} className="w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-[#F5F3FF] transition">
+              <div className="flex items-center gap-2">
+                <select
+                  value={currentMonth}
+                  onChange={e => { setCurrentMonth(Number(e.target.value)); setTooltip(null); }}
+                  className="text-base font-bold text-gray-900 bg-transparent border-none outline-none cursor-pointer appearance-none px-1 hover:text-[#4F3CC9] transition-colors"
+                >
+                  {MONTHS.map((m, i) => {
+                    if (currentYear === MIN_YEAR && i < MIN_MONTH) return null;
+                    return <option key={m} value={i}>{m}</option>;
+                  })}
+                </select>
+                <select
+                  value={currentYear}
+                  onChange={e => {
+                    const y = Number(e.target.value);
+                    setCurrentYear(y);
+                    if (y === MIN_YEAR && currentMonth < MIN_MONTH) setCurrentMonth(MIN_MONTH);
+                    setTooltip(null);
+                  }}
+                  className="text-base font-bold text-gray-900 bg-transparent border-none outline-none cursor-pointer appearance-none px-1 hover:text-[#4F3CC9] transition-colors"
+                >
+                  {Array.from({ length: todayYear - MIN_YEAR + 5 }, (_, i) => MIN_YEAR + i).map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+              <button onClick={goToNext}
+                className="w-9 h-9 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-[#F5F3FF] transition">
                 <ChevronRight size={18} className="text-gray-600" />
               </button>
             </div>
@@ -249,7 +296,7 @@ export default function CalendarPage() {
               {[
                 { label:`${presentCt} Present`, cls:"bg-green-50 text-green-700"   },
                 { label:`${absentCt} Absent`,   cls:"bg-red-50 text-red-700"     },
-                { label:`${leaveCt} Leave`,     cls:"bg-yellow-50 text-yellow-700" },
+                { label:`${leaveCt} Leave`,     cls:"bg-purple-50 text-purple-700" },
                 { label:`${holCt} Holiday`,     cls:"bg-blue-50 text-blue-700"   },
               ].map(s=>(
                 <span key={s.label} className={`text-xs font-medium px-3 py-1 rounded-full ${s.cls}`}>{s.label}</span>
@@ -305,7 +352,7 @@ export default function CalendarPage() {
                 {color:"bg-green-200",                       label:"Present"},
                 {color:"bg-orange-200",                      label:"Late/Half"},
                 {color:"bg-red-200",                         label:"Absent"},
-                {color:"bg-yellow-200",                      label:"Leave"},
+                {color:"bg-purple-200",                      label:"Leave"},
                 {color:"bg-blue-200 ring-1 ring-blue-300",   label:"Holiday"},
                 {color:"ring-2 ring-[#4F3CC9] bg-[#EDE9FF]",label:"Today"},
               ].map(item=>(
@@ -348,7 +395,7 @@ export default function CalendarPage() {
             {/* Leave Requests — all statuses */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-4">
-                <CalendarDays size={16} className="text-yellow-500"/>
+                <CalendarDays size={16} className="text-purple-500"/>
                 Leave Requests
               </h3>
               <div className="space-y-2">

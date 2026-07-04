@@ -265,8 +265,10 @@ interface DocItem {
   fileUrl?: string;
   fileName?: string;
   fileExt?: string;
+  fileSize?: number;
+  storagePath?: string;
   isExtra?: boolean;
-  hrOnly?: boolean; // uploaded by HR, employee can only view
+  hrOnly?: boolean;
 }
 
 const PREDEFINED_DOCS: DocItem[] = [
@@ -504,7 +506,7 @@ export default function ProfilePage() {
     setUploadingSlot(docId);
     setUploadProgress(0);
     try {
-      const fileUrl = await uploadDocFile(currentEmpId, docId, file, setUploadProgress);
+      const { url: fileUrl, path: storagePath } = await uploadDocFile(currentEmpId, docId, file, setUploadProgress);
       const meta: DocItem = {
         id: docId,
         name: slotDef?.name ?? file.name.replace(/\.[^.]+$/, ""),
@@ -513,13 +515,16 @@ export default function ProfilePage() {
         fileUrl,
         fileName: file.name,
         fileExt: ext,
+        fileSize: file.size,
         hrOnly: slotDef?.hrOnly,
       };
-      await saveDocMeta(currentEmpId, docId, { ...meta, uploadedBy: "employee" });
+      await saveDocMeta(currentEmpId, docId, { ...meta, storagePath, uploadedBy: "employee" });
       setDocs(prev => prev.map(d => d.id === docId ? meta : d));
       showDocToast(`"${meta.name}" uploaded successfully!`);
-    } catch {
-      showDocToast("Upload failed. Please try again.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showDocToast(`Upload failed: ${msg}`);
+      console.error("[SlotUpload]", err);
     } finally {
       setUploadingSlot(null);
       e.target.value = "";
@@ -535,7 +540,7 @@ export default function ProfilePage() {
     setUploadingSlot("extra");
     setUploadProgress(0);
     try {
-      const fileUrl = await uploadDocFile(currentEmpId, slotId, file, setUploadProgress);
+      const { url: fileUrl, path: storagePath } = await uploadDocFile(currentEmpId, slotId, file, setUploadProgress);
       const newDoc: DocItem = {
         id: slotId,
         name: docName,
@@ -544,13 +549,16 @@ export default function ProfilePage() {
         fileUrl,
         fileName: file.name,
         fileExt: ext,
+        fileSize: file.size,
         isExtra: true,
       };
-      await saveDocMeta(currentEmpId, slotId, { ...newDoc, uploadedBy: "employee" });
+      await saveDocMeta(currentEmpId, slotId, { ...newDoc, storagePath, uploadedBy: "employee" });
       setDocs((prev) => [...prev, newDoc]);
       showDocToast(`"${docName}" uploaded successfully!`);
-    } catch {
-      showDocToast("Upload failed. Please try again.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showDocToast(`Upload failed: ${msg}`);
+      console.error("[DocUpload]", err);
     } finally {
       setUploadingSlot(null);
       e.target.value = "";
@@ -604,7 +612,9 @@ export default function ProfilePage() {
       setProfilePhoto(url);
       setPhotoToast(true);
       setTimeout(() => setPhotoToast(false), 3000);
-    } catch { /* ignore */ } finally {
+    } catch (err) {
+      console.error("[PhotoUpload]", err);
+    } finally {
       setPhotoUploading(false);
       setPreviewPhoto(null);
       uploadFileRef.current = null;

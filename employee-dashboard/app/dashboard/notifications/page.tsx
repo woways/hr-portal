@@ -1,10 +1,10 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, collection, query, where, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, onSnapshot, updateDoc, writeBatch, deleteDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import {
-  Bell, Calendar, Clock, Megaphone, CreditCard, CheckCheck, CheckCircle, Target, Info,
+  Bell, Calendar, Clock, Megaphone, CreditCard, CheckCheck, CheckCircle, Target, Info, X, Trash2,
 } from "lucide-react";
 
 type NotifType = "leave" | "attendance" | "goal" | "payroll" | "system";
@@ -49,6 +49,12 @@ export default function NotificationsPage() {
   const [activeTab, setActiveTab] = useState<FilterTab>("All");
   const [loading, setLoading] = useState(true);
   const [empId, setEmpId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  function showToast(msg: string, ok = true) {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3000);
+  }
 
   // Resolve empId from Firebase Auth
   useEffect(() => {
@@ -83,12 +89,64 @@ export default function NotificationsPage() {
     return unsub;
   }, [empId]);
 
+  // ── Auto-mark visible notifications as read when tab is viewed ───────────
+  const notificationsRef = useRef<Notification[]>([]);
+  notificationsRef.current = notifications;
+
+  useEffect(() => {
+    if (loading) return;
+    if (activeTab === "Unread") return; // skip — would instantly empty the tab
+    const timer = setTimeout(() => {
+      const toMark = notificationsRef.current.filter(n => {
+        if (n.read) return false;
+        if (activeTab === "All")           return true;
+        if (activeTab === "Announcements") return n.type === "system";
+        if (activeTab === "Goals")         return n.type === "goal";
+        return n.type === activeTab.toLowerCase();
+      });
+      if (!toMark.length) return;
+      const batch = writeBatch(db);
+      toMark.forEach(n => batch.update(doc(db, "notifications", n.id), { read: true }));
+      batch.commit().catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [activeTab, loading]);
+
   async function markAsRead(id: string) {
     setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
     try {
       await updateDoc(doc(db, "notifications", id), { read: true });
     } catch {
       setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: false } : n));
+    }
+  }
+
+  async function dismiss(id: string) {
+    try {
+      await deleteDoc(doc(db, "notifications", id));
+    } catch { /* ignore */ }
+  }
+
+  // ── Clear all visible notifications ──────────────────────────────────────
+  async function clearAll() {
+    const toClear = notifications.filter((n) => {
+      if (activeTab === "All")           return true;
+      if (activeTab === "Unread")        return !n.read;
+      if (activeTab === "Leave")         return n.type === "leave";
+      if (activeTab === "Attendance")    return n.type === "attendance";
+      if (activeTab === "Goals")         return n.type === "goal";
+      if (activeTab === "Payroll")       return n.type === "payroll";
+      if (activeTab === "Announcements") return n.type === "system";
+      return true;
+    });
+    if (!toClear.length) return;
+    try {
+      const batch = writeBatch(db);
+      toClear.forEach(n => batch.delete(doc(db, "notifications", n.id)));
+      await batch.commit();
+      showToast(`${toClear.length} notification${toClear.length !== 1 ? "s" : ""} cleared.`);
+    } catch {
+      showToast("Failed to clear notifications.", false);
     }
   }
 
@@ -123,6 +181,12 @@ export default function NotificationsPage() {
 
   return (
     <div className="space-y-6">
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-2xl text-white text-sm font-medium shadow-lg flex items-center gap-2 ${toast.ok ? "bg-green-500" : "bg-red-500"}`}>
+          {toast.ok ? <CheckCheck size={15}/> : <Bell size={15}/>}
+          {toast.msg}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -130,10 +194,8 @@ export default function NotificationsPage() {
           <p className="text-gray-500 text-sm mt-1">Stay updated with approvals, feedback, and announcements.</p>
         </div>
         {unreadCount > 0 && (
-          <button
-            onClick={markAllRead}
-            className="flex items-center gap-2 text-sm text-[#4F3CC9] font-medium hover:underline"
-          >
+          <button onClick={markAllRead}
+            className="flex items-center gap-2 text-sm text-[#4F3CC9] font-medium hover:underline">
             <CheckCheck size={16} /> Mark all as read
           </button>
         )}
@@ -157,6 +219,12 @@ export default function NotificationsPage() {
             )}
           </button>
         ))}
+        {notifications.length > 0 && (
+          <button onClick={clearAll}
+            className="ml-auto shrink-0 flex items-center gap-1.5 text-xs text-red-500 font-medium hover:underline px-2 py-1">
+            <Trash2 size={13} /> Clear All
+          </button>
+        )}
       </div>
 
       {/* List */}
@@ -205,18 +273,24 @@ export default function NotificationsPage() {
                   <p className="text-sm text-gray-500 leading-relaxed">{notif.message}</p>
                   <p className="text-xs text-gray-400 mt-1.5">{formatTime(notif.createdAt)}</p>
                 </div>
-                {!notif.read ? (
-                  <button
-                    onClick={() => markAsRead(notif.id)}
-                    className="shrink-0 text-xs text-[#4F3CC9] font-medium border border-[#4F3CC9] px-3 py-1.5 rounded-full hover:bg-[#EDE9FF] transition-colors whitespace-nowrap"
-                  >
-                    Mark as Read
+                <div className="flex items-center gap-2 shrink-0">
+                  {!notif.read ? (
+                    <button
+                      onClick={() => markAsRead(notif.id)}
+                      className="text-xs text-[#4F3CC9] font-medium border border-[#4F3CC9] px-3 py-1.5 rounded-full hover:bg-[#EDE9FF] transition-colors whitespace-nowrap"
+                    >
+                      Mark as Read
+                    </button>
+                  ) : (
+                    <span className="flex items-center gap-1 text-xs text-gray-400">
+                      <CheckCircle size={13} className="text-green-400" /> Read
+                    </span>
+                  )}
+                  <button onClick={() => dismiss(notif.id)} title="Dismiss"
+                    className="w-6 h-6 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                    <X size={13} />
                   </button>
-                ) : (
-                  <span className="shrink-0 flex items-center gap-1 text-xs text-gray-400">
-                    <CheckCircle size={13} className="text-green-400" /> Read
-                  </span>
-                )}
+                </div>
               </div>
             );
           })

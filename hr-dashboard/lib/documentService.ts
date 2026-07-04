@@ -66,10 +66,14 @@ export async function uploadDocFile(
     task.on(
       "state_changed",
       (snap) => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-      reject,
+      (err) => reject(new Error(`Storage: ${(err as Error).message ?? String(err)}`)),
       async () => {
-        const url = await getDownloadURL(task.snapshot.ref);
-        resolve({ url, path });
+        try {
+          const url = await getDownloadURL(task.snapshot.ref);
+          resolve({ url, path });
+        } catch (err) {
+          reject(new Error(`GetURL: ${(err as Error).message ?? String(err)}`));
+        }
       }
     );
   });

@@ -380,12 +380,12 @@ export default function PerformancePage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Title</label>
-                <input
-                  type="text"
+                <textarea
                   value={goalForm.title}
                   onChange={(e) => setGoalForm((f) => ({ ...f, title: e.target.value }))}
                   placeholder="Goal title"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30 resize-none"
                   required
                 />
               </div>
@@ -411,12 +411,12 @@ export default function PerformancePage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
-                <input
-                  type="text"
+                <textarea
                   value={goalForm.category}
                   onChange={(e) => setGoalForm((f) => ({ ...f, category: e.target.value }))}
                   placeholder="e.g. Engineering"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30 resize-none"
                 />
               </div>
               <div>
@@ -465,23 +465,23 @@ export default function PerformancePage() {
             <form onSubmit={handleAddReview} className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Employee Name</label>
-                <input
-                  type="text"
+                <textarea
                   value={reviewForm.employeeName}
                   onChange={(e) => setReviewForm((f) => ({ ...f, employeeName: e.target.value }))}
                   placeholder="Full name"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30 resize-none"
                   required
                 />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Department</label>
-                <input
-                  type="text"
+                <textarea
                   value={reviewForm.department}
                   onChange={(e) => setReviewForm((f) => ({ ...f, department: e.target.value }))}
                   placeholder="e.g. Engineering"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30 resize-none"
                   required
                 />
               </div>

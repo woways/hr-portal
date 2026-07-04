@@ -34,48 +34,38 @@ export function useEmployeeProfile(): EmployeeProfile {
         let doj = "";
         const empEmail = user.email ?? "";
 
-        // Strategy 1 (primary): look up by email in the employees collection
-        // Works for ALL employees including those without a users/{uid} doc
-        if (empEmail) {
+        // Strategy 1 (primary): users/{uid}.employeeId — set explicitly by HR during account creation
+        const uSnap = await getDoc(doc(db, "users", user.uid));
+        if (uSnap.exists()) {
+          const ud = uSnap.data() as Record<string, unknown>;
+          empId   = String(ud.employeeId ?? "");
+          empName = String(ud.name       ?? "");
+          empDept = String(ud.department ?? "");
+          if (empId) {
+            const eSnap = await getDoc(doc(db, "employees", empId));
+            if (eSnap.exists()) {
+              const ed = eSnap.data() as Record<string, unknown>;
+              empName        = String(ed.name        ?? empName);
+              empDept        = String(ed.department  ?? empDept);
+              empDesignation = String(ed.designation ?? "");
+              doj            = String(ed.doj         ?? "");
+            }
+          }
+        }
+
+        // Strategy 2: fallback — email lookup in employees collection
+        if (!empId && empEmail) {
           const snap = await getDocs(
             query(collection(db, "employees"), where("email", "==", empEmail))
           );
           if (!snap.empty) {
             const d = snap.docs[0].data() as Record<string, unknown>;
             empId          = snap.docs[0].id;
-            empName        = String(d.name          ?? "");
-            empDept        = String(d.department     ?? "");
-            empDesignation = String(d.designation    ?? "");
-            doj            = String(d.doj            ?? "");
+            empName        = empName || String(d.name          ?? "");
+            empDept        = empDept || String(d.department     ?? "");
+            empDesignation = empDesignation || String(d.designation ?? "");
+            doj            = doj || String(d.doj            ?? "");
           }
-        }
-
-        // Strategy 2: fall back to users/{uid}.employeeId → then fetch employee doc
-        if (!empId) {
-          const uSnap = await getDoc(doc(db, "users", user.uid));
-          if (uSnap.exists()) {
-            const ud = uSnap.data() as Record<string, unknown>;
-            empId   = String(ud.employeeId ?? "");
-            empName = String(ud.name       ?? "");
-            empDept = String(ud.department ?? "");
-            // Try to enrich with full employee doc
-            if (empId) {
-              const eSnap = await getDoc(doc(db, "employees", empId));
-              if (eSnap.exists()) {
-                const ed = eSnap.data() as Record<string, unknown>;
-                empName        = String(ed.name        ?? empName);
-                empDept        = String(ed.department  ?? empDept);
-                empDesignation = String(ed.designation ?? "");
-                doj            = String(ed.doj         ?? "");
-              }
-            }
-          }
-        }
-
-        // Strategy 3: last resort — use Firebase Auth display name + uid as empId
-        if (!empId) {
-          empId   = user.uid;
-          empName = user.displayName ?? empEmail.split("@")[0] ?? "";
         }
 
         setProfile({ empId, empName, empDept, empDesignation, empEmail, doj, loading: false });

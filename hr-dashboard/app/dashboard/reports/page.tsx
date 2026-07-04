@@ -92,13 +92,18 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
 
     // ── Attendance ─────────────────────────────────────────────────────────────
     case "attendance": {
+      const today = getToday();
       const [empDocs, attDocs] = await Promise.all([getEmployees(), getAttendance()]);
       const empMap = new Map<string, string>();
       (empDocs as Record<string, unknown>[]).forEach(d => {
         const id = (d.empId ?? d.employeeId) as string;
         if (id) empMap.set(id, (d.name as string) ?? id);
       });
-      const rows = (attDocs as Record<string, unknown>[]).map((d) => {
+      const todayDocs = (attDocs as Record<string, unknown>[]).filter((d) => {
+        const r = d as Record<string, unknown>;
+        return fmtDate((r.date as string) ?? "") === today;
+      });
+      const rows = todayDocs.map((d) => {
         const r = d as Record<string, unknown>;
         return [
           (r.name as string) ?? empMap.get(r.empId as string) ?? "—",
@@ -119,7 +124,7 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
         headers: ["Name", "Emp ID", "Dept", "Date", "Clock In", "Clock Out", "Hours", "Status", "Location", "Late"],
         rows,
         summary: [
-          { label: "Total Records", value: rows.length },
+          { label: "Today's Date", value: today },
           { label: "Present", value: present },
           { label: "Absent", value: absent },
           { label: "Present %", value: rows.length ? `${Math.round(present / rows.length * 100)}%` : "0%" },

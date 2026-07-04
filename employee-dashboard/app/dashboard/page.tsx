@@ -71,18 +71,21 @@ export default function DashboardPage() {
         const eid = snap.data().employeeId as string;
         if (!eid) { setLoading(false); return; }
 
-        // Fetch employee record directly from Firestore
-        const empSnap = await getDoc(doc(db, "employees", eid));
-        if (empSnap.exists()) {
-          const empData = { id: eid, ...empSnap.data() } as EmpRecord;
-          setEmpData(empData);
-          setEmpName(empData.name);
-        }
-
         const today = new Date().toISOString().slice(0, 10);
 
-        // Fetch today's clock record directly from Firestore
-        const clkSnap = await getDoc(doc(db, "attendance", `${today}-${eid}`));
+        // Fan out all 3 reads in parallel — no sequential waiting
+        const [empSnap, clkSnap, lveSnap] = await Promise.all([
+          getDoc(doc(db, "employees", eid)),
+          getDoc(doc(db, "attendance", `${today}-${eid}`)),
+          getDocs(query(collection(db, "leaveRequests"), where("empId", "==", eid))),
+        ]);
+
+        if (empSnap.exists()) {
+          const ed = { id: eid, ...empSnap.data() } as EmpRecord;
+          setEmpData(ed);
+          setEmpName(ed.name);
+        }
+
         if (clkSnap.exists()) {
           const clk = clkSnap.data() as ClockRecord;
           setClockIn(clk.clockIn ?? "");
@@ -91,8 +94,6 @@ export default function DashboardPage() {
           setAttStatus(clk.clockIn ? "Present" : "Absent");
         }
 
-        // Fetch leave stats directly from Firestore
-        const lveSnap = await getDocs(query(collection(db, "leaveRequests"), where("empId", "==", eid)));
         const leaves = lveSnap.docs.map((d) => d.data() as LeaveRequest);
         setPendingLeaves(leaves.filter((l) => l.status === "Pending").length);
         setApprovedLeaves(leaves.filter((l) => l.status === "Approved").length);

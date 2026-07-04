@@ -338,22 +338,20 @@ export default function ProfilePage() {
         let empDoc: Record<string, unknown> | null = null;
         let empId = "";
 
-        // Strategy 1: query employees by email (fastest, most reliable)
-        if (user.email) {
+        // Strategy 1: users/{uid}.employeeId — set explicitly by HR during account creation
+        const profile = await getUserProfile(user.uid).catch(() => null);
+        if (profile?.employeeId) {
+          empId = profile.employeeId;
+          const eSnap = await getDoc(fsDocQ(db, "employees", empId));
+          if (eSnap.exists()) empDoc = { ...eSnap.data(), id: eSnap.id };
+        }
+
+        // Strategy 2: fallback — email lookup in employees collection
+        if (!empId && user.email) {
           const snap = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
           if (!snap.empty) {
             empDoc = { ...snap.docs[0].data(), id: snap.docs[0].id };
             empId  = snap.docs[0].id;
-          }
-        }
-
-        // Strategy 2: users/{uid}.employeeId → get employee doc directly
-        if (!empId) {
-          const profile = await getUserProfile(user.uid).catch(() => null);
-          if (profile?.employeeId) {
-            empId = profile.employeeId;
-            const eSnap = await getDoc(fsDocQ(db, "employees", empId));
-            if (eSnap.exists()) empDoc = { ...eSnap.data(), id: eSnap.id };
           }
         }
 
@@ -692,8 +690,10 @@ export default function ProfilePage() {
         setDocs(prev => [...prev, newDoc]);
         showDocToast(`"${docName}" uploaded successfully!`);
         success = true;
-      } catch {
-        showDocToast("Upload failed — check Firebase Storage rules.");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        showDocToast(`Upload failed: ${msg}`);
+        console.error("[ExtraDocUpload]", err);
       } finally {
         setUploadingSlot(null);
       }
@@ -709,8 +709,10 @@ export default function ProfilePage() {
         setDocs(prev => prev.map(d => d.id === docId ? meta : d));
         showDocToast(`"${meta.name}" uploaded successfully!`);
         success = true;
-      } catch {
-        showDocToast("Upload failed — check Firebase Storage rules.");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        showDocToast(`Upload failed: ${msg}`);
+        console.error("[SlotDocUpload]", err);
       } finally {
         setUploadingSlot(null);
       }
@@ -1043,12 +1045,12 @@ export default function ProfilePage() {
                   <label className="text-xs font-semibold text-gray-700 mb-1 block">
                     Document Name <span className="text-red-400">*</span>
                   </label>
-                  <input
-                    type="text"
+                  <textarea
                     value={extraDocName}
                     onChange={(e) => setExtraDocName(e.target.value)}
                     placeholder="e.g. Experience Letter, Bank Statement…"
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] focus:border-transparent"
+                    rows={2}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] focus:border-transparent resize-none"
                   />
                 </div>
                 <div>

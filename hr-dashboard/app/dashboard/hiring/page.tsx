@@ -5,6 +5,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { getDocs, addDoc, deleteDoc, collection, doc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { JobPosting } from "@/lib/types";
+import { DEPARTMENTS } from "@/lib/constants";
 
 const sourcingChannels: { name: string; percentage: number; count: number; icon: typeof Link2; color: string; iconColor: string; barColor: string }[] = [];
 
@@ -23,7 +24,7 @@ function StatusBadge({ status }: { status: JobPosting["status"] }) {
 
 const defaultForm = {
   title: "",
-  department: "Engineering",
+  department: "Sales",
   status: "Draft" as JobPosting["status"],
 };
 
@@ -265,12 +266,12 @@ export default function HiringPage() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Job Title</label>
-                <input
-                  type="text"
+                <textarea
                   placeholder="e.g. Senior Frontend Engineer"
                   value={form.title}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/20 focus:border-[#4F3CC9]"
+                  rows={2}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/20 focus:border-[#4F3CC9] resize-none"
                 />
               </div>
               <div>
@@ -280,7 +281,7 @@ export default function HiringPage() {
                   onChange={(e) => setForm({ ...form, department: e.target.value })}
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/20 focus:border-[#4F3CC9] bg-white"
                 >
-                  {["Engineering", "Design", "Marketing", "Sales", "HR", "Finance", "Product", "Analytics"].map((d) => (
+                  {DEPARTMENTS.map((d) => (
                     <option key={d}>{d}</option>
                   ))}
                 </select>

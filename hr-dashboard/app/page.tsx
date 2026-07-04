@@ -1,7 +1,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import { Eye, EyeOff, Mail, ArrowLeft } from "lucide-react";
-import { signInWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
+import { signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from "firebase/auth";
 import { collection, query, where, getDocs, doc, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { getUserProfile } from "@/lib/authService";
@@ -61,7 +61,8 @@ export default function LoginPage() {
     try {
       const profile = await getUserProfile(uid);
       if (profile) {
-        window.location.href = profile.role === "admin" ? "/dashboard" : "/employee/dashboard";
+        const isHR = profile.role === "admin" || profile.role === "hr_admin";
+        window.location.href = isHR ? "/dashboard" : "/employee/dashboard";
       } else {
         const signedInEmail = email.trim().toLowerCase();
         const empSnap = await getDocs(
@@ -80,7 +81,11 @@ export default function LoginPage() {
           }).catch(() => {});
           window.location.href = "/employee/dashboard";
         } else {
-          window.location.href = "/employee/dashboard";
+          // No user profile and no employee record — account has been deleted
+          await signOut(auth);
+          setError("Your account has been removed. Please contact your HR administrator.");
+          setLoading(false);
+          return;
         }
       }
     } catch {
@@ -94,24 +99,37 @@ export default function LoginPage() {
     e.preventDefault();
     setResetMsg("");
     setResetStatus("idle");
-    if (!resetEmail.trim()) {
+    const trimmed = resetEmail.trim();
+    if (!trimmed) {
       setResetStatus("error");
       setResetMsg("Please enter your email address.");
       return;
     }
     setResetLoading(true);
     try {
-      await sendPasswordResetEmail(auth, resetEmail.trim());
+      await sendPasswordResetEmail(auth, trimmed, {
+        url: window.location.origin + "/",
+        handleCodeInApp: false,
+      });
       setResetStatus("sent");
-      setResetMsg(`A password reset link has been sent to ${resetEmail.trim()}. Check your inbox (and spam folder).`);
+      setResetMsg(trimmed);
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? "";
-      if (code === "auth/user-not-found" || code === "auth/invalid-email") {
+      if (code === "auth/user-not-found" || code === "auth/invalid-credential") {
         setResetStatus("error");
-        setResetMsg("No account found with this email address.");
+        setResetMsg("No account found with that email address. Please check and try again.");
+      } else if (code === "auth/invalid-email") {
+        setResetStatus("error");
+        setResetMsg("Please enter a valid email address.");
+      } else if (code === "auth/too-many-requests") {
+        setResetStatus("error");
+        setResetMsg("Too many reset attempts. Please wait a few minutes and try again.");
+      } else if (code === "auth/network-request-failed") {
+        setResetStatus("error");
+        setResetMsg("Network error. Please check your connection and try again.");
       } else {
         setResetStatus("error");
-        setResetMsg("Failed to send reset email. Please try again.");
+        setResetMsg(`Could not send reset email. (${code || "unknown error"}) — please try again or contact support.`);
       }
     } finally {
       setResetLoading(false);
@@ -271,16 +289,41 @@ export default function LoginPage() {
               </p>
 
               {resetStatus === "sent" ? (
-                <div className="bg-green-50 border border-green-200 rounded-2xl p-6 text-center">
-                  <div className="text-3xl mb-3">📬</div>
-                  <p className="text-green-700 text-sm font-semibold mb-1">Email sent!</p>
-                  <p className="text-green-600 text-xs leading-relaxed">{resetMsg}</p>
-                  <button
-                    onClick={() => { setView("login"); setResetStatus("idle"); }}
-                    className="mt-5 w-full bg-[#2563EB] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#1d4ed8] transition-colors"
-                  >
-                    Back to sign in
-                  </button>
+                <div className="space-y-4">
+                  <div className="bg-green-50 border border-green-200 rounded-2xl p-5">
+                    <div className="flex items-start gap-3">
+                      <span className="text-2xl leading-none">📬</span>
+                      <div>
+                        <p className="text-green-800 text-sm font-semibold mb-1">Reset link sent!</p>
+                        <p className="text-green-700 text-xs leading-relaxed">
+                          We&apos;ve sent a password reset link to <span className="font-semibold">{resetMsg}</span>.
+                          Open that email and click the link to set a new password.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3">
+                    <p className="text-yellow-800 text-xs font-semibold mb-0.5">⚠️ Don't see the email?</p>
+                    <ul className="text-yellow-700 text-xs space-y-0.5 list-disc list-inside">
+                      <li>Check your <span className="font-medium">Spam / Junk</span> folder</li>
+                      <li>The sender is <span className="font-mono">noreply@hrmanagement-6b903.firebaseapp.com</span></li>
+                      <li>It may take 1–2 minutes to arrive</li>
+                    </ul>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setResetStatus("idle"); setResetMsg(""); }}
+                      className="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                    >
+                      Resend link
+                    </button>
+                    <button
+                      onClick={() => { setView("login"); setResetStatus("idle"); setResetMsg(""); }}
+                      className="flex-1 bg-[#2563EB] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#1d4ed8] transition-colors"
+                    >
+                      Back to sign in
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <form onSubmit={handleForgotPassword} className="space-y-5">

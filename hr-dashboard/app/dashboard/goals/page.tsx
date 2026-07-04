@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { Plus, Search, Eye, Pencil, Trash2, X, Check } from "lucide-react";
-import { getGoals as fsGetGoals, upsertGoal, updateGoal, deleteGoal as fsDeleteGoal, getEmployees } from "@/lib/firebaseService";
+import { getGoals as fsGetGoals, upsertGoal, updateGoal, deleteGoal as fsDeleteGoal, getEmployees, markHRNotifRead } from "@/lib/firebaseService";
+import { DEPARTMENTS } from "@/lib/constants";
 
 type GoalStatus = "Not Started" | "In Progress" | "Completed";
 
@@ -23,7 +24,9 @@ interface Goal {
 }
 
 interface EmpOption { id: string; name: string; department: string; }
-const depts = ["Engineering","HR","Sales","Marketing","Finance","Operations"];
+interface Assignee  { empId: string; name: string; department: string; }
+
+const depts = DEPARTMENTS;
 
 const statusColor: Record<GoalStatus, string> = {
   "Not Started": "bg-gray-100 text-gray-600",
@@ -36,7 +39,9 @@ const progressColor: Record<GoalStatus, string> = {
   Completed:      "bg-green-500",
 };
 
-const blank = { name: "", assignedTo: "", empId: "", department: depts[0], kpi: "", deadline: "", description: "", feedback: "" };
+const blankAssignee = (): Assignee => ({ empId: "", name: "", department: "" });
+const blankAdd = { name: "", assignees: [blankAssignee()], kpi: "", deadline: "", description: "" };
+const blankEdit = { name: "", assignedTo: "", empId: "", department: depts[0], kpi: "", deadline: "", description: "", feedback: "" };
 const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]";
 
 export default function GoalsPage() {
@@ -47,8 +52,9 @@ export default function GoalsPage() {
   const [empList, setEmpList] = useState<EmpOption[]>([]);
 
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm]       = useState({ ...blank });
+  const [form, setForm]       = useState({ ...blankAdd, assignees: [blankAssignee()] });
   const [submitting, setSubmitting] = useState(false);
+  const [empSearch, setEmpSearch]   = useState("");
 
   const [viewGoal, setViewGoal]   = useState<Goal | null>(null);
   const [detailProgress, setDetailProgress] = useState(0);
@@ -56,7 +62,7 @@ export default function GoalsPage() {
   const [detailFeedback, setDetailFeedback] = useState("");
 
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
-  const [editForm, setEditForm] = useState({ ...blank, feedback: "" });
+  const [editForm, setEditForm] = useState({ ...blankEdit });
 
   function showMsg(msg: string) { setToast(msg); setTimeout(() => setToast(null), 3000); }
 
@@ -85,6 +91,9 @@ export default function GoalsPage() {
     } catch { /* ignore */ }
   }, []);
 
+  // Auto-mark all unread goal notifications as read when HR opens this page
+  useEffect(() => { const t = setTimeout(() => markHRNotifRead("goal"), 10000); return () => clearTimeout(t); }, []);
+
   useEffect(() => {
     loadGoals();
     const t = setInterval(loadGoals, 8000);
@@ -103,32 +112,66 @@ export default function GoalsPage() {
   // Deduplicate by id in case concurrent adds created duplicates in state
   const uniqueGoals = goals.filter((g, i, arr) => arr.findIndex((x) => x.id === g.id) === i);
   const filtered = uniqueGoals.filter((g) => {
-    const ms = g.name.toLowerCase().includes(search.toLowerCase()) || g.assignedTo.toLowerCase().includes(search.toLowerCase());
+    const q = search.toLowerCase();
+    const ms = g.name.toLowerCase().includes(q) || g.assignedTo.toLowerCase().includes(q) || g.empId.toLowerCase().includes(q);
     return ms && (statusFilter === "All" || g.status === statusFilter);
   });
 
   async function handleAdd() {
-    if (!form.name.trim() || !form.deadline || !form.empId || submitting) return;
+    const validAssignees = form.assignees.filter((a) => a.empId);
+    if (!form.name.trim() || !form.deadline || validAssignees.length === 0 || submitting) return;
     setSubmitting(true);
     try {
-      const goalId = `goal-${Date.now()}`;
-      await upsertGoal(goalId, {
-        ...form,
-        progress: 0,
-        status: "Not Started",
-        notes: "",
-        feedback: "",
-        assignedOn: new Date().toISOString().slice(0, 10),
-      });
+      const base = Date.now();
+      await Promise.all(
+        validAssignees.map((a, i) =>
+          upsertGoal(`goal-${base}-${i}-${a.empId}`, {
+            name:        form.name,
+            assignedTo:  a.name,
+            empId:       a.empId,
+            department:  a.department || depts[0],
+            kpi:         form.kpi,
+            deadline:    form.deadline,
+            description: form.description,
+            progress:    0,
+            status:      "Not Started",
+            notes:       "",
+            feedback:    "",
+            assignedOn:  new Date().toISOString().slice(0, 10),
+          })
+        )
+      );
       await loadGoals();
-      setForm({ ...blank });
+      setForm({ ...blankAdd, assignees: [blankAssignee()] });
+      setEmpSearch("");
       setShowAdd(false);
-      showMsg(`Goal assigned to ${form.assignedTo}`);
-    } catch (err) {
+      showMsg(
+        validAssignees.length === 1
+          ? `Goal assigned to ${validAssignees[0].name}`
+          : `Goal assigned to ${validAssignees.length} employees`
+      );
+    } catch {
       showMsg("Failed to save goal — check Firestore rules are deployed.");
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function toggleEmpSelection(emp: EmpOption) {
+    setForm((f) => {
+      const isSelected = f.assignees.some((a) => a.empId === emp.id);
+      if (isSelected) {
+        const next = f.assignees.filter((a) => a.empId !== emp.id);
+        return { ...f, assignees: next.length ? next : [blankAssignee()] };
+      } else {
+        const existing = f.assignees.filter((a) => a.empId);
+        return { ...f, assignees: [...existing, { empId: emp.id, name: emp.name, department: emp.department }] };
+      }
+    });
+  }
+
+  function selectAllEmps(list: EmpOption[]) {
+    setForm((f) => ({ ...f, assignees: list.map((e) => ({ empId: e.id, name: e.name, department: e.department })) }));
   }
 
   function openEdit(g: Goal) {
@@ -156,6 +199,7 @@ export default function GoalsPage() {
     const newStatus: GoalStatus = detailProgress === 100 ? "Completed" : detailProgress > 0 ? "In Progress" : "Not Started";
     const newNotes = viewGoal.notes + (detailNote ? `\nHR updated to ${detailProgress}% on ${new Date().toLocaleDateString("en-IN")}` : "");
     await updateGoal(viewGoal.id, { progress: detailProgress, status: newStatus, notes: newNotes, feedback: detailFeedback });
+    markHRNotifRead("goal", viewGoal.empId);
     setGoals((prev) => prev.map((g) => g.id === viewGoal.id ? { ...g, progress: detailProgress, status: newStatus, notes: newNotes, feedback: detailFeedback } : g));
     setViewGoal(null);
     showMsg("Goal progress saved");
@@ -225,7 +269,7 @@ export default function GoalsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
-                {["Goal Name","Assigned To","Department","KPI / Metric","Deadline","Progress","Status","Actions"].map((h) => (
+                {["Goal Name","Emp ID","Assigned To","Department","KPI / Metric","Deadline","Progress","Status","Actions"].map((h) => (
                   <th key={h} className="px-4 py-3 text-left">{h}</th>
                 ))}
               </tr>
@@ -234,6 +278,7 @@ export default function GoalsPage() {
               {filtered.map((g) => (
                 <tr key={g.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 font-medium text-gray-900">{g.name}</td>
+                  <td className="px-4 py-3 text-xs font-mono text-[#4F3CC9] font-semibold">{g.empId || "—"}</td>
                   <td className="px-4 py-3 text-gray-600">{g.assignedTo}</td>
                   <td className="px-4 py-3 text-gray-600">{g.department}</td>
                   <td className="px-4 py-3 text-gray-600 text-xs">{g.kpi}</td>
@@ -259,7 +304,7 @@ export default function GoalsPage() {
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400 text-sm">No goals found</td></tr>
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400 text-sm">No goals found</td></tr>
               )}
             </tbody>
           </table>
@@ -268,45 +313,131 @@ export default function GoalsPage() {
 
       {/* Assign Goal Modal */}
       {showAdd && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowAdd(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-6 border-b">
-              <h2 className="text-lg font-bold">Assign Goal</h2>
-              <button onClick={() => setShowAdd(false)}><X size={20} /></button>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { setShowAdd(false); setEmpSearch(""); }}>
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 border-b shrink-0">
+              <div>
+                <h2 className="text-lg font-bold">Assign Goal</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Assign the same goal to one or more employees</p>
+              </div>
+              <button onClick={() => { setShowAdd(false); setEmpSearch(""); }}><X size={20} /></button>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              {/* Goal Name */}
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Goal Name *</label>
                 <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} placeholder="e.g. Launch Product v3.0" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Assign To *</label>
-                  <select
-                    value={form.empId}
-                    onChange={(e) => {
-                      const emp = empList.find((x) => x.id === e.target.value);
-                      setForm({ ...form, empId: e.target.value, assignedTo: emp?.name ?? "", department: emp?.department || form.department });
-                    }}
-                    className={inputCls}
-                  >
-                    <option value="">— Select Employee —</option>
-                    {empList.map((emp) => (
-                      <option key={emp.id} value={emp.id}>{emp.name} ({emp.id})</option>
-                    ))}
-                  </select>
+
+              {/* Assignees — multi-select with checkboxes */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
+                    Assign To *
+                    {form.assignees.filter((a) => a.empId).length > 0 && (
+                      <span className="bg-[#4F3CC9] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {form.assignees.filter((a) => a.empId).length} selected
+                      </span>
+                    )}
+                  </label>
+                  <div className="flex gap-3">
+                    <button type="button"
+                      onClick={() => {
+                        const visible = empList.filter((e) =>
+                          !empSearch || e.name.toLowerCase().includes(empSearch.toLowerCase()) ||
+                          e.id.toLowerCase().includes(empSearch.toLowerCase()) ||
+                          e.department.toLowerCase().includes(empSearch.toLowerCase())
+                        );
+                        selectAllEmps(visible);
+                      }}
+                      className="text-xs text-[#4F3CC9] font-medium hover:underline">
+                      Select All
+                    </button>
+                    {form.assignees.some((a) => a.empId) && (
+                      <button type="button"
+                        onClick={() => setForm((f) => ({ ...f, assignees: [blankAssignee()] }))}
+                        className="text-xs text-gray-400 hover:underline">
+                        Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
-                  <select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} className={inputCls}>
-                    {depts.map((d) => <option key={d}>{d}</option>)}
-                  </select>
+
+                {/* Selected chips */}
+                {form.assignees.filter((a) => a.empId).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {form.assignees.filter((a) => a.empId).map((a) => (
+                      <span key={a.empId} className="flex items-center gap-1 bg-[#EDE9FF] text-[#4F3CC9] text-xs px-2 py-1 rounded-full font-medium">
+                        {a.name}
+                        <button
+                          onClick={() => setForm((f) => {
+                            const next = f.assignees.filter((x) => x.empId !== a.empId);
+                            return { ...f, assignees: next.length ? next : [blankAssignee()] };
+                          })}
+                          className="hover:text-red-500 ml-0.5">
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Search */}
+                <div className="relative mb-2">
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    placeholder="Search by name, ID or department…"
+                    value={empSearch}
+                    onChange={(e) => setEmpSearch(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
+                  />
+                </div>
+
+                {/* Scrollable checkbox list — only shown when user types */}
+                <div className="border border-gray-200 rounded-xl max-h-44 overflow-y-auto">
+                  {!empSearch.trim() ? (
+                    <div className="px-4 py-6 text-center text-xs text-gray-400">
+                      Type a name or employee ID to search
+                    </div>
+                  ) : (() => {
+                    const results = empList.filter((e) =>
+                      e.name.toLowerCase().includes(empSearch.toLowerCase()) ||
+                      e.id.toLowerCase().includes(empSearch.toLowerCase()) ||
+                      e.department.toLowerCase().includes(empSearch.toLowerCase())
+                    );
+                    if (results.length === 0) return (
+                      <div className="px-4 py-6 text-center text-xs text-gray-400">No employees found</div>
+                    );
+                    return results.map((emp) => {
+                      const checked = form.assignees.some((a) => a.empId === emp.id);
+                      return (
+                        <label key={emp.id}
+                          className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${checked ? "bg-[#FDFCFF]" : "hover:bg-gray-50"}`}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleEmpSelection(emp)}
+                            className="accent-[#4F3CC9] w-4 h-4 shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">{emp.name}</p>
+                            <p className="text-xs text-gray-400 truncate">{emp.id} · {emp.department}</p>
+                          </div>
+                          {checked && <Check size={13} className="text-[#4F3CC9] shrink-0" />}
+                        </label>
+                      );
+                    });
+                  })()}
                 </div>
               </div>
+
+              {/* Description */}
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Description</label>
                 <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className={`${inputCls} h-20 resize-none`} placeholder="Describe the goal..." />
               </div>
+
+              {/* KPI + Deadline */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">KPI / Success Metric</label>
@@ -317,8 +448,19 @@ export default function GoalsPage() {
                   <input type="date" value={form.deadline} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setForm({ ...form, deadline: e.target.value })} className={inputCls} />
                 </div>
               </div>
-              <button onClick={handleAdd} disabled={!form.name.trim() || !form.deadline || !form.empId || submitting} className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold disabled:opacity-50 hover:bg-[#3d2fa3]">
-                {submitting ? "Assigning…" : "Assign Goal"}
+            </div>
+
+            <div className="p-6 pt-0 shrink-0">
+              <button
+                onClick={handleAdd}
+                disabled={!form.name.trim() || !form.deadline || form.assignees.every((a) => !a.empId) || submitting}
+                className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold disabled:opacity-50 hover:bg-[#3d2fa3]"
+              >
+                {submitting
+                  ? "Assigning…"
+                  : form.assignees.filter((a) => a.empId).length > 1
+                    ? `Assign to ${form.assignees.filter((a) => a.empId).length} Employees`
+                    : "Assign Goal"}
               </button>
             </div>
           </div>

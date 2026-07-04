@@ -5,7 +5,7 @@ import { collection, query, where, getDocs, getDoc, doc } from "firebase/firesto
 import { auth, db } from "@/lib/firebase";
 import {
   IndianRupee, TrendingUp, Clock, CheckCircle, Download,
-  Eye, EyeOff, CreditCard, Info, Loader2,
+  Eye, EyeOff, CreditCard, Info, Loader2, X,
 } from "lucide-react";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ export default function CompensationPage() {
     return fyLabel(fyStartYear(now.getMonth() + 1, now.getFullYear()) + 1);
   });
   const [masked,    setMasked]    = useState(false);
-  const [slipModal, setSlipModal] = useState<string | null>(null); // holds HTML for iframe overlay
+  const [slipModal, setSlipModal] = useState<PaySlip | null>(null);
 
   // ── Firebase load ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -155,13 +155,35 @@ export default function CompensationPage() {
         let empName    = "";
         let info: EmployeeInfo = { name: "", designation: "", department: "", joinDate: "", empType: "Full-Time" };
 
-        // 1. Resolve from employees collection by email
-        if (user.email) {
+        // 1. Primary: users/{uid}.employeeId — set explicitly by HR during account creation
+        const uSnap = await getDoc(doc(db, "users", user.uid));
+        if (uSnap.exists()) {
+          const ud = uSnap.data() as Record<string, unknown>;
+          resolvedId = String(ud.employeeId ?? "");
+          if (!empName) empName = String(ud.name ?? ud.displayName ?? "");
+          if (resolvedId) {
+            const eSnap = await getDoc(doc(db, "employees", resolvedId));
+            if (eSnap.exists()) {
+              const ed = eSnap.data() as Record<string, unknown>;
+              empName = String(ed.name ?? empName);
+              info = {
+                name:        empName,
+                designation: String(ed.designation ?? ""),
+                department:  String(ed.department ?? ""),
+                joinDate:    String(ed.joiningDate ?? ed.startDate ?? ""),
+                empType:     String(ed.workMode ?? ed.employmentType ?? "Full-Time"),
+              };
+            }
+          }
+        }
+
+        // 2. Fallback: email lookup in employees collection (only if users doc has no employeeId)
+        if (!resolvedId && user.email) {
           const es = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
           if (!es.empty) {
             const ed = es.docs[0].data() as Record<string, unknown>;
             resolvedId = es.docs[0].id;
-            empName    = String(ed.name ?? "");
+            empName    = empName || String(ed.name ?? "");
             info = {
               name:        empName,
               designation: String(ed.designation ?? ""),
@@ -169,32 +191,6 @@ export default function CompensationPage() {
               joinDate:    String(ed.joiningDate ?? ed.startDate ?? ""),
               empType:     String(ed.workMode ?? ed.employmentType ?? "Full-Time"),
             };
-          }
-        }
-
-        // 2. Fallback: resolve from users/{uid}
-        if (!resolvedId) {
-          const uSnap = await getDoc(doc(db, "users", user.uid));
-          if (uSnap.exists()) {
-            const ud = uSnap.data() as Record<string, unknown>;
-            resolvedId = String(ud.employeeId ?? "");
-            if (!empName) empName = String(ud.name ?? ud.displayName ?? "");
-            if (!info.name) info.name = empName;
-            // If we have an employee doc ID, also load full employee info
-            if (resolvedId && !info.designation) {
-              const eSnap = await getDoc(doc(db, "employees", resolvedId));
-              if (eSnap.exists()) {
-                const ed = eSnap.data() as Record<string, unknown>;
-                empName    = String(ed.name ?? empName);
-                info = {
-                  name:        empName,
-                  designation: String(ed.designation ?? ""),
-                  department:  String(ed.department ?? ""),
-                  joinDate:    String(ed.joiningDate ?? ed.startDate ?? ""),
-                  empType:     String(ed.workMode ?? ed.employmentType ?? "Full-Time"),
-                };
-              }
-            }
           }
         }
 
@@ -296,12 +292,6 @@ export default function CompensationPage() {
       ? `<script>window.addEventListener('load',function(){setTimeout(function(){window.print();},400);});</script>`
       : ``;
 
-    const logoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80" fill="none" style="height:52px;display:block;">
-  <rect x="0" y="4" width="72" height="72" rx="12" ry="12" fill="#CC2222"/>
-  <text x="36" y="57" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="46" fill="white" text-anchor="middle" letter-spacing="-2">w</text>
-  <text x="90" y="56" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="44" fill="#1B2B6B" letter-spacing="1">WOWAYS</text>
-</svg>`;
-
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -315,14 +305,17 @@ export default function CompensationPage() {
     .page { max-width: 860px; margin: 20px auto; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.10); }
 
     /* ── Header ── */
-    .header { display: flex; align-items: center; justify-content: space-between; padding: 20px 28px; border-bottom: 3px solid #CC2222; }
-    .header-addr { text-align: right; font-size: 11px; color: #444; line-height: 1.6; }
-    .header-addr strong { font-size: 12px; color: #1B2B6B; }
+    .header { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; border-bottom: 1px solid #e5e7eb; }
+    .logo { font-size: 28px; font-weight: 900; letter-spacing: -1px; line-height: 1; }
+    .logo .wo { color: #0B1929; }
+    .logo .ways { color: #14B8A6; }
+    .header-addr { text-align: right; font-size: 10px; color: #6b7280; line-height: 1.6; }
+    .header-addr strong { font-size: 11px; color: #374151; display: block; margin-bottom: 2px; }
 
-    /* ── Title Banner ── */
-    .banner { background: linear-gradient(135deg, #1B2B6B 0%, #2a3f8f 100%); color: #fff; text-align: center; padding: 12px 20px; }
-    .banner h2 { font-size: 16px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
-    .banner p  { font-size: 11px; color: #c5cde8; margin-top: 2px; }
+    /* ── Title Bar ── */
+    .title-bar { background: #0d1b2a; color: #fff; padding: 12px 28px; display: flex; align-items: center; justify-content: space-between; }
+    .title-bar .label { font-size: 15px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .title-bar .month { font-size: 13px; font-weight: 500; opacity: .8; }
 
     /* ── Employee Info ── */
     .emp-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0; border-bottom: 1px solid #e0e4ef; }
@@ -375,18 +368,18 @@ export default function CompensationPage() {
 
     <!-- Header -->
     <div class="header">
-      ${logoSvg}
+      <div class="logo"><span class="wo">WO</span><span class="ways">WAYS</span></div>
       <div class="header-addr">
-        <strong>Woways Technologies Pvt. Ltd.</strong><br>
+        <strong>Woways Technologies Pvt. Ltd.</strong>
         Plot No 5, East Wing, Ground Floor, Financial District,<br>
         Nanakramguda, Serilingampalle (M), Hyderabad – 500032, Telangana, India
       </div>
     </div>
 
-    <!-- Banner -->
-    <div class="banner">
-      <h2>Salary Slip</h2>
-      <p>${slip.period}</p>
+    <!-- Title Bar -->
+    <div class="title-bar">
+      <span class="label">Salary Slip</span>
+      <span class="month">${slip.period}</span>
     </div>
 
     <!-- Employee Info -->
@@ -456,15 +449,14 @@ export default function CompensationPage() {
 </html>`;
   }
 
-  // View → iframe overlay (no popup blocker issues)
   function viewSlipWindow(slip: PaySlip) {
-    setSlipModal(buildSlipHtml(slip, false));
+    setSlipModal(slip);
   }
 
   // Download salary slip as HTML file directly to the downloads folder
   function downloadSlip(slip: PaySlip) {
     const html = buildSlipHtml(slip, false);
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([html], { type: "application/octet-stream" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
@@ -618,39 +610,107 @@ export default function CompensationPage() {
         </table>
       </div>
 
-      {/* Payslip iframe overlay */}
-      {slipModal && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/60 backdrop-blur-sm">
-          {/* Top bar */}
-          <div className="flex items-center justify-between bg-white border-b border-gray-200 px-5 py-3 shrink-0">
-            <span className="font-semibold text-gray-800 text-sm">Salary Slip Preview</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  const frame = document.getElementById("slip-iframe") as HTMLIFrameElement;
-                  frame?.contentWindow?.print();
-                }}
-                className="flex items-center gap-1.5 bg-[#4F3CC9] text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-[#3d2fa3] transition-colors"
-              >
-                🖨 Print / Save PDF
-              </button>
-              <button
-                onClick={() => setSlipModal(null)}
-                className="text-gray-500 hover:text-gray-800 text-xs border border-gray-200 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                ✕ Close
-              </button>
+      {/* Payslip Card Modal */}
+      {slipModal && (() => {
+        const slip = slipModal;
+        const gross = slip.earnings.reduce((s, e) => s + e.amount, 0);
+        const payStatusColor: Record<string, string> = {
+          Paid: "bg-green-100 text-green-700",
+          Pending: "bg-yellow-100 text-yellow-700",
+          Processing: "bg-blue-100 text-blue-700",
+        };
+        return (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setSlipModal(null)}>
+            <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b">
+                <div>
+                  <h2 className="text-base font-bold text-gray-900">Payslip — {slip.empName}</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">{slip.empId} · {slip.designation} · {slip.period}</p>
+                </div>
+                <button onClick={() => setSlipModal(null)}><X size={20} /></button>
+              </div>
+              <div className="p-6">
+                <div className="border border-gray-100 rounded-2xl overflow-hidden shadow-sm">
+                  <div className="bg-gradient-to-br from-[#f5f3ff] to-[#f0fdfa] px-8 py-6 border-b border-gray-100 text-center">
+                    <div className="flex items-center justify-center leading-none mb-1.5">
+                      <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
+                      <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
+                    </div>
+                    <p className="text-xs text-gray-400">Salary Slip for {slip.period}</p>
+                  </div>
+                  <div className="px-8 py-5 bg-gray-50/60 border-b border-gray-100">
+                    <div className="grid grid-cols-2 gap-x-10 gap-y-4">
+                      {[
+                        { label: "Employee Name", value: slip.empName },
+                        { label: "Employee ID",   value: slip.empId },
+                        { label: "Designation",   value: slip.designation || "—" },
+                        { label: "Emp Type",      value: slip.empType },
+                      ].map(({ label, value }) => (
+                        <div key={label}>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">{label}</p>
+                          <p className="text-sm font-semibold text-gray-900">{value}</p>
+                        </div>
+                      ))}
+                      <div>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Payment Status</p>
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${payStatusColor[slip.paymentStatus] ?? "bg-gray-100 text-gray-600"}`}>{slip.paymentStatus}</span>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Payment Date</p>
+                        <p className="text-sm font-semibold text-gray-900">{slip.paymentDate || "—"}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 divide-x divide-gray-100">
+                    <div className="px-7 py-5">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Earnings</p>
+                      <div className="space-y-2.5 text-sm">
+                        {slip.earnings.map((e) => (
+                          <div key={e.label} className="flex justify-between">
+                            <span className="text-gray-500">{e.label}</span>
+                            <span className="font-semibold text-gray-900">₹{e.amount.toLocaleString("en-IN")}</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between font-bold border-t border-gray-100 pt-2.5 mt-1 text-gray-900">
+                          <span>Gross Total</span><span>₹{gross.toLocaleString("en-IN")}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="px-7 py-5">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Deductions</p>
+                      <div className="space-y-2.5 text-sm">
+                        {slip.deductions.length > 0
+                          ? slip.deductions.map((d) => (
+                              <div key={d.label} className="flex justify-between">
+                                <span className="text-gray-500">{d.label}</span>
+                                <span className="font-semibold text-red-500">₹{d.amount.toLocaleString("en-IN")}</span>
+                              </div>
+                            ))
+                          : <p className="text-xs text-gray-400 py-1">No deductions this month</p>}
+                        <div className="flex justify-between font-bold border-t border-gray-100 pt-2.5 mt-1">
+                          <span className="text-gray-900">Total</span>
+                          <span className="text-red-500">₹{slip.deduction.toLocaleString("en-IN")}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-8 py-5 bg-[#EDE9FF]/50 border-t border-[#4F3CC9]/10 flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Net Pay</p>
+                      <p className="text-2xl font-black text-[#4F3CC9]">₹{slip.totalPay.toLocaleString("en-IN")}</p>
+                    </div>
+                    <button
+                      onClick={() => downloadSlip(slip)}
+                      className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-[#3d2fa8] transition-colors shadow-sm">
+                      <Download size={14} /> Download Payslip
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-          {/* Full-screen iframe */}
-          <iframe
-            id="slip-iframe"
-            srcDoc={slipModal}
-            className="flex-1 w-full border-none bg-white"
-            title="Salary Slip"
-          />
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

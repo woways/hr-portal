@@ -1,13 +1,15 @@
 "use client";
 import { useState, useEffect } from "react";
+import { markHRNotifRead } from "@/lib/firebaseService";
 import { onAuthStateChanged } from "firebase/auth";
 import {
-  collection, query, onSnapshot, updateDoc, doc, addDoc,
+  collection, query, onSnapshot, updateDoc, doc, addDoc, getDoc, setDoc,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import {
   MessageSquare, AlertTriangle, CheckCircle, Clock,
-  ChevronRight, Wifi, Loader2, X, Send,
+  ChevronRight, Wifi, Loader2, X, Send, Phone, Mail, MapPin, Save,
+  FileText,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -16,17 +18,18 @@ type QueryStatus = "Open" | "In Progress" | "Resolved";
 type QueryType   = "query" | "report";
 
 interface HelpQuery {
-  id:          string;
-  empId:       string;
-  empName:     string;
-  subject:     string;
-  category:    string;
-  description: string;
-  type:        QueryType;
-  status:      QueryStatus;
-  raisedOn:    string;
-  hrResponse:  string;
-  updatedAt:   string;
+  id:             string;
+  empId:          string;
+  empName:        string;
+  subject:        string;
+  category:       string;
+  description:    string;
+  type:           QueryType;
+  status:         QueryStatus;
+  raisedOn:       string;
+  hrResponse:     string;
+  updatedAt:      string;
+  attachmentUrls?: string[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -44,8 +47,21 @@ function StatusBadge({ status }: { status: QueryStatus }) {
   return <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium"><ChevronRight size={11}/> Open</span>;
 }
 
-const TABS = ["All", "Open", "In Progress", "Resolved"] as const;
+const TABS = ["All", "Open", "In Progress", "Resolved", "Contact HR"] as const;
 type Tab = typeof TABS[number];
+
+interface ContactForm {
+  hrName:      string;
+  hrTitle:     string;
+  email:       string;
+  phone:       string;
+  officeHours: string;
+  address:     string;
+}
+
+const blankContact = (): ContactForm => ({
+  hrName: "", hrTitle: "", email: "", phone: "", officeHours: "", address: "",
+});
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -53,11 +69,21 @@ export default function HRHelpPage() {
   const [ready,       setReady]       = useState(false);
   const [queries,     setQueries]     = useState<HelpQuery[]>([]);
   const [activeTab,   setActiveTab]   = useState<Tab>("All");
+  const [clearedIds,  setClearedIds]  = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("hr_help_cleared_ids") ?? "[]")); }
+    catch { return new Set(); }
+  });
   const [responses,   setResponses]   = useState<Record<string, string>>({});
   const [statuses,    setStatuses]    = useState<Record<string, QueryStatus>>({});
   const [submitting,  setSubmitting]  = useState<Record<string, boolean>>({});
-  const [viewQuery,   setViewQuery]   = useState<HelpQuery | null>(null);
-  const [toast,       setToast]       = useState<{ msg: string; ok: boolean } | null>(null);
+  const [viewQuery,      setViewQuery]      = useState<HelpQuery | null>(null);
+  const [toast,          setToast]          = useState<{ msg: string; ok: boolean } | null>(null);
+  const [contactForm,    setContactForm]    = useState<ContactForm>(blankContact());
+  const [contactLoading, setContactLoading] = useState(true);
+  const [contactSaving,  setContactSaving]  = useState(false);
+
+  // Auto-mark all unread help notifications as read when HR opens this page
+  useEffect(() => { const t = setTimeout(() => { markHRNotifRead("query"); markHRNotifRead("system"); }, 10000); return () => clearTimeout(t); }, []);
 
   // ── Real-time listener — ALL help queries ─────────────────────────────────
   useEffect(() => {
@@ -78,8 +104,9 @@ export default function HRHelpPage() {
             type:        (r.type ?? "query")    as QueryType,
             status:      (r.status ?? "Open")   as QueryStatus,
             raisedOn:    String(r.raisedOn      ?? r.createdAt ?? ""),
-            hrResponse:  String(r.hrResponse    ?? ""),
-            updatedAt:   String(r.updatedAt     ?? r.createdAt ?? ""),
+            hrResponse:     String(r.hrResponse    ?? ""),
+            updatedAt:      String(r.updatedAt     ?? r.createdAt ?? ""),
+            attachmentUrls: Array.isArray(r.attachmentUrls) ? r.attachmentUrls as string[] : [],
           };
         });
         setQueries(docs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
@@ -94,6 +121,44 @@ export default function HRHelpPage() {
   function showToast(msg: string, ok = true) {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 3500);
+  }
+
+  // ── Load contact settings ─────────────────────────────────────────────────
+  useEffect(() => {
+    getDoc(doc(db, "settings", "company")).then((snap) => {
+      if (snap.exists()) {
+        const d = snap.data() as Record<string, unknown>;
+        setContactForm({
+          hrName:      String(d.hrName      ?? ""),
+          hrTitle:     String(d.hrTitle     ?? ""),
+          email:       String(d.hrEmail     ?? d.email       ?? ""),
+          phone:       String(d.hrPhone     ?? d.phone       ?? ""),
+          officeHours: String(d.officeHours ?? d.workHours   ?? ""),
+          address:     String(d.address     ?? ""),
+        });
+      }
+      setContactLoading(false);
+    }).catch(() => setContactLoading(false));
+  }, []);
+
+  async function saveContactSettings() {
+    setContactSaving(true);
+    try {
+      await setDoc(doc(db, "settings", "company"), {
+        hrName:      contactForm.hrName.trim(),
+        hrTitle:     contactForm.hrTitle.trim(),
+        hrEmail:     contactForm.email.trim(),
+        hrPhone:     contactForm.phone.trim(),
+        officeHours: contactForm.officeHours.trim(),
+        address:     contactForm.address.trim(),
+        updatedAt:   new Date().toISOString(),
+      }, { merge: true });
+      showToast("Contact details saved. Employees can now see them.");
+    } catch {
+      showToast("Failed to save. Check your connection.", false);
+    } finally {
+      setContactSaving(false);
+    }
   }
 
   // ── Submit HR response ────────────────────────────────────────────────────
@@ -138,6 +203,15 @@ export default function HRHelpPage() {
     return q.status === activeTab;
   });
 
+  const visibleFiltered = filtered.filter(q => !clearedIds.has(q.id));
+
+  function clearAll() {
+    const ids = filtered.map(q => q.id);
+    const next = new Set([...clearedIds, ...ids]);
+    setClearedIds(next);
+    try { localStorage.setItem("hr_help_cleared_ids", JSON.stringify([...next])); } catch { /* ignore */ }
+  }
+
   const openCount       = queries.filter(q => q.status === "Open").length;
   const inProgressCount = queries.filter(q => q.status === "In Progress").length;
   const resolvedCount   = queries.filter(q => q.status === "Resolved").length;
@@ -163,8 +237,8 @@ export default function HRHelpPage() {
         </span>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Summary Cards — hidden on Contact HR tab */}
+      {activeTab !== "Contact HR" && <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: "Total Queries",  value: queries.length, color: "bg-purple-50 border-purple-100 text-purple-700" },
           { label: "Open",           value: openCount,       color: "bg-yellow-50 border-yellow-100 text-yellow-700" },
@@ -176,10 +250,10 @@ export default function HRHelpPage() {
             <p className="text-sm mt-1 opacity-80">{c.label}</p>
           </div>
         ))}
-      </div>
+      </div>}
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-gray-100">
+      <div className="flex items-center gap-1 border-b border-gray-100">
         {TABS.map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             className={`px-5 py-2.5 text-sm font-medium transition-all relative whitespace-nowrap ${activeTab === tab ? "text-[#4F3CC9]" : "text-gray-500 hover:text-gray-700"}`}>
@@ -187,15 +261,128 @@ export default function HRHelpPage() {
             {activeTab === tab && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#4F3CC9] rounded-t-full"/>}
           </button>
         ))}
+        <div className="ml-auto px-4">
+          {activeTab !== "Contact HR" && visibleFiltered.length > 0 && (
+            <button onClick={clearAll} className="text-xs font-medium text-red-400 hover:text-red-600">
+              Clear All
+            </button>
+          )}
+        </div>
       </div>
 
+      {/* Contact HR Settings */}
+      {activeTab === "Contact HR" && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-9 h-9 rounded-xl bg-[#EDE9FF] flex items-center justify-center">
+              <Phone size={18} className="text-[#4F3CC9]"/>
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-gray-900">HR Contact Details</h2>
+              <p className="text-xs text-gray-400 mt-0.5">These details are shown to employees in the Help &amp; Support &rarr; Contact HR section</p>
+            </div>
+          </div>
+          {contactLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 size={22} className="animate-spin text-[#4F3CC9]"/>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Mail size={12}/> HR Contact Name
+                </label>
+                <textarea
+                  placeholder="e.g. Priya Sharma"
+                  value={contactForm.hrName}
+                  onChange={e => setContactForm(f => ({ ...f, hrName: e.target.value }))}
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#4F3CC9] focus:ring-1 focus:ring-[#4F3CC9]/20 resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Mail size={12}/> Designation / Department
+                </label>
+                <textarea
+                  placeholder="e.g. HR Manager"
+                  value={contactForm.hrTitle}
+                  onChange={e => setContactForm(f => ({ ...f, hrTitle: e.target.value }))}
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#4F3CC9] focus:ring-1 focus:ring-[#4F3CC9]/20 resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Mail size={12}/> Email Address
+                </label>
+                <input
+                  type="email"
+                  placeholder="hr@company.com"
+                  value={contactForm.email}
+                  onChange={e => setContactForm(f => ({ ...f, email: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#4F3CC9] focus:ring-1 focus:ring-[#4F3CC9]/20"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Phone size={12}/> Phone / WhatsApp
+                </label>
+                <input
+                  type="tel"
+                  placeholder="+91 98765 43210"
+                  value={contactForm.phone}
+                  onChange={e => setContactForm(f => ({ ...f, phone: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#4F3CC9] focus:ring-1 focus:ring-[#4F3CC9]/20"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Clock size={12}/> Office Hours
+                </label>
+                <textarea
+                  placeholder="Mon–Fri, 9:00 AM – 6:00 PM"
+                  value={contactForm.officeHours}
+                  onChange={e => setContactForm(f => ({ ...f, officeHours: e.target.value }))}
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#4F3CC9] focus:ring-1 focus:ring-[#4F3CC9]/20 resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <MapPin size={12}/> Office Address
+                </label>
+                <textarea
+                  placeholder="Floor 3, Building A, City"
+                  value={contactForm.address}
+                  onChange={e => setContactForm(f => ({ ...f, address: e.target.value }))}
+                  rows={3}
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#4F3CC9] focus:ring-1 focus:ring-[#4F3CC9]/20 resize-none"
+                />
+              </div>
+            </div>
+          )}
+          {!contactLoading && (
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+              <p className="text-xs text-gray-400">Changes are immediately visible to all employees.</p>
+              <button
+                onClick={saveContactSettings}
+                disabled={contactSaving}
+                className="flex items-center gap-2 px-5 py-2.5 bg-[#4F3CC9] text-white text-sm font-medium rounded-xl hover:bg-[#3d2fa3] disabled:opacity-60 transition-colors">
+                {contactSaving ? <><Loader2 size={14} className="animate-spin"/> Saving…</> : <><Save size={14}/> Save Details</>}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Queries Table */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      {activeTab !== "Contact HR" && <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         {!ready ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 size={24} className="animate-spin text-[#4F3CC9]"/>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : visibleFiltered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400">
             <MessageSquare size={36} className="mb-3 text-gray-200"/>
             <p className="text-sm font-medium text-gray-500">No queries in this category</p>
@@ -212,7 +399,7 @@ export default function HRHelpPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filtered.map(q => (
+                {visibleFiltered.map(q => (
                   <tr key={q.id} className={`hover:bg-[#F5F3FF]/50 transition-colors ${q.status === "Open" && !q.hrResponse ? "bg-yellow-50/30" : ""}`}>
                     <td className="px-5 py-4">
                       <div>
@@ -224,6 +411,9 @@ export default function HRHelpPage() {
                       <button onClick={() => setViewQuery(q)} className="text-sm font-medium text-[#4F3CC9] hover:underline text-left truncate block max-w-[180px]" title={q.subject}>
                         {q.subject}
                       </button>
+                      {q.attachmentUrls && q.attachmentUrls.length > 0 && (
+                        <span className="ml-1 text-xs text-gray-400">📎{q.attachmentUrls.length}</span>
+                      )}
                     </td>
                     <td className="px-5 py-4">
                       <span className="px-2.5 py-0.5 rounded-full bg-[#EDE9FF] text-[#4F3CC9] text-xs font-medium whitespace-nowrap">{q.category}</span>
@@ -252,13 +442,14 @@ export default function HRHelpPage() {
                       {q.status === "Resolved" ? (
                         <span className="text-xs text-gray-600">{q.hrResponse || "—"}</span>
                       ) : (
-                        <div className="flex gap-2 items-center">
-                          <input
-                            placeholder={q.hrResponse ? "Update response…" : "Type your response…"}
+                        <div className="flex gap-2 items-start">
+                          <textarea
+                            placeholder={q.hrResponse ? "Update response… (Shift+Enter to send)" : "Type your response… (Shift+Enter to send)"}
                             value={responses[q.id] ?? ""}
                             onChange={e => setResponses(r => ({ ...r, [q.id]: e.target.value }))}
-                            className="flex-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-[#4F3CC9] min-w-[140px]"
-                            onKeyDown={e => { if (e.key === "Enter") respondToQuery(q); }}
+                            rows={2}
+                            className="flex-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-[#4F3CC9] min-w-[140px] resize-none"
+                            onKeyDown={e => { if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); respondToQuery(q); } }}
                           />
                           <button
                             onClick={() => respondToQuery(q)}
@@ -277,7 +468,7 @@ export default function HRHelpPage() {
             </table>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* View Query Detail Modal */}
       {viewQuery && (
@@ -312,6 +503,27 @@ export default function HRHelpPage() {
                   {viewQuery.description || "No description provided."}
                 </div>
               </div>
+              {viewQuery.attachmentUrls && viewQuery.attachmentUrls.length > 0 && (
+                <div>
+                  <p className="text-xs text-gray-400 mb-2">Attachments ({viewQuery.attachmentUrls.length})</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {viewQuery.attachmentUrls.map((url, i) => {
+                      const isImage = url.match(/\.(jpg|jpeg|png|gif|webp)/i) || url.includes("image");
+                      return isImage ? (
+                        <a key={i} href={url} target="_blank" rel="noreferrer" className="block rounded-xl overflow-hidden border border-gray-100 hover:border-[#4F3CC9] transition-colors">
+                          <img src={url} alt={`Attachment ${i+1}`} className="w-full h-20 object-cover"/>
+                        </a>
+                      ) : (
+                        <a key={i} href={url} target="_blank" rel="noreferrer"
+                          className="flex items-center gap-2 bg-[#F5F3FF] rounded-xl px-3 py-2 hover:bg-[#EDE9FF] transition-colors">
+                          <FileText size={14} className="text-[#4F3CC9] shrink-0"/>
+                          <span className="text-xs text-[#4F3CC9] font-medium truncate">File {i+1}</span>
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {viewQuery.hrResponse && (
                 <div>
                   <p className="text-xs text-gray-400 mb-1">Previous HR Response</p>

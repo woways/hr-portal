@@ -68,11 +68,17 @@ export default function LeavePage() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) { setLoading(false); return; }
       try {
-        // Resolve empId
+        // Resolve empId: users/{uid}.employeeId first, employees email lookup as fallback
         let id = "";
-        const userSnap = await getDocs(query(collection(db, "users"), where("email", "==", user.email)));
-        if (!userSnap.empty) id = (userSnap.docs[0].data().employeeId as string) ?? "";
-        if (!id) id = user.uid;
+        const uSnap = await getDoc(doc(db, "users", user.uid));
+        if (uSnap.exists()) {
+          id = String(uSnap.data().employeeId ?? "");
+        }
+        if (!id && user.email) {
+          const emailSnap = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
+          if (!emailSnap.empty) id = emailSnap.docs[0].id;
+        }
+        if (!id) { setLoading(false); return; }
         setEmpId(id);
 
         // Load employee name for leave submission payload
@@ -117,8 +123,9 @@ export default function LeavePage() {
             appliedOn: String(r.appliedOn ?? ""),
           } as LeaveRequest;
         });
+        // Extra guard: only show requests that truly belong to this employee
         loaded.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn));
-        setRequests(loaded);
+        setRequests(loaded.filter(r => r.empId === id));
       } catch { /* ignore */ }
       setLoading(false);
     });

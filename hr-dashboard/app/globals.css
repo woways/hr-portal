@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Enable class-based dark mode for Tailwind v4 dark: utilities */
+@custom-variant dark (&:where(.dark, .dark *));
+
 body {
   background-color: #F5F3FF;
   font-family: 'Inter', sans-serif;
@@ -8,3 +11,99 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #f1f1f1; }
 ::-webkit-scrollbar-thumb { background: #c4b5fd; border-radius: 3px; }
+
+/* ── Dark mode overrides ──────────────────────────────────────────────────── */
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark body {
+  background-color: #0d0d1f;
+  color: #e2e8f0;
+}
+
+/* Layout surfaces */
+html.dark aside {
+  background-color: #13132a !important;
+  border-color: #252545 !important;
+}
+
+html.dark main {
+  background-color: #0d0d1f;
+}
+
+/* White card / panel surfaces */
+html.dark .bg-white {
+  background-color: #1a1a35 !important;
+}
+
+html.dark .bg-gray-50 {
+  background-color: #141428 !important;
+}
+
+html.dark .bg-gray-100 {
+  background-color: #1e1e38 !important;
+}
+
+/* Purple-tinted backgrounds (#F5F3FF used for table headers, hover states) */
+html.dark .bg-\[\#F5F3FF\] {
+  background-color: #1e1e38 !important;
+}
+
+/* Lighter purple tint (#EDE9FF used for active nav, badges, avatars) */
+html.dark .bg-\[\#EDE9FF\] {
+  background-color: #252545 !important;
+}
+
+/* Text colours */
+html.dark .text-gray-900 { color: #f1f5f9 !important; }
+html.dark .text-gray-800 { color: #e2e8f0 !important; }
+html.dark .text-gray-700 { color: #cbd5e1 !important; }
+html.dark .text-gray-600 { color: #94a3b8 !important; }
+html.dark .text-gray-500 { color: #64748b !important; }
+html.dark .text-\[\#0B1929\] { color: #f1f5f9 !important; }
+
+/* Borders and dividers */
+html.dark .border-gray-100  { border-color: #252545 !important; }
+html.dark .border-gray-200  { border-color: #2d2d50 !important; }
+html.dark .border-b         { border-color: #252545; }
+
+html.dark .divide-gray-100 > * + * { border-color: #252545 !important; }
+html.dark .divide-gray-50  > * + * { border-color: #1e1e38 !important; }
+
+/* Inputs, textareas, selects */
+html.dark input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([type="range"]),
+html.dark textarea,
+html.dark select {
+  background-color: #1a1a35 !important;
+  border-color: #2d2d50 !important;
+  color: #e2e8f0 !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #4b5563 !important;
+}
+
+/* Table heads */
+html.dark thead tr {
+  background-color: #1e1e38 !important;
+}
+
+html.dark thead th {
+  color: #94a3b8 !important;
+}
+
+/* Table row hover */
+html.dark tbody tr:hover {
+  background-color: #1e1e38 !important;
+}
+
+/* Modal / overlay backgrounds */
+html.dark .bg-black\/40 {
+  background-color: rgba(0, 0, 0, 0.65) !important;
+}
+
+/* Scrollbar in dark mode */
+html.dark ::-webkit-scrollbar-track { background: #1a1a35; }
+html.dark ::-webkit-scrollbar-thumb { background: #4F3CC9; border-radius: 3px; }

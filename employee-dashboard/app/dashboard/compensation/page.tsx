@@ -84,8 +84,8 @@ export default function CompensationPage() {
   const [empProfile, setEmpProfile] = useState<EmpProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [fy, setFy] = useState(getCurrentFY());
-  const [masked, setMasked] = useState(false);
-  const [viewSlip, setViewSlip] = useState<PaySlip | null>(null);
+  const [masked,    setMasked]    = useState(false);
+  const [slipModal, setSlipModal] = useState<PaySlip | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -228,106 +228,148 @@ export default function CompensationPage() {
 
   const val = (n: number) => masked ? "••••••" : fmt(n);
 
-  // Build printable HTML for a payslip
   function buildSlipHtml(slip: PaySlip): string {
-    const maxRows = Math.max(slip.earnings.length, slip.deductions.length);
+    const emp = empProfile;
+    const maxRows = Math.max(slip.earnings.length, slip.deductions.length, 1);
     const rows = Array.from({ length: maxRows }).map((_, i) => `
       <tr>
-        <td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;">${slip.earnings[i]?.label ?? ""}</td>
-        <td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:11px;">${slip.earnings[i] ? slip.earnings[i].amount.toLocaleString("en-IN") : ""}</td>
-        <td style="border:1px solid #bbb;padding:6px 10px;font-size:11px;">${slip.deductions[i]?.label ?? ""}</td>
-        <td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-size:11px;">${slip.deductions[i] ? slip.deductions[i].amount.toLocaleString("en-IN") : ""}</td>
+        <td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">${slip.earnings[i]?.label ?? ""}</td>
+        <td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;">${slip.earnings[i] ? slip.earnings[i].amount.toLocaleString("en-IN") : ""}</td>
+        <td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">${slip.deductions[i]?.label ?? ""}</td>
+        <td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;">${slip.deductions[i] ? slip.deductions[i].amount.toLocaleString("en-IN") : ""}</td>
       </tr>`).join("");
-    const emp = empProfile;
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
-<title>Salary Slip - ${slip.period}</title>
-<style>
-  @page{size:A4;margin:15mm}*{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;font-size:11px;color:#111}
-  table{width:100%;border-collapse:collapse}
-  .th{font-weight:bold;background:#efefef;padding:6px 10px;border:1px solid #bbb;font-size:11px}
-  .total-row{font-weight:bold;background:#efefef}
-  .footer{margin-top:18px;font-size:9px;color:#888;text-align:center;border-top:1px solid #ddd;padding-top:8px}
-</style></head><body>
-<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},400)});</script>
-<table style="border:1px solid #bbb;border-collapse:collapse;margin-bottom:0">
-  <tr>
-    <td style="border:1px solid #bbb;padding:12px;width:130px;text-align:center">
-      <div style="background:#4F3CC9;color:#fff;font-weight:800;font-size:18px;padding:10px 14px;border-radius:6px;display:inline-block">W</div>
-    </td>
-    <td style="border:1px solid #bbb;padding:10px;text-align:center">
-      <div style="font-weight:bold;font-size:12px">Office Address: Plot No 5, East Wing, Ground Floor, Financial District,</div>
-      <div style="font-size:11px;margin-top:2px">Nanakramguda, Serilingampalle (M), Hyderabad – 500032, Telangana, India</div>
-      <div style="font-weight:bold;font-size:11px;margin-top:4px">Business Unit: Woways</div>
-    </td>
-  </tr>
-  <tr><td colspan="2" style="border:1px solid #bbb;padding:7px;text-align:center;font-weight:bold;font-size:13px;background:#f0f0f0">Salary Slip for ${slip.period}</td></tr>
-</table>
-<table style="border-collapse:collapse;border-top:none">
-  <tr>
-    <td style="border:1px solid #bbb;padding:5px 10px;width:33%"><span style="color:#666">Employee Name: </span><strong>${emp?.name ?? "—"}</strong></td>
-    <td style="border:1px solid #bbb;padding:5px 10px;width:33%"><span style="color:#666">Employee Type: </span><strong>${emp?.empType ?? "—"}</strong></td>
-    <td style="border:1px solid #bbb;padding:5px 10px;width:34%"><span style="color:#666">Employee Code: </span><strong>${emp?.empId ?? "—"}</strong></td>
-  </tr>
-  <tr>
-    <td style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">Designation: </span><strong>${emp?.designation ?? "—"}</strong></td>
-    <td colspan="2" style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">Department: </span><strong>${emp?.department ?? "—"}</strong></td>
-  </tr>
-  <tr>
-    <td style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">Date of Joining: </span><strong>${emp?.doj ?? "—"}</strong></td>
-    <td colspan="2" style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">Working Days: </span><strong>${slip.workDays}</strong></td>
-  </tr>
-  <tr>
-    <td style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">UAN No: </span><strong>${emp?.uanNumber ?? "—"}</strong></td>
-    <td colspan="2" style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">PAN No: </span><strong>${emp?.panNumber ?? "—"}</strong></td>
-  </tr>
-  <tr>
-    <td style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">Payment Status: </span><strong>${slip.paymentStatus}</strong></td>
-    <td colspan="2" style="border:1px solid #bbb;padding:5px 10px"><span style="color:#666">Payment Date: </span><strong>${slip.paymentDate || "—"}</strong></td>
-  </tr>
-</table>
-<table style="border-collapse:collapse;border-top:none;margin-top:0">
-  <tr>
-    <td colspan="2" class="th" style="text-align:center;width:50%">Earnings</td>
-    <td colspan="2" class="th" style="text-align:center;width:50%">Deductions</td>
-  </tr>
-  <tr>
-    <td class="th">Components</td><td class="th" style="text-align:right">Amount (₹)</td>
-    <td class="th">Common Deductions</td><td class="th" style="text-align:right">Amount (₹)</td>
-  </tr>
-  ${rows}
-  <tr class="total-row">
-    <td style="border:1px solid #bbb;padding:6px 10px">Gross Earning (A)</td>
-    <td style="border:1px solid #bbb;padding:6px 10px;text-align:right">${slip.gross.toLocaleString("en-IN")}</td>
-    <td style="border:1px solid #bbb;padding:6px 10px">Total Deductions (B)</td>
-    <td style="border:1px solid #bbb;padding:6px 10px;text-align:right">${slip.deduction.toLocaleString("en-IN")}</td>
-  </tr>
-  <tr>
-    <td style="border:1px solid #bbb;padding:6px 10px;font-weight:bold">Net Pay (A – B)</td>
-    <td style="border:1px solid #bbb;padding:6px 10px;text-align:right;font-weight:bold">${slip.net.toLocaleString("en-IN")}</td>
-    <td rowspan="2" style="border:1px solid #bbb;padding:6px 10px"></td>
-    <td rowspan="2" style="border:1px solid #bbb;padding:6px 10px"></td>
-  </tr>
-  <tr class="total-row">
-    <td style="border:1px solid #bbb;padding:6px 10px">Total Pay</td>
-    <td style="border:1px solid #bbb;padding:6px 10px;text-align:right">${slip.totalPay.toLocaleString("en-IN")}</td>
-  </tr>
-  <tr>
-    <td colspan="2" style="border:1px solid #bbb;padding:5px 10px"></td>
-    <td colspan="2" style="border:1px solid #bbb;padding:5px 10px;font-style:italic;color:#555;font-size:10px">${numberToWords(slip.totalPay)}</td>
-  </tr>
-</table>
-<div class="footer">This is a system-generated salary slip and does not require a physical signature. | Woways | ${slip.period}</div>
-</body></html>`;
+
+    const badgeStyle = slip.paymentStatus?.toLowerCase() === "paid"
+      ? "background:#dcfce7;color:#166534;"
+      : "background:#fef9c3;color:#854d0e;";
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Salary Slip - ${slip.period}</title>
+  <style>
+    @page{size:A4;margin:12mm 14mm}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;font-size:12px;color:#1a1a2e;background:#f0f2f5}
+    .page{max-width:860px;margin:20px auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.10)}
+    .header{display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid #e5e7eb}
+    .logo{font-size:28px;font-weight:900;letter-spacing:-1px;line-height:1}
+    .logo .wo{color:#0B1929}
+    .logo .ways{color:#14B8A6}
+    .header-addr{text-align:right;font-size:10px;color:#6b7280;line-height:1.6}
+    .header-addr strong{font-size:11px;color:#374151;display:block;margin-bottom:2px}
+    .title-bar{background:#0d1b2a;color:#fff;padding:12px 28px;display:flex;align-items:center;justify-content:space-between}
+    .title-bar .lbl{font-size:15px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .title-bar .mo{font-size:13px;font-weight:500;opacity:.8}
+    .emp-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-bottom:1px solid #e0e4ef}
+    .emp-cell{padding:9px 16px;border-right:1px solid #e0e4ef;border-bottom:1px solid #e0e4ef}
+    .emp-cell:nth-child(3n){border-right:none}
+    .lbl{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px}
+    .val{font-size:12px;font-weight:700;color:#1B2B6B}
+    .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:10px;font-weight:700}
+    .section-wrap{padding:18px 28px 0}
+    .earnings-table{width:100%;border-collapse:collapse}
+    .earnings-table th{background:#1B2B6B;color:#fff;font-size:11px;font-weight:600;padding:8px 12px;text-align:left;letter-spacing:0.4px}
+    .earnings-table th.amt{text-align:right}
+    .earnings-table td{padding:7px 12px;border:1px solid #e8eaf3;font-size:11px;vertical-align:middle}
+    .earnings-table tr:nth-child(even) td{background:#f8f9fe}
+    .subtotal td{background:#eef0f8!important;font-weight:700;font-size:11px}
+    .subtotal td.amt{color:#1B2B6B}
+    .net-pay{margin:0 28px;background:linear-gradient(135deg,#CC2222 0%,#e03a3a 100%);color:#fff;border-radius:0 0 8px 8px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+    .net-pay .label{font-size:13px;font-weight:700;letter-spacing:0.5px}
+    .net-pay .amount{font-size:22px;font-weight:900;letter-spacing:1px}
+    .net-pay .words{font-size:10px;color:#ffd0d0;margin-top:2px}
+    .sig-row{display:flex;justify-content:space-between;padding:20px 28px 0}
+    .sig-block{text-align:center}
+    .sig-line{width:140px;border-top:1.5px solid #1B2B6B;margin:0 auto 4px}
+    .sig-label{font-size:10px;color:#555;font-weight:600;text-transform:uppercase;letter-spacing:0.4px}
+    .footer{margin:14px 28px 20px;padding:10px 16px;background:#f5f7ff;border-radius:6px;border-left:3px solid #CC2222}
+    .footer p{font-size:9.5px;color:#777;line-height:1.6}
+    @media print{body{background:#fff}.page{box-shadow:none;border-radius:0;margin:0}body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="logo"><span class="wo">WO</span><span class="ways">WAYS</span></div>
+      <div class="header-addr">
+        <strong>Woways Technologies Pvt. Ltd.</strong>
+        Plot No 5, East Wing, Ground Floor, Financial District,<br>
+        Nanakramguda, Serilingampalle (M), Hyderabad – 500032, Telangana, India
+      </div>
+    </div>
+    <div class="title-bar">
+      <span class="lbl">Salary Slip</span>
+      <span class="mo">${slip.period}</span>
+    </div>
+    <div class="emp-grid">
+      <div class="emp-cell"><div class="lbl">Employee Name</div><div class="val">${emp?.name ?? "—"}</div></div>
+      <div class="emp-cell"><div class="lbl">Employee Code</div><div class="val">${emp?.empId ?? "—"}</div></div>
+      <div class="emp-cell"><div class="lbl">Employee Type</div><div class="val">${emp?.empType ?? "—"}</div></div>
+      <div class="emp-cell"><div class="lbl">Designation</div><div class="val">${emp?.designation ?? "—"}</div></div>
+      <div class="emp-cell"><div class="lbl">Department</div><div class="val">${emp?.department ?? "—"}</div></div>
+      <div class="emp-cell"><div class="lbl">Working Days</div><div class="val">${slip.workDays} / 30</div></div>
+      <div class="emp-cell"><div class="lbl">Payment Date</div><div class="val">${slip.paymentDate || "—"}</div></div>
+      <div class="emp-cell" style="grid-column:span 2"><div class="lbl">Payment Status</div><div class="val"><span class="badge" style="${badgeStyle}">${slip.paymentStatus}</span></div></div>
+    </div>
+    <div class="section-wrap">
+      <table class="earnings-table">
+        <thead>
+          <tr>
+            <th style="width:30%">Earnings</th>
+            <th class="amt" style="width:20%">Amount (₹)</th>
+            <th style="width:30%">Deductions</th>
+            <th class="amt" style="width:20%">Amount (₹)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+          <tr class="subtotal">
+            <td>Gross Earning (A)</td>
+            <td class="amt">₹ ${slip.gross.toLocaleString("en-IN")}</td>
+            <td>Total Deductions (B)</td>
+            <td class="amt">₹ ${slip.deduction.toLocaleString("en-IN")}</td>
+          </tr>
+          <tr class="subtotal">
+            <td>Net Pay (A – B)</td>
+            <td class="amt">₹ ${slip.net.toLocaleString("en-IN")}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="net-pay">
+      <div>
+        <div class="label">Total Take-Home Pay</div>
+        <div class="words">${numberToWords(slip.totalPay)}</div>
+      </div>
+      <div class="amount">₹ ${slip.totalPay.toLocaleString("en-IN")}</div>
+    </div>
+    <div class="sig-row">
+      <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Employee Signature</div></div>
+      <div class="sig-block"><div class="sig-line"></div><div class="sig-label">HR / Authorised Signatory</div></div>
+    </div>
+    <div class="footer">
+      <p>&#9432;&nbsp; This is a computer-generated salary slip and does not require a physical signature. &nbsp;|&nbsp; Woways Technologies Pvt. Ltd. &nbsp;|&nbsp; ${slip.period}</p>
+    </div>
+  </div>
+</body>
+</html>`;
   }
 
   function downloadSlip(slip: PaySlip) {
     const html = buildSlipHtml(slip);
-    const win = window.open("", "_blank", "width=900,height=700");
-    if (!win) { alert("Please allow pop-ups to download payslips."); return; }
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
+    const blob = new Blob([html], { type: "application/octet-stream" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `Salary_Slip_${slip.period.replace(/\s+/g, "_")}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
   return (
@@ -387,7 +429,7 @@ export default function CompensationPage() {
           <div className="flex items-center gap-2">
             <select
               value={fy}
-              onChange={(e) => { setFy(e.target.value); setViewSlip(null); }}
+              onChange={(e) => { setFy(e.target.value); setSlipModal(null); }}
               className="border border-gray-200 rounded-xl px-3 py-1.5 text-sm focus:outline-none focus:border-[#4F3CC9]"
               disabled={fyKeys.length === 0}
             >
@@ -446,7 +488,7 @@ export default function CompensationPage() {
                 </td>
               </tr>
             ) : slips.map((slip) => (
-              <tr key={slip.id} className={`hover:bg-[#F5F3FF] transition-colors ${viewSlip?.id === slip.id ? "bg-[#EDE9FF]/40" : ""}`}>
+              <tr key={slip.id} className="hover:bg-[#F5F3FF] transition-colors">
                 <td className="px-3 py-2.5 font-medium text-gray-900 whitespace-nowrap text-sm">{slip.period}</td>
                 <td className="px-3 py-2.5">
                   <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">Regular</span>
@@ -470,8 +512,8 @@ export default function CompensationPage() {
                     <button onClick={() => downloadSlip(slip)} className="flex items-center gap-1 bg-gray-900 text-white text-xs px-2.5 py-1 rounded-lg font-medium hover:bg-gray-700">
                       <Download size={11} /> Download
                     </button>
-                    <button onClick={() => setViewSlip(viewSlip?.id === slip.id ? null : slip)} className="text-xs text-[#4F3CC9] font-semibold hover:underline px-1">
-                      {viewSlip?.id === slip.id ? "Close" : "View"}
+                    <button onClick={() => setSlipModal(slip)} className="text-xs text-[#4F3CC9] font-semibold hover:underline px-1">
+                      View
                     </button>
                   </div>
                 </td>
@@ -481,121 +523,108 @@ export default function CompensationPage() {
         </table>
       </div>
 
-      {/* Inline Payslip Viewer */}
-      {viewSlip && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setViewSlip(null)}>
-          <div className="bg-white w-full max-w-3xl shadow-2xl rounded-xl overflow-hidden max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-2 bg-gray-100 border-b border-gray-200 shrink-0">
-              <p className="text-xs text-gray-500 font-medium">Salary Slip — {viewSlip.period}</p>
-              <div className="flex items-center gap-2">
-                <button onClick={() => downloadSlip(viewSlip)} className="flex items-center gap-1.5 bg-[#4F3CC9] text-white text-xs px-3 py-1.5 rounded-lg font-medium hover:bg-[#3d2fa3]">
-                  <Download size={12} /> Download
-                </button>
-                <button onClick={() => setViewSlip(null)} className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500"><X size={16} /></button>
+      {/* Payslip Card Modal */}
+      {slipModal && (() => {
+        const slip = slipModal;
+        const emp = empProfile;
+        const gross = slip.earnings.reduce((s, e) => s + e.amount, 0);
+        const payStatusColor: Record<string, string> = {
+          Paid: "bg-green-100 text-green-700",
+          Pending: "bg-yellow-100 text-yellow-700",
+          Processing: "bg-blue-100 text-blue-700",
+        };
+        return (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setSlipModal(null)}>
+            <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b">
+                <div>
+                  <h2 className="text-base font-bold text-gray-900">Payslip — {emp?.name ?? "—"}</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">{emp?.empId ?? "—"} · {emp?.designation ?? "—"} · {slip.period}</p>
+                </div>
+                <button onClick={() => setSlipModal(null)}><X size={20} /></button>
+              </div>
+              <div className="p-6">
+                <div className="border border-gray-100 rounded-2xl overflow-hidden shadow-sm">
+                  <div className="bg-gradient-to-br from-[#f5f3ff] to-[#f0fdfa] px-8 py-6 border-b border-gray-100 text-center">
+                    <div className="flex items-center justify-center leading-none mb-1.5">
+                      <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
+                      <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
+                    </div>
+                    <p className="text-xs text-gray-400">Salary Slip for {slip.period}</p>
+                  </div>
+                  <div className="px-8 py-5 bg-gray-50/60 border-b border-gray-100">
+                    <div className="grid grid-cols-2 gap-x-10 gap-y-4">
+                      {[
+                        { label: "Employee Name", value: emp?.name ?? "—" },
+                        { label: "Employee ID",   value: emp?.empId ?? "—" },
+                        { label: "Designation",   value: emp?.designation ?? "—" },
+                        { label: "Emp Type",      value: emp?.empType ?? "—" },
+                      ].map(({ label, value }) => (
+                        <div key={label}>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">{label}</p>
+                          <p className="text-sm font-semibold text-gray-900">{value}</p>
+                        </div>
+                      ))}
+                      <div>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Payment Status</p>
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${payStatusColor[slip.paymentStatus] ?? "bg-gray-100 text-gray-600"}`}>{slip.paymentStatus}</span>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Payment Date</p>
+                        <p className="text-sm font-semibold text-gray-900">{slip.paymentDate || "—"}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 divide-x divide-gray-100">
+                    <div className="px-7 py-5">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Earnings</p>
+                      <div className="space-y-2.5 text-sm">
+                        {slip.earnings.map((e) => (
+                          <div key={e.label} className="flex justify-between">
+                            <span className="text-gray-500">{e.label}</span>
+                            <span className="font-semibold text-gray-900">{fmt(e.amount)}</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between font-bold border-t border-gray-100 pt-2.5 mt-1 text-gray-900">
+                          <span>Gross Total</span><span>{fmt(gross)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="px-7 py-5">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Deductions</p>
+                      <div className="space-y-2.5 text-sm">
+                        {slip.deductions.length > 0
+                          ? slip.deductions.map((d) => (
+                              <div key={d.label} className="flex justify-between">
+                                <span className="text-gray-500">{d.label}</span>
+                                <span className="font-semibold text-red-500">{fmt(d.amount)}</span>
+                              </div>
+                            ))
+                          : <p className="text-xs text-gray-400 py-1">No deductions this month</p>}
+                        <div className="flex justify-between font-bold border-t border-gray-100 pt-2.5 mt-1">
+                          <span className="text-gray-900">Total</span>
+                          <span className="text-red-500">{fmt(slip.deduction)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-8 py-5 bg-[#EDE9FF]/50 border-t border-[#4F3CC9]/10 flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Net Pay</p>
+                      <p className="text-2xl font-black text-[#4F3CC9]">{fmt(slip.totalPay)}</p>
+                    </div>
+                    <button
+                      onClick={() => downloadSlip(slip)}
+                      className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-[#3d2fa8] transition-colors shadow-sm">
+                      <Download size={14} /> Download Payslip
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-
-            <div className="overflow-y-auto p-4 text-xs font-sans" style={{ fontFamily: "Arial, sans-serif" }}>
-              {/* Company Header */}
-              <table className="w-full border border-gray-400 border-collapse mb-0">
-                <tbody>
-                  <tr>
-                    <td className="border border-gray-400 p-3 w-32 align-middle">
-                      <div className="w-20 h-10 bg-[#4F3CC9] rounded flex items-center justify-center text-white font-bold text-sm">W</div>
-                    </td>
-                    <td className="border border-gray-400 p-3 text-center">
-                      <p className="font-semibold text-gray-800 text-xs">Office Address: Plot No 5, East Wing, Ground Floor, Financial District,</p>
-                      <p className="text-gray-700 text-xs">Nanakramguda, Serilingampalle (M), Hyderabad – 500032, Telangana, India</p>
-                      <p className="font-semibold text-gray-800 text-xs mt-0.5">Business Unit: Woways</p>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td colSpan={2} className="border border-gray-400 py-2 text-center font-bold text-sm text-gray-900 bg-gray-50">
-                      Salary Slip for {viewSlip.period}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-
-              {/* Employee Info */}
-              <table className="w-full border border-gray-400 border-collapse border-t-0">
-                <tbody>
-                  <tr>
-                    <td className="border border-gray-400 px-2 py-1 w-1/3"><span className="text-gray-500">Employee Name: </span><strong>{empProfile?.name ?? "—"}</strong></td>
-                    <td className="border border-gray-400 px-2 py-1 w-1/3"><span className="text-gray-500">Employee Type: </span><strong>{empProfile?.empType ?? "—"}</strong></td>
-                    <td className="border border-gray-400 px-2 py-1 w-1/3"><span className="text-gray-500">Employee Code: </span><strong>{empProfile?.empId ?? "—"}</strong></td>
-                  </tr>
-                  <tr>
-                    <td className="border border-gray-400 px-2 py-1"><span className="text-gray-500">Designation: </span><strong>{empProfile?.designation ?? "—"}</strong></td>
-                    <td className="border border-gray-400 px-2 py-1" colSpan={2}><span className="text-gray-500">Department: </span><strong>{empProfile?.department ?? "—"}</strong></td>
-                  </tr>
-                  <tr>
-                    <td className="border border-gray-400 px-2 py-1"><span className="text-gray-500">Date of Joining: </span><strong>{empProfile?.doj ?? "—"}</strong></td>
-                    <td className="border border-gray-400 px-2 py-1" colSpan={2}><span className="text-gray-500">Working Days: </span><strong>{viewSlip.workDays}</strong></td>
-                  </tr>
-                  <tr>
-                    <td className="border border-gray-400 px-2 py-1"><span className="text-gray-500">UAN No: </span><strong>{empProfile?.uanNumber ?? "—"}</strong></td>
-                    <td className="border border-gray-400 px-2 py-1" colSpan={2}><span className="text-gray-500">PAN No: </span><strong>{empProfile?.panNumber ?? "—"}</strong></td>
-                  </tr>
-                  <tr>
-                    <td className="border border-gray-400 px-2 py-1"><span className="text-gray-500">Payment Status: </span>
-                      <strong className={viewSlip.paymentStatus === "Paid" ? "text-green-700" : "text-yellow-700"}>{viewSlip.paymentStatus}</strong>
-                    </td>
-                    <td className="border border-gray-400 px-2 py-1" colSpan={2}><span className="text-gray-500">Payment Date: </span><strong>{viewSlip.paymentDate || "—"}</strong></td>
-                  </tr>
-                </tbody>
-              </table>
-
-              {/* Earnings & Deductions */}
-              <table className="w-full border border-gray-400 border-collapse border-t-0">
-                <thead>
-                  <tr>
-                    <td colSpan={2} className="border border-gray-400 py-1 text-center font-bold text-gray-900 bg-gray-50 w-1/2">Earnings</td>
-                    <td colSpan={2} className="border border-gray-400 py-1 text-center font-bold text-gray-900 bg-gray-50 w-1/2">Deductions</td>
-                  </tr>
-                  <tr>
-                    <td className="border border-gray-400 px-2 py-1 font-bold text-gray-800">Components</td>
-                    <td className="border border-gray-400 px-2 py-1 font-bold text-gray-800 text-right">Amount (₹)</td>
-                    <td className="border border-gray-400 px-2 py-1 font-bold text-gray-800">Common Deductions</td>
-                    <td className="border border-gray-400 px-2 py-1 font-bold text-gray-800 text-right">Amount (₹)</td>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Array.from({ length: Math.max(viewSlip.earnings.length, viewSlip.deductions.length) }).map((_, i) => (
-                    <tr key={i}>
-                      <td className="border border-gray-400 px-2 py-1 text-gray-800">{viewSlip.earnings[i]?.label ?? ""}</td>
-                      <td className="border border-gray-400 px-2 py-1 text-right text-gray-900">{viewSlip.earnings[i] ? viewSlip.earnings[i].amount.toLocaleString("en-IN") : ""}</td>
-                      <td className="border border-gray-400 px-2 py-1 text-gray-800">{viewSlip.deductions[i]?.label ?? ""}</td>
-                      <td className="border border-gray-400 px-2 py-1 text-right text-gray-900">{viewSlip.deductions[i] ? viewSlip.deductions[i].amount.toLocaleString("en-IN") : ""}</td>
-                    </tr>
-                  ))}
-                  <tr className="font-bold bg-gray-50">
-                    <td className="border border-gray-400 px-2 py-1">Gross Earning (A)</td>
-                    <td className="border border-gray-400 px-2 py-1 text-right">{viewSlip.gross.toLocaleString("en-IN")}</td>
-                    <td className="border border-gray-400 px-2 py-1">Total Deductions (B)</td>
-                    <td className="border border-gray-400 px-2 py-1 text-right">{viewSlip.deduction.toLocaleString("en-IN")}</td>
-                  </tr>
-                  <tr className="font-bold">
-                    <td className="border border-gray-400 px-2 py-1">Net Pay (A – B)</td>
-                    <td className="border border-gray-400 px-2 py-1 text-right">{viewSlip.net.toLocaleString("en-IN")}</td>
-                    <td className="border border-gray-400 px-2 py-1" rowSpan={2}></td>
-                    <td className="border border-gray-400 px-2 py-1 text-right" rowSpan={2}></td>
-                  </tr>
-                  <tr className="font-bold bg-gray-50">
-                    <td className="border border-gray-400 px-2 py-1">Total Pay</td>
-                    <td className="border border-gray-400 px-2 py-1 text-right">{viewSlip.totalPay.toLocaleString("en-IN")}</td>
-                  </tr>
-                  <tr>
-                    <td colSpan={2} className="border border-gray-400 px-2 py-1 text-gray-400 italic text-xs"></td>
-                    <td colSpan={2} className="border border-gray-400 px-2 py-1 text-gray-700 italic text-xs">{numberToWords(viewSlip.totalPay)}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <p className="text-center text-gray-400 text-xs mt-3">This is a system-generated salary slip and does not require a physical signature.</p>
-            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

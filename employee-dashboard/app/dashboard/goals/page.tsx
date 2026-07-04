@@ -6,6 +6,7 @@ import {
   collection, query, where, getDocs, getDoc, addDoc, updateDoc, doc,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { markEmpNotifRead } from "@/lib/firebaseService";
 
 type GoalStatus = "In Progress" | "Completed" | "Not Started";
 type GoalCategory = "Daily" | "Weekly" | "Monthly";
@@ -134,6 +135,9 @@ export default function GoalsPage() {
     });
     return () => unsub();
   }, []);
+
+  // Auto-mark unread goal notifications as read when employee opens this page
+  useEffect(() => { if (empId) markEmpNotifRead("goal", empId); }, [empId]);
 
   const openProgressModal = (goal: Goal) => {
     setProgressModal(goal);
@@ -446,11 +450,11 @@ export default function GoalsPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   Goal Title
                 </label>
-                <input
+                <textarea
                   required
-                  type="text"
                   placeholder="Enter goal title"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-[#4F3CC9]"
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:border-[#4F3CC9] resize-none"
                   value={newGoal.title}
                   onChange={(e) =>
                     setNewGoal({ ...newGoal, title: e.target.value })

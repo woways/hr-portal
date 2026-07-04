@@ -101,6 +101,20 @@ export async function markNotificationRead(id: string): Promise<void> {
   await updateDoc(doc(db, "notifications", id), { read: true });
 }
 
+export async function markEmpNotifRead(type: string, empId: string): Promise<void> {
+  try {
+    const [personal, broadcast] = await Promise.all([
+      getDocs(query(collection(db, "notifications"), where("userId", "==", empId))),
+      getDocs(query(collection(db, "notifications"), where("userId", "==", "all"))),
+    ]);
+    const toMark = [...personal.docs, ...broadcast.docs].filter(
+      (d) => d.data().type === type && d.data().read !== true,
+    );
+    if (!toMark.length) return;
+    await Promise.all(toMark.map((d) => updateDoc(d.ref, { read: true })));
+  } catch { /* non-critical */ }
+}
+
 // Get holidays from the shared HR settings collection
 export interface Holiday {
   id: string;
