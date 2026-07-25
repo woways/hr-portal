@@ -6,11 +6,18 @@ import {
 } from "lucide-react";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
 import {
-  collection, query, where, onSnapshot, doc,
+  collection, query, where, onSnapshot, doc, getDoc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
-interface LeaveRequest { status: string; leaveType: string; }
+interface LeaveRequest { status: string; leaveType: string; days?: number; }
+
+const DEFAULT_LEAVE_POLICIES: { type: string; days: number }[] = [
+  { type: "Casual Leave", days: 12 },
+  { type: "Sick Leave", days: 10 },
+  { type: "Emergency Leave", days: 3 },
+  { type: "Paid Leave", days: 15 },
+];
 
 interface ClockRecord {
   empId: string; date: string;
@@ -62,13 +69,26 @@ export default function DashboardPage() {
   const [workingSeconds, setWorkingSeconds] = useState(0);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [leavePolicies, setLeavePolicies] = useState(DEFAULT_LEAVE_POLICIES);
+
+  useEffect(() => {
+    getDoc(doc(db, "settings", "leavePolicies"))
+      .then((snap) => {
+        const list = snap.exists() ? (snap.data().list as { type: string; days: number }[]) : null;
+        if (Array.isArray(list) && list.length) setLeavePolicies(list.map((p) => ({ type: p.type, days: Number(p.days) || 0 })));
+      })
+      .catch(() => { /* keep defaults */ });
+  }, []);
 
   // Real-time leave requests from Firestore
   useEffect(() => {
     if (!empId) return;
     const q = query(collection(db, "leaveRequests"), where("empId", "==", empId));
     const unsub = onSnapshot(q, (snap) => {
-      setLeaveRequests(snap.docs.map(d => d.data() as LeaveRequest));
+      setLeaveRequests(snap.docs.map(d => {
+        const r = d.data();
+        return { status: String(r.status ?? ""), leaveType: String(r.leaveType ?? ""), days: Number(r.days) || 0 };
+      }));
     }, () => {});
     return () => unsub();
   }, [empId]);
@@ -157,6 +177,17 @@ export default function DashboardPage() {
 
   const pendingLeaves  = leaveRequests.filter(r => r.status === "Pending").length;
   const approvedLeaves = leaveRequests.filter(r => r.status === "Approved").length;
+
+  // Leave balance: entitlement (policy) minus approved days used, per type.
+  const leaveUsedByType: Record<string, number> = {};
+  leaveRequests.filter(r => r.status === "Approved").forEach((r) => {
+    leaveUsedByType[r.leaveType] = (leaveUsedByType[r.leaveType] ?? 0) + (Number(r.days) || 0);
+  });
+  const leaveBalances = leavePolicies.map((p) => ({
+    type: p.type, total: p.days, remaining: Math.max(0, p.days - (leaveUsedByType[p.type] ?? 0)),
+  }));
+  const totalLeaveRemaining = leaveBalances.reduce((s, b) => s + b.remaining, 0);
+  const totalLeaveEntitlement = leaveBalances.reduce((s, b) => s + b.total, 0);
 
   if (profileLoading) {
     return (
@@ -251,7 +282,22 @@ export default function DashboardPage() {
 
       {/* Leave Overview */}
       <div>
-        <h2 className="text-base font-semibold text-gray-700 mb-3">Leave Overview</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-semibold text-gray-700">Leave Overview</h2>
+          <span className="text-xs text-gray-500">
+            <span className="font-semibold text-gray-900">{totalLeaveRemaining}</span> of {totalLeaveEntitlement} days remaining
+          </span>
+        </div>
+        {/* Leave balance by type */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          {leaveBalances.map((b) => (
+            <div key={b.type} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+              <p className="text-xs text-gray-500 truncate">{b.type}</p>
+              <p className="text-xl font-bold text-gray-900 mt-1">{b.remaining}<span className="text-sm font-medium text-gray-400"> / {b.total}</span></p>
+              <p className="text-[11px] text-gray-400 mt-0.5">days remaining</p>
+            </div>
+          ))}
+        </div>
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-center justify-between mb-3">

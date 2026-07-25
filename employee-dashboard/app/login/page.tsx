@@ -202,14 +202,14 @@ function LoginContent() {
         <div className="absolute bottom-[-80px] left-[-40px] w-[240px] h-[240px] rounded-full bg-[#093040] opacity-60"/>
         <div className="relative z-10 flex flex-col items-center text-center w-full max-w-sm">
           <div className="mb-3">
-            <span className="text-5xl font-black text-white tracking-tight">WO</span>
-            <span className="text-5xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
+            <span className="text-5xl font-black text-white" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px" }}>WO</span>
+            <span className="text-5xl font-black" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px", color: "#00C2A8" }}>WAYS</span>
           </div>
           <p className="text-gray-400 text-sm mb-12">Employee Self-Service Portal</p>
           <div className="space-y-5 w-full">
             {[
               { icon: "📋", text: "View your attendance, leaves and goals" },
-              { icon: "💰", text: "Access payslips and compensation details" },
+              { icon: "💰", text: "Access payslips and payroll details" },
               { icon: "🔔", text: "Get real-time notifications from HR" },
               { icon: "🙋", text: "Raise queries and get support" },
             ].map(f => (
@@ -224,13 +224,13 @@ function LoginContent() {
       </div>
 
       {/* Right panel */}
-      <div className="flex-1 bg-white flex items-center justify-center p-10">
+      <div className="flex-1 bg-white flex items-center justify-start pl-16 pr-10 py-10">
         <div className="w-full max-w-sm">
 
           {/* Mobile logo */}
           <div className="flex lg:hidden justify-center mb-8">
-            <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
-            <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
+            <span className="text-3xl font-black" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px", color: "#0A2540" }}>WO</span>
+            <span className="text-3xl font-black" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px", color: "#00C2A8" }}>WAYS</span>
           </div>
 
           {/* Account removed banner */}

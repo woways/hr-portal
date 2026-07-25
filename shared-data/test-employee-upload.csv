@@ -1,0 +1,2 @@
+name,email,phone,designation,department,role,workMode,employmentType,doj,gender,dob,reportingManager,branch,shift,ctc,noticePeriod,status,city,state,pinCode,skills
+CSV Test User,csvtest.user@woways.in,9876543210,Software Engineer,Technology,Developer,Remote,Full-Time,2026-07-10,Male,1998-05-14,Rajesh Kumar,Bengaluru HQ,9AM–6PM,600000,30 Days,Active,Bengaluru,Karnataka,560001,React

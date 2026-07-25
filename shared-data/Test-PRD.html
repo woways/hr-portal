@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WOWAYS HR Portal — Test Plan &amp; QA Requirements</title>
+<style>
+  @page { size: A4; margin: 18mm 14mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: "Segoe UI", Arial, sans-serif; color: #1a1f2e; font-size: 10pt; line-height: 1.45; margin: 0; }
+  h1,h2,h3,h4 { color: #0B1929; margin: 0; }
+  a { color: #0f766e; text-decoration: none; }
+
+  .cover {
+    height: 247mm; display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+    background: #0B1929; color: #fff; margin: -18mm -14mm 0; padding: 0 22mm; page-break-after: always;
+  }
+  .cover .logo { font-size: 46pt; font-weight: 900; letter-spacing: -1px; margin-bottom: 8px; }
+  .cover .logo .teal { color: #14B8A6; }
+  .cover h1 { color: #fff; font-size: 24pt; font-weight: 800; margin: 18px 0 6px; }
+  .cover .sub { color: #9fb3c8; font-size: 13pt; margin-bottom: 40px; }
+  .cover .meta { color: #6b8299; font-size: 10pt; line-height: 1.9; border-top: 1px solid #223344; padding-top: 18px; }
+  .cover .meta b { color: #cfe0ee; font-weight: 600; }
+
+  h2 { font-size: 14pt; border-bottom: 2px solid #14B8A6; padding-bottom: 5px; margin: 24px 0 10px; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; color: #14524d; margin: 15px 0 6px; page-break-after: avoid; }
+  h4 { font-size: 10pt; margin: 10px 0 4px; }
+  p { margin: 5px 0; }
+  ul { margin: 5px 0; padding-left: 18px; }
+  li { margin: 2px 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 9px 0; font-size: 8.6pt; page-break-inside: auto; }
+  th { background: #0B1929; color: #fff; text-align: left; padding: 5px 6px; font-weight: 600; }
+  td { border: 1px solid #d8e0e8; padding: 4px 6px; vertical-align: top; }
+  tr { page-break-inside: avoid; }
+  tr:nth-child(even) td { background: #f4f8fb; }
+  .tc td:first-child { font-family: Consolas, monospace; font-weight: 600; color:#0B1929; white-space: nowrap; }
+
+  .box { background: #f4f8fb; border-left: 3px solid #14B8A6; padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; }
+  .muted { color: #5a6b7b; }
+  code { background: #eef2f6; color: #0B1929; padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 8.6pt; }
+  .section { page-break-inside: auto; }
+  .P1 { color:#b91c1c; font-weight:700; } .P2 { color:#b45309; font-weight:700; } .P3 { color:#0f766e; font-weight:700; }
+  .toc li { margin: 3px 0; }
+  .legend span { display:inline-block; margin-right:14px; font-size:9pt; }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="logo">WO<span class="teal">WAYS</span></div>
+  <h1>HR Portal — Test Plan &amp; QA Requirements</h1>
+  <div class="sub">Testing of the HR Admin &amp; Employee Dashboards</div>
+  <div class="meta">
+    <b>Document type:</b> Test Plan / QA Requirements (Test PRD)<br>
+    <b>Product:</b> WOWAYS HR Management System<br>
+    <b>Version:</b> 1.0 &nbsp;·&nbsp; <b>Date:</b> July 2026<br>
+    <b>Scope:</b> HR Admin Dashboard + Employee Self-Service Portal<br>
+    <b>Prepared for:</b> WOWAYS
+  </div>
+</div>
+
+<!-- TOC -->
+<h2>Table of Contents</h2>
+<ol class="toc">
+  <li>Introduction &amp; Objectives</li>
+  <li>Scope of Testing (In / Out)</li>
+  <li>Test Strategy &amp; Types</li>
+  <li>Test Environment &amp; Data</li>
+  <li>Roles &amp; Responsibilities</li>
+  <li>Entry &amp; Exit Criteria</li>
+  <li>Defect Severity &amp; Priority</li>
+  <li>Test Cases — Authentication &amp; Access</li>
+  <li>Test Cases — HR Admin Dashboard</li>
+  <li>Test Cases — Employee Dashboard</li>
+  <li>Test Cases — Cross-App Real-Time Sync</li>
+  <li>Test Cases — Profile Photo &amp; File Uploads</li>
+  <li>Test Cases — Caching &amp; Performance</li>
+  <li>Test Cases — UI / Responsive / Compatibility</li>
+  <li>Security Test Cases</li>
+  <li>Regression Checklist &amp; Sign-off</li>
+</ol>
+
+<!-- 1 -->
+<div class="section">
+<h2>1. Introduction &amp; Objectives</h2>
+<p>This document defines the test plan and QA requirements for the <b>WOWAYS HR Portal</b>, which consists of two connected web applications sharing a single Firebase backend — the <b>HR Admin Dashboard</b> and the <b>Employee Self-Service Portal</b>. The objective is to validate functionality, data integrity, real-time synchronisation between the two apps, security (role-based access), performance (cache-first loading) and cross-browser UI behaviour.</p>
+<div class="box">
+<b>Primary quality goal:</b> Any action taken in one dashboard (e.g. HR approving leave, an employee uploading a photo) must be correctly persisted to Firestore/Storage and accurately reflected in the other dashboard, under the correct security constraints.
+</div>
+</div>
+
+<!-- 2 -->
+<div class="section">
+<h2>2. Scope of Testing</h2>
+<h4>In Scope</h4>
+<ul>
+<li>All HR Admin modules: Dashboard, Employees, Attendance, Leave, Payroll/Compensation, Recruitment/Hiring, Goals/Performance, Onboarding, Documents, Reports, Admin/Access, Notifications, Help, Settings.</li>
+<li>All Employee modules: Dashboard, Profile, Attendance, Leave, Payslip, Goals, Calendar, Notifications, Compensation, Help.</li>
+<li>Authentication, role-based access, real-time sync, file uploads, caching, responsive UI.</li>
+</ul>
+<h4>Out of Scope</h4>
+<ul>
+<li>Firebase platform internals (Google-managed infrastructure).</li>
+<li>Load/stress testing beyond expected organisational scale.</li>
+<li>Native mobile apps (web-responsive only).</li>
+</ul>
+</div>
+
+<!-- 3 -->
+<div class="section">
+<h2>3. Test Strategy &amp; Types</h2>
+<table>
+<tr><th style="width:26%">Test Type</th><th>Purpose</th></tr>
+<tr><td>Functional</td><td>Verify each feature behaves per requirements (CRUD, approvals, uploads).</td></tr>
+<tr><td>Integration / Sync</td><td>Verify data written in one app appears correctly in the other via Firestore.</td></tr>
+<tr><td>Security / Authorization</td><td>Verify Firestore &amp; Storage rules restrict access to authorised users only.</td></tr>
+<tr><td>UI / Usability</td><td>Verify layout, branding, navigation, empty/loading/error states.</td></tr>
+<tr><td>Performance</td><td>Verify cache-first render, skeleton loaders, and background refresh.</td></tr>
+<tr><td>Compatibility</td><td>Verify behaviour across Chrome, Edge, Firefox and tablet widths.</td></tr>
+<tr><td>Regression</td><td>Re-verify core flows after each deployment.</td></tr>
+</table>
+</div>
+
+<!-- 4 -->
+<div class="section">
+<h2>4. Test Environment &amp; Data</h2>
+<table>
+<tr><th style="width:26%">Item</th><th>Detail</th></tr>
+<tr><td>HR Dashboard URL</td><td><code>https://hrmanagement-6b903.web.app</code></td></tr>
+<tr><td>Employee Portal URL</td><td><code>https://woways-employee.web.app</code> (and HR-app employee route <code>/employee/dashboard</code>)</td></tr>
+<tr><td>Backend</td><td>Single Firebase project — Firestore, Storage, Authentication</td></tr>
+<tr><td>Test accounts</td><td>1 HR Admin account; ≥2 employee accounts (with and without profile photo)</td></tr>
+<tr><td>Browsers</td><td>Chrome (latest), Edge (latest), Firefox (latest)</td></tr>
+<tr><td>Devices</td><td>Desktop 1920×1080, Laptop 1366×768, Tablet 768px</td></tr>
+<tr><td>Tools</td><td>Browser DevTools (Console/Network), Firebase Console (data verification)</td></tr>
+</table>
+</div>
+
+<!-- 5 -->
+<div class="section">
+<h2>5. Roles &amp; Responsibilities</h2>
+<table>
+<tr><th style="width:26%">Role</th><th>Responsibility</th></tr>
+<tr><td>QA Engineer</td><td>Execute test cases, log defects, run regression.</td></tr>
+<tr><td>Developer</td><td>Fix defects, support environment, verify fixes.</td></tr>
+<tr><td>HR Stakeholder</td><td>Validate business rules and UAT sign-off.</td></tr>
+</table>
+</div>
+
+<!-- 6 -->
+<div class="section">
+<h2>6. Entry &amp; Exit Criteria</h2>
+<h4>Entry Criteria</h4>
+<ul>
+<li>Both apps deployed to the test/production URLs and reachable.</li>
+<li>Test accounts and seed data created; Firestore/Storage rules deployed.</li>
+</ul>
+<h4>Exit Criteria</h4>
+<ul>
+<li>100% of P1 (critical) test cases pass; no open P1/P2 defects.</li>
+<li>≥95% of all test cases pass; remaining issues documented and accepted.</li>
+<li>Regression suite green on the final build.</li>
+</ul>
+</div>
+
+<!-- 7 -->
+<div class="section">
+<h2>7. Defect Severity &amp; Priority</h2>
+<p class="legend"><span class="P1">P1 — Critical</span><span class="P2">P2 — Major</span><span class="P3">P3 — Minor</span></p>
+<table>
+<tr><th style="width:20%">Priority</th><th>Definition</th></tr>
+<tr><td class="P1">P1 Critical</td><td>Blocks a core flow or causes data loss/leak (login fails, wrong employee's data shown, leave not saved).</td></tr>
+<tr><td class="P2">P2 Major</td><td>Feature works incorrectly with a workaround (photo not syncing to sidebar, wrong count).</td></tr>
+<tr><td class="P3">P3 Minor</td><td>Cosmetic / UX (spacing, label text, minor alignment).</td></tr>
+</table>
+</div>
+
+<!-- 8 -->
+<div class="section">
+<h2>8. Test Cases — Authentication &amp; Access</h2>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>AUTH-01</td><td>Valid HR login</td><td>Enter valid HR credentials → submit</td><td>Redirects to HR dashboard; sidebar shows "HR Admin"</td><td class="P1">P1</td></tr>
+<tr><td>AUTH-02</td><td>Valid employee login</td><td>Enter valid employee credentials → submit</td><td>Redirects to employee dashboard; correct name/dept shown</td><td class="P1">P1</td></tr>
+<tr><td>AUTH-03</td><td>Invalid credentials</td><td>Enter wrong password → submit</td><td>Error message shown; no access granted</td><td class="P1">P1</td></tr>
+<tr><td>AUTH-04</td><td>Session persistence</td><td>Login → refresh page</td><td>User stays logged in (local persistence)</td><td class="P2">P2</td></tr>
+<tr><td>AUTH-05</td><td>Logout</td><td>Click logout in sidebar</td><td>Session cleared; redirected to login</td><td class="P1">P1</td></tr>
+<tr><td>AUTH-06</td><td>Deleted account</td><td>HR deletes employee → employee refreshes</td><td>Employee signed out with "account removed" reason</td><td class="P2">P2</td></tr>
+<tr><td>AUTH-07</td><td>Unauthenticated access</td><td>Open dashboard URL without login</td><td>Redirected to login page</td><td class="P1">P1</td></tr>
+</table>
+</div>
+
+<!-- 9 -->
+<div class="section">
+<h2>9. Test Cases — HR Admin Dashboard</h2>
+
+<h3>9.1 Dashboard / Overview</h3>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>HRD-01</td><td>KPI counts accurate</td><td>Compare card counts vs employee list</td><td>Total/active/interns/etc. match actual records</td><td class="P1">P1</td></tr>
+<tr><td>HRD-02</td><td>Live clock &amp; date</td><td>Observe header</td><td>Clock updates every second; date correct</td><td class="P3">P3</td></tr>
+<tr><td>HRD-03</td><td>Charts render</td><td>Load dashboard</td><td>Dept headcount, leave trends, hiring trend render without errors</td><td class="P2">P2</td></tr>
+<tr><td>HRD-04</td><td>Skeleton on first load</td><td>Hard refresh</td><td>Skeleton loaders show, then real data replaces them</td><td class="P3">P3</td></tr>
+</table>
+
+<h3>9.2 Employee Directory</h3>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>EMP-01</td><td>Add employee</td><td>Fill add form (all tabs) → save</td><td>Employee created; auto ID (EMPxxx); Auth account + credentials generated</td><td class="P1">P1</td></tr>
+<tr><td>EMP-02</td><td>Edit employee</td><td>Open employee → edit fields → save</td><td>Changes persisted and reflected in list &amp; Firestore</td><td class="P1">P1</td></tr>
+<tr><td>EMP-03</td><td>Delete employee</td><td>Delete an employee → confirm</td><td>Record removed; list updates; account handled</td><td class="P1">P1</td></tr>
+<tr><td>EMP-04</td><td>Profile photo in list</td><td>Employee with photo → view directory</td><td>Photo shown; initials fallback only when no photo</td><td class="P2">P2</td></tr>
+<tr><td>EMP-05</td><td>Search / filter</td><td>Search name; filter by department</td><td>List filters correctly</td><td class="P2">P2</td></tr>
+<tr><td>EMP-06</td><td>Bulk CSV import</td><td>Upload valid CSV → import</td><td>Rows validated; valid employees created</td><td class="P2">P2</td></tr>
+<tr><td>EMP-07</td><td>Invalid form validation</td><td>Submit missing required / invalid phone</td><td>Inline validation blocks save (Indian phone: 10 digits, starts 6–9)</td><td class="P2">P2</td></tr>
+<tr><td>EMP-08</td><td>HR document upload</td><td>Upload offer letter for employee</td><td>File stored; metadata saved; visible to employee</td><td class="P2">P2</td></tr>
+</table>
+
+<h3>9.3 Attendance, Leave, Payroll</h3>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>ATT-01</td><td>View attendance log</td><td>Open attendance</td><td>Records show correct status &amp; working hours</td><td class="P2">P2</td></tr>
+<tr><td>ATT-02</td><td>Regularization request</td><td>Employee raises → HR views</td><td>Request appears for HR action</td><td class="P2">P2</td></tr>
+<tr><td>LVE-01</td><td>Approve leave</td><td>Open pending request → approve</td><td>Status → Approved; employee sees update in real time</td><td class="P1">P1</td></tr>
+<tr><td>LVE-02</td><td>Reject leave</td><td>Reject a request</td><td>Status → Rejected; synced to employee</td><td class="P1">P1</td></tr>
+<tr><td>LVE-03</td><td>View proof attachment</td><td>Open request with medical proof</td><td>Attachment opens/downloads</td><td class="P3">P3</td></tr>
+<tr><td>PAY-01</td><td>Run payroll</td><td>Generate payroll for month</td><td>Records created; salary table correct</td><td class="P1">P1</td></tr>
+<tr><td>PAY-02</td><td>Payslip availability</td><td>After payroll → employee payslip</td><td>Employee can view/download payslip</td><td class="P2">P2</td></tr>
+</table>
+
+<h3>9.4 Recruitment, Goals, Notifications</h3>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>REC-01</td><td>Candidate pipeline</td><td>Add candidate; move stage</td><td>Candidate persists; stage updates</td><td class="P2">P2</td></tr>
+<tr><td>GOL-01</td><td>Assign goal</td><td>Create goal for employee</td><td>Goal appears on employee side</td><td class="P1">P1</td></tr>
+<tr><td>GOL-02</td><td>Goal status counts</td><td>Change statuses</td><td>Dashboard goal breakdown updates</td><td class="P2">P2</td></tr>
+<tr><td>NOT-01</td><td>Send announcement</td><td>Create notification (all / targeted)</td><td>Employee receives with unread badge</td><td class="P1">P1</td></tr>
+<tr><td>HLP-01</td><td>Help query inbox</td><td>Employee submits query</td><td>Query appears in HR help inbox</td><td class="P2">P2</td></tr>
+</table>
+</div>
+
+<!-- 10 -->
+<div class="section">
+<h2>10. Test Cases — Employee Dashboard</h2>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>ESD-01</td><td>Personal overview</td><td>Login → dashboard</td><td>Correct name, ID, dept, today's status, live clock</td><td class="P1">P1</td></tr>
+<tr><td>EPR-01</td><td>Edit personal info</td><td>Profile → edit phone/address → save</td><td>Saved to Firestore; reflected on reload</td><td class="P1">P1</td></tr>
+<tr><td>EPR-02</td><td>Upload profile photo</td><td>Profile → upload → confirm</td><td>Photo saved; shows in Overview <b>and sidebar</b> instantly</td><td class="P1">P1</td></tr>
+<tr><td>EPR-03</td><td>Remove profile photo</td><td>Profile → remove</td><td>Photo cleared everywhere; initials fallback shown</td><td class="P2">P2</td></tr>
+<tr><td>EPR-04</td><td>HR-locked fields</td><td>View govt IDs set by HR</td><td>Marked "By HR"; not editable by employee</td><td class="P2">P2</td></tr>
+<tr><td>EPR-05</td><td>Add education/experience/skills</td><td>Add entries → save</td><td>Entries persist to employee record</td><td class="P3">P3</td></tr>
+<tr><td>EPR-06</td><td>Change password</td><td>Security → change password</td><td>Re-auth required; password updates; wrong current pw errors</td><td class="P1">P1</td></tr>
+<tr><td>ELV-01</td><td>Apply for leave</td><td>Leave → apply with dates/type</td><td>Request created (Pending); visible to HR</td><td class="P1">P1</td></tr>
+<tr><td>ELV-02</td><td>Leave status sync</td><td>After HR approves/rejects</td><td>Status updates without manual refresh</td><td class="P1">P1</td></tr>
+<tr><td>ELV-03</td><td>Cancel pending leave</td><td>Cancel own pending request</td><td>Allowed only while Pending</td><td class="P2">P2</td></tr>
+<tr><td>EAT-01</td><td>Monthly attendance</td><td>Open attendance</td><td>Own records only; correct hours</td><td class="P2">P2</td></tr>
+<tr><td>EPS-01</td><td>Download payslip</td><td>Payslip → download</td><td>Correct month's payslip downloads</td><td class="P2">P2</td></tr>
+<tr><td>ECAL-01</td><td>Calendar holidays</td><td>Open calendar</td><td>Opens on current month; holidays highlighted; today ringed</td><td class="P2">P2</td></tr>
+<tr><td>EGL-01</td><td>Update goal progress</td><td>Goals → update progress</td><td>Progress saved; HR sees change</td><td class="P2">P2</td></tr>
+<tr><td>ENO-01</td><td>Notifications &amp; badges</td><td>Receive notification</td><td>Unread badge count correct; clears on read</td><td class="P2">P2</td></tr>
+<tr><td>EHP-01</td><td>Raise help query</td><td>Help → submit with attachment</td><td>Query + attachment stored; HR receives</td><td class="P3">P3</td></tr>
+</table>
+</div>
+
+<!-- 11 -->
+<div class="section">
+<h2>11. Test Cases — Cross-App Real-Time Sync</h2>
+<div class="box">These are the highest-value tests: they confirm the two dashboards stay consistent through the shared Firebase backend. Run with both apps open side by side.</div>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:30%">Scenario</th><th style="width:41%">Steps &amp; Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>SYN-01</td><td>Leave approval sync</td><td>HR approves leave → employee's Leave page updates status without refresh</td><td class="P1">P1</td></tr>
+<tr><td>SYN-02</td><td>New goal sync</td><td>HR assigns goal → employee Goals page shows it (real-time listener)</td><td class="P1">P1</td></tr>
+<tr><td>SYN-03</td><td>Notification sync</td><td>HR sends announcement → employee badge increments live</td><td>P1</td></tr>
+<tr><td>SYN-04</td><td>Profile edit → directory</td><td>Employee updates phone → HR directory shows new value on reload</td><td class="P2">P2</td></tr>
+<tr><td>SYN-05</td><td>Photo → HR directory</td><td>Employee uploads photo → appears in HR employee list (reads photoURL/profilePhoto)</td><td class="P2">P2</td></tr>
+<tr><td>SYN-06</td><td>Employee status → dashboard KPI</td><td>HR changes status to On Leave → dashboard KPI recount correct</td><td class="P2">P2</td></tr>
+<tr><td>SYN-07</td><td>Help query round-trip</td><td>Employee raises query → HR help inbox receives it</td><td class="P2">P2</td></tr>
+</table>
+</div>
+
+<!-- 12 -->
+<div class="section">
+<h2>12. Test Cases — Profile Photo &amp; File Uploads</h2>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>UPL-01</td><td>Photo field consistency</td><td>Upload photo via employee profile</td><td>Both <code>photoURL</code> &amp; <code>profilePhoto</code> written; sidebar + HR list read it</td><td class="P1">P1</td></tr>
+<tr><td>UPL-02</td><td>Same-session update</td><td>Upload photo</td><td>Sidebar updates instantly via <code>employeePhotoUpdated</code> event (no reload)</td><td class="P2">P2</td></tr>
+<tr><td>UPL-03</td><td>Persist across reload</td><td>Upload → hard refresh</td><td>Photo still shown in sidebar &amp; profile</td><td class="P1">P1</td></tr>
+<tr><td>UPL-04</td><td>Non-image rejected</td><td>Try uploading a .pdf as photo</td><td>Rejected (image types only)</td><td class="P3">P3</td></tr>
+<tr><td>UPL-05</td><td>Document upload</td><td>Upload PAN/Aadhar/resume</td><td>Stored in Storage; status → Uploaded; viewable</td><td class="P2">P2</td></tr>
+<tr><td>UPL-06</td><td>Certificate upload</td><td>Upload education certificate</td><td>Linked to education entry; downloadable</td><td class="P3">P3</td></tr>
+<tr><td>UPL-07</td><td>Broken image fallback</td><td>Photo URL fails to load</td><td>Falls back to initials, no broken-image icon</td><td class="P3">P3</td></tr>
+</table>
+</div>
+
+<!-- 13 -->
+<div class="section">
+<h2>13. Test Cases — Caching &amp; Performance</h2>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>PRF-01</td><td>Cache-first render</td><td>Visit Employees page twice</td><td>2nd visit renders instantly from <code>sessionStorage</code>, then refreshes</td><td class="P2">P2</td></tr>
+<tr><td>PRF-02</td><td>Cache invalidation</td><td>Add/edit/delete employee</td><td>Loader re-runs; cache rewritten; no stale data</td><td class="P2">P2</td></tr>
+<tr><td>PRF-03</td><td>Background refresh</td><td>Change data in Firebase → revisit</td><td>Cached shown first, then updated to fresh value</td><td class="P3">P3</td></tr>
+<tr><td>PRF-04</td><td>Skeleton loaders</td><td>First load with empty cache</td><td>Skeletons prevent layout shift</td><td class="P3">P3</td></tr>
+<tr><td>PRF-05</td><td>Sidebar cache</td><td>Reload dashboard</td><td>Name/photo appear instantly from cached sidebar identity</td><td class="P3">P3</td></tr>
+</table>
+</div>
+
+<!-- 14 -->
+<div class="section">
+<h2>14. Test Cases — UI / Responsive / Compatibility</h2>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:26%">Scenario</th><th style="width:37%">Steps</th><th style="width:20%">Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>UI-01</td><td>Sidebar branding</td><td>Inspect both sidebars</td><td>Navy <code>#0B1929</code> bg; WOWAYS logo (white + teal); correct spacing</td><td class="P3">P3</td></tr>
+<tr><td>UI-02</td><td>Active nav highlight</td><td>Navigate modules</td><td>Active item highlighted; badges show unread counts</td><td class="P3">P3</td></tr>
+<tr><td>UI-03</td><td>Empty states</td><td>View module with no data</td><td>Friendly empty message, not blank/error</td><td class="P3">P3</td></tr>
+<tr><td>UI-04</td><td>Browser compatibility</td><td>Run core flows on Chrome/Edge/Firefox</td><td>Consistent behaviour, no console errors</td><td class="P2">P2</td></tr>
+<tr><td>UI-05</td><td>Responsive layout</td><td>Resize to tablet width</td><td>Layout adapts; no horizontal overflow</td><td class="P3">P3</td></tr>
+<tr><td>UI-06</td><td>Toast notifications</td><td>Trigger save/upload</td><td>Success/error toasts appear and auto-dismiss</td><td class="P3">P3</td></tr>
+</table>
+</div>
+
+<!-- 15 -->
+<div class="section">
+<h2>15. Security Test Cases</h2>
+<table class="tc">
+<tr><th style="width:9%">ID</th><th style="width:30%">Scenario</th><th style="width:41%">Steps &amp; Expected Result</th><th style="width:8%">Pri</th></tr>
+<tr><td>SEC-01</td><td>Employee data isolation</td><td>Employee A cannot read Employee B's leave/payroll (Firestore rules enforce own-record access)</td><td class="P1">P1</td></tr>
+<tr><td>SEC-02</td><td>Unauthenticated Firestore read</td><td>Attempt read without auth → denied by rules</td><td class="P1">P1</td></tr>
+<tr><td>SEC-03</td><td>Storage access control</td><td>Unauthenticated request to a storage path → denied</td><td class="P2">P2</td></tr>
+<tr><td>SEC-04</td><td>Payroll write restriction</td><td>Employee cannot write payroll (HR-only)</td><td class="P1">P1</td></tr>
+<tr><td>SEC-05</td><td>Secrets not exposed</td><td>Verify no <code>.env.local</code> / service keys in repo or client bundle beyond public config</td><td class="P1">P1</td></tr>
+<tr><td>SEC-06</td><td>Session expiry handling</td><td>Deleted/disabled account is signed out gracefully</td><td class="P2">P2</td></tr>
+</table>
+</div>
+
+<!-- 16 -->
+<div class="section">
+<h2>16. Regression Checklist &amp; Sign-off</h2>
+<h4>Post-deployment regression (run after every deploy)</h4>
+<ul>
+<li>☐ HR login &amp; employee login succeed.</li>
+<li>☐ Add / edit / delete employee works; directory &amp; KPIs update.</li>
+<li>☐ Apply leave → approve → status syncs to employee.</li>
+<li>☐ Upload profile photo → shows in sidebar, profile &amp; HR list; persists on reload.</li>
+<li>☐ Assign goal &amp; send notification → received by employee.</li>
+<li>☐ Cached pages render instantly; refresh brings latest data.</li>
+<li>☐ Sidebars show correct navy branding &amp; spacing on both apps.</li>
+<li>☐ No console errors on any core page.</li>
+</ul>
+<h4>Sign-off</h4>
+<table>
+<tr><th style="width:33%">Role</th><th style="width:34%">Name</th><th style="width:33%">Date / Result</th></tr>
+<tr><td>QA Engineer</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><td>Developer</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><td>HR Stakeholder (UAT)</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+</table>
+</div>
+
+<p class="muted" style="margin-top:26px; border-top:1px solid #d8e0e8; padding-top:10px; font-size:9pt;">
+WOWAYS HR Portal — Test Plan &amp; QA Requirements · Version 1.0 · July 2026 · Confidential
+</p>
+
+</body>
+</html>

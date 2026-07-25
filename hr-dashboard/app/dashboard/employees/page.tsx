@@ -7,8 +7,14 @@ import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
 import { firebaseConfig, db, storage } from "@/lib/firebase";
 import { createUserProfile } from "@/lib/authService";
 import { getEmployees, upsertEmployee, updateEmployee, deleteEmployee } from "@/lib/firebaseService";
+import { invalidateEmployees } from "@/lib/cachedService";
+import { readCache, writeCache } from "@/lib/cache";
+import { getDoc, doc as fsDoc } from "firebase/firestore";
 import { DEPARTMENTS } from "@/lib/constants";
+import { useDepartments } from "@/lib/useDepartments";
+import { EmptyState } from "@/components/EmptyState";
 import { uploadDocFile, saveDocMeta, loadDocMeta, StoredDoc } from "@/lib/documentService";
+import { SkeletonTableRows } from "@/components/Skeleton";
 
 function generateTempPassword(): string {
   const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -78,6 +84,44 @@ interface Employee {
   photoURL?: string;
 }
 
+// Strict email format (NEW-003): local part and every domain label must start/end
+// alphanumeric, the domain needs at least one dot, and the TLD must be 2+ letters.
+// This rejects obviously-malformed values ("a@b", "a@b.c", "a@-b.com", "a@b..com",
+// "a@b.c0m") that the old "@ + dot" check let through.
+const EMAIL_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+
+// Verify an email's domain can actually receive mail (has a real MX record), so
+// structurally-valid but bogus domains like "hh@hghgh.com" — which publishes a
+// "null MX" (RFC 7505) — are rejected. Fails OPEN on any DNS/network error.
+async function emailDomainAcceptsMail(email: string): Promise<boolean> {
+  const domain = email.split("@")[1]?.trim().toLowerCase();
+  if (!domain) return false;
+  try {
+    const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=MX`);
+    if (!res.ok) return true; // network hiccup → don't block
+    const data = await res.json();
+    if (data.Status !== 0) return false; // NXDOMAIN etc. → domain doesn't exist
+    const answers: { data?: string }[] = Array.isArray(data.Answer) ? data.Answer : [];
+    if (answers.length === 0) return false; // no MX at all
+    return answers.some((a) => {
+      const target = String(a.data ?? "").trim().split(/\s+/).pop() ?? "";
+      return target !== "." && target !== ""; // "." = null MX → refuses mail
+    });
+  } catch {
+    return true; // DNS unreachable → don't block
+  }
+}
+
+// Work emails must be on the company domain (rejects structurally-valid but bogus
+// domains like "hh@hghgh.com" that a format regex alone can't catch — EMP-003).
+const COMPANY_EMAIL_DOMAIN = "woways.in";
+function validateWorkEmail(raw: string): string | null {
+  const email = raw.trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) return "Please enter a valid work email address.";
+  if (!email.endsWith("@" + COMPANY_EMAIL_DOMAIN)) return `Work email must be a company address ending in @${COMPANY_EMAIL_DOMAIN}.`;
+  return null;
+}
+
 const empDefaults = {
   nationality: "Indian", maritalStatus: "Single", fatherSpouseName: "",
   alternatePhone: "", city: "", state: "", pinCode: "",
@@ -89,11 +133,10 @@ const empDefaults = {
 
 const initialEmployees: Employee[] = [];
 
-const depts = ["All", ...DEPARTMENTS];
 const managers: string[] = [];
 
 const blankForm: Omit<Employee, "id"> = {
-  name: "", designation: "", department: DEPARTMENTS[0], role: "", reportingManager: "",
+  name: "", designation: "", department: "", role: ROLES[0], reportingManager: "",
   workMode: "Remote", employmentType: "Full-Time", doj: "", status: "Active",
   email: "", phone: "", emergencyContact: "", emergencyName: "",
   nationality: "Indian", maritalStatus: "Single", fatherSpouseName: "",
@@ -124,12 +167,57 @@ function validatePhone(phone: string): string | null {
   return null;
 }
 
+function validateDob(dob: string): string | null {
+  if (!dob) return null; // optional field — skip if blank
+  const d = new Date(dob);
+  if (isNaN(d.getTime())) return "Please enter a valid date of birth.";
+  const today = new Date();
+  today.setHours(23, 59, 59, 999); // allow today, reject anything after
+  if (d > today) return "Date of birth cannot be in the future.";
+  // Must be at least 18 years old: DOB on/before the date exactly 18 years ago.
+  const cutoff = new Date();
+  cutoff.setFullYear(cutoff.getFullYear() - 18);
+  cutoff.setHours(23, 59, 59, 999);
+  if (d > cutoff) return "Employee must be at least 18 years old.";
+  return null;
+}
+
+// Latest allowable DOB (18 years ago today) — caps the date picker.
+function maxDobStr(): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 18);
+  return d.toISOString().split("T")[0];
+}
+
 const statusColor: Record<EmployeeStatus, string> = {
   Active: "bg-green-100 text-green-700",
   "On Leave": "bg-yellow-100 text-yellow-700",
   Probation: "bg-orange-100 text-orange-700",
   Exited: "bg-red-100 text-red-700",
 };
+
+// Coerce an arbitrary CSV "status" value to a valid Employee status (EMP-009).
+// Bulk-import rows sometimes carry a Recruitment candidate status like "applied"
+// or free text; anything not recognised as a real employee state becomes "Active".
+const EMPLOYEE_STATUSES: EmployeeStatus[] = ["Active", "On Leave", "Probation", "Exited"];
+function normalizeEmployeeStatus(raw: unknown): EmployeeStatus {
+  const v = String(raw ?? "").trim().toLowerCase().replace(/[_\s-]+/g, " ");
+  const map: Record<string, EmployeeStatus> = {
+    "active": "Active",
+    "on leave": "On Leave",
+    "onleave": "On Leave",
+    "leave": "On Leave",
+    "probation": "Probation",
+    "probationary": "Probation",
+    "exited": "Exited",
+    "exit": "Exited",
+    "inactive": "Exited",
+    "terminated": "Exited",
+    "resigned": "Exited",
+    "left": "Exited",
+  };
+  return map[v] ?? "Active";
+}
 const workModeColor: Record<WorkMode, string> = {
   Remote: "bg-blue-100 text-blue-700",
   "On-site": "bg-purple-100 text-purple-700",
@@ -149,13 +237,22 @@ const FORM_TAB_LABELS: Record<FormTab, string> = {
 };
 
 function FormModal({
-  title, subtitle, empId, form, setForm, onSave, onClose, saveLabel, saving,
+  title, subtitle, empId, onEmpIdChange, form, setForm, onSave, onClose, saveLabel, saving,
 }: {
-  title: string; subtitle?: string; empId: string;
+  title: string; subtitle?: string; empId: string; onEmpIdChange?: (id: string) => void;
   form: FormState; setForm: (f: FormState) => void;
   onSave: () => void; onClose: () => void; saveLabel: string; saving?: boolean;
 }) {
   const [tab, setTab] = useState<FormTab>("basic");
+  const departments = useDepartments();
+
+  // Snapshot the form as it was when the modal opened, to detect unsaved edits.
+  const initialSnapshot = useRef(JSON.stringify({ form, empId }));
+  function attemptClose() {
+    const dirty = JSON.stringify({ form, empId }) !== initialSnapshot.current;
+    if (dirty && !window.confirm("You have unsaved changes. Discard them and close?")) return;
+    onClose();
+  }
 
   const f = (field: keyof FormState, val: string) => setForm({ ...form, [field]: val });
 
@@ -171,7 +268,7 @@ function FormModal({
   const goBack = () => setTab(FORM_TABS[tabIdx - 1]);
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={attemptClose}>
       <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b shrink-0">
@@ -179,7 +276,7 @@ function FormModal({
             <h2 className="text-lg font-bold text-gray-900">{title}</h2>
             {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+          <button onClick={attemptClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
 
         {/* Step indicator */}
@@ -209,8 +306,16 @@ function FormModal({
           {tab === "basic" && (
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className={labelCls}>Employee ID</label>
-                <input value={empId} readOnly className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm bg-gray-50" />
+                <label className={labelCls}>
+                  Employee ID {onEmpIdChange && <span className="text-gray-400 font-normal">(auto-filled · editable)</span>}
+                </label>
+                <input
+                  value={empId}
+                  readOnly={!onEmpIdChange}
+                  onChange={(e) => onEmpIdChange?.(e.target.value.toUpperCase())}
+                  placeholder="e.g. EMP001"
+                  className={`w-full px-3 py-2 rounded-xl border text-sm focus:outline-none ${onEmpIdChange ? `${inputCls} border-gray-200` : "border-gray-200 bg-gray-50"}`}
+                />
               </div>
               <div>
                 <label className={labelCls}>Full Name *</label>
@@ -224,7 +329,7 @@ function FormModal({
               </div>
               <div>
                 <label className={labelCls}>Date of Birth</label>
-                <input type="date" value={form.dob} onChange={(e) => f("dob", e.target.value)} className={inputCls} />
+                <input type="date" max={maxDobStr()} value={form.dob} onChange={(e) => f("dob", e.target.value)} className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Marital Status</label>
@@ -336,48 +441,17 @@ function FormModal({
                 <textarea value={form.designation} onChange={(e) => f("designation", e.target.value)} placeholder="e.g. Software Engineer" rows={2} className={textAreaCls} />
               </div>
               <div>
-                <label className={labelCls}>Department</label>
+                <label className={labelCls}>Department *</label>
                 <select value={form.department} onChange={(e) => f("department", e.target.value)} className={selectCls}>
-                  {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
+                  <option value="">Select department</option>
+                  {departments.map(d => <option key={d}>{d}</option>)}
                 </select>
               </div>
-              <div className="col-span-2">
+              <div>
                 <label className={labelCls}>Role</label>
-                <p className="text-[11px] text-gray-400 mb-2">Drag a role to the drop area below to assign it</p>
-                <div className="flex gap-2 flex-wrap mb-2">
-                  {ROLES.map(role => (
-                    <div
-                      key={role}
-                      draggable
-                      onDragStart={e => e.dataTransfer.setData("text/plain", role)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold cursor-grab active:cursor-grabbing border select-none transition-colors ${
-                        form.role === role
-                          ? "bg-[#4F3CC9] text-white border-[#4F3CC9]"
-                          : "bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
-                      }`}
-                    >
-                      {role}
-                    </div>
-                  ))}
-                </div>
-                <div
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={e => { e.preventDefault(); f("role", e.dataTransfer.getData("text/plain")); }}
-                  className={`border-2 border-dashed rounded-xl px-4 py-3 text-center text-sm transition-colors ${
-                    form.role ? "border-[#4F3CC9] bg-[#F5F3FF]" : "border-gray-200 hover:border-[#4F3CC9] hover:bg-gray-50"
-                  }`}
-                >
-                  {form.role ? (
-                    <div className="flex items-center justify-center gap-2">
-                      <span className="text-[#4F3CC9] font-semibold">{form.role}</span>
-                      <button type="button" onClick={() => f("role", "")} className="text-gray-400 hover:text-red-500">
-                        <X size={13}/>
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="text-gray-400 text-xs">Drop a role here to assign</span>
-                  )}
-                </div>
+                <select value={form.role} onChange={(e) => f("role", e.target.value)} className={selectCls}>
+                  {ROLES.map(role => <option key={role}>{role}</option>)}
+                </select>
               </div>
               <div>
                 <label className={labelCls}>Reporting Manager</label>
@@ -409,8 +483,8 @@ function FormModal({
               </div>
               <div>
                 <label className={labelCls}>Status</label>
-                <select value={form.status} onChange={(e) => f("status", e.target.value as EmployeeStatus)} className={selectCls}>
-                  {["Active","On Leave","Probation","Exited"].map(s => <option key={s}>{s}</option>)}
+                <select value={normalizeEmployeeStatus(form.status)} onChange={(e) => f("status", e.target.value as EmployeeStatus)} className={selectCls}>
+                  {EMPLOYEE_STATUSES.map(s => <option key={s}>{s}</option>)}
                 </select>
               </div>
               <div>
@@ -440,9 +514,25 @@ function FormModal({
               <p className={sectionHead}>Highest Education</p>
               <div>
                 <label className={labelCls}>Qualification</label>
-                <select value={form.highestQualification} onChange={(e) => f("highestQualification", e.target.value)} className={selectCls}>
+                <select
+                  value={["High School","Diploma","Bachelor's","Master's","MBA","PhD"].includes(form.highestQualification) ? form.highestQualification : "Other"}
+                  onChange={(e) => {
+                    if (e.target.value === "Other") f("highestQualification", "");
+                    else f("highestQualification", e.target.value);
+                  }}
+                  className={selectCls}
+                >
                   {["High School","Diploma","Bachelor's","Master's","MBA","PhD","Other"].map(q => <option key={q}>{q}</option>)}
                 </select>
+                {!["High School","Diploma","Bachelor's","Master's","MBA","PhD"].includes(form.highestQualification) && (
+                  <input
+                    value={form.highestQualification}
+                    onChange={(e) => f("highestQualification", e.target.value)}
+                    placeholder="Enter qualification"
+                    className={`${inputCls} mt-2`}
+                    autoFocus
+                  />
+                )}
               </div>
               <div>
                 <label className={labelCls}>Specialization / Stream</label>
@@ -487,9 +577,7 @@ function FormModal({
               <p className={sectionHead}>Bank Details</p>
               <div>
                 <label className={labelCls}>Bank Name</label>
-                <select value={form.bankName} onChange={(e) => f("bankName", e.target.value)} className={selectCls}>
-                  {["","SBI","HDFC Bank","ICICI Bank","Axis Bank","Kotak Mahindra","Yes Bank","Bank of Baroda","Punjab National Bank","Other"].map(b => <option key={b}>{b}</option>)}
-                </select>
+                <input value={form.bankName} onChange={(e) => f("bankName", e.target.value)} placeholder="Enter bank name" className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Account Holder Name</label>
@@ -545,18 +633,88 @@ type BulkRow = Record<CsvCol, string> & { _err?: string };
 const BLANK_BULK_ROW = (): BulkRow =>
   Object.fromEntries(CSV_HEADERS.map((h) => [h, ""])) as BulkRow;
 
+// Split a single CSV line, respecting double-quoted fields that may contain commas.
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; } // escaped quote ""
+      else inQuotes = !inQuotes;
+    } else if (ch === "," && !inQuotes) {
+      out.push(cur); cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((v) => v.trim());
+}
+
 function parseCsv(text: string): BulkRow[] {
-  const lines = text.trim().split(/\r?\n/);
+  // Strip a leading UTF-8 BOM (Excel / Google Sheets add one) so the first
+  // header isn't read as "﻿name" and silently unmatched.
+  const clean = text.replace(/^﻿/, "").trim();
+  const lines = clean.split(/\r?\n/).filter((l) => l.trim() !== "");
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+  // Map each incoming header to the canonical column key, case-insensitively, and
+  // accept common human-readable header names (e.g. "Full Name", "Work Email") so
+  // CSVs authored by hand — not just the template — still import.
+  const canonical = new Map(CSV_HEADERS.map((h) => [h.toLowerCase(), h] as const));
+  const aliases: Record<string, CsvCol> = {
+    "full name": "name", "employee name": "name",
+    "work email": "email", "email id": "email", "e-mail": "email", "mail": "email",
+    "phone number": "phone", "mobile": "phone", "mobile number": "phone", "contact": "phone", "contact number": "phone",
+    "job title": "designation", "title": "designation", "role applied": "designation",
+    "dept": "department",
+    "work location": "branch", "location": "branch",
+    "employment type": "employmentType", "type": "employmentType",
+    "work mode": "workMode",
+    "date of joining": "doj", "joining date": "doj", "date of join": "doj",
+    "date of birth": "dob",
+    "reporting manager": "reportingManager", "manager": "reportingManager",
+    "notice period": "noticePeriod",
+    "pin code": "pinCode", "pin": "pinCode", "zip": "pinCode", "postal code": "pinCode",
+    "salary": "ctc", "annual ctc": "ctc",
+  };
+  const headers = splitCsvLine(lines[0]).map((h) => {
+    const key = h.toLowerCase().replace(/\*/g, "").trim();
+    return canonical.get(key) ?? aliases[key] ?? "";
+  });
   return lines.slice(1).map((line) => {
-    const vals = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
+    const vals = splitCsvLine(line);
     const row = BLANK_BULK_ROW();
-    headers.forEach((h, i) => { if (h in row) (row as Record<string, string>)[h] = vals[i] ?? ""; });
-    if (!row.name) row._err = "Name is required";
-    else if (!row.email) row._err = "Email is required";
+    headers.forEach((h, i) => { if (h && h in row) (row as Record<string, string>)[h] = vals[i] ?? ""; });
+    const err = validateBulkRow(row);
+    if (err) row._err = err;
     return row;
   });
+}
+
+// A row where every column is blank — an unused manual-entry line, not an error.
+function isEmptyBulkRow(row: BulkRow): boolean {
+  return CSV_HEADERS.every((h) => !row[h]?.trim());
+}
+
+// Validate one bulk-import row BEFORE it can be imported (EMP-001 retest):
+// required identity fields plus number-format checks on phone, salary and PIN.
+function validateBulkRow(row: BulkRow): string | null {
+  if (!row.name?.trim()) return "Name is required";
+  const email = row.email?.trim() ?? "";
+  if (!email) return "Email is required";
+  if (!EMAIL_RE.test(email)) return "Invalid email format";
+  if (row.phone?.trim()) {
+    const phoneErr = validatePhone(row.phone);
+    if (phoneErr) return `Phone: ${phoneErr}`;
+  }
+  if (row.ctc?.trim()) {
+    const n = parseFloat(row.ctc.replace(/[^\d.]/g, ""));
+    if (isNaN(n) || n <= 0) return "Salary/CTC must be a valid number";
+  }
+  if (row.pinCode?.trim() && !/^\d{6}$/.test(row.pinCode.trim())) return "PIN code must be 6 digits";
+  return null;
 }
 
 function rowToEmployee(row: BulkRow, id: string): Employee {
@@ -571,7 +729,7 @@ function rowToEmployee(row: BulkRow, id: string): Employee {
     reportingManager: row.reportingManager || "",
     branch: row.branch || "Bengaluru HQ", shift: row.shift || "9AM–6PM",
     ctc: row.ctc, noticePeriod: row.noticePeriod || "30 Days",
-    status: (row.status as EmployeeStatus) || "Active",
+    status: normalizeEmployeeStatus(row.status),
     city: row.city, state: row.state, pinCode: row.pinCode,
     skills: row.skills,
     bloodGroup: "B+", personalEmail: "", currentAddress: "", permanentAddress: "",
@@ -588,6 +746,7 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
   onClose: () => void;
   nextIdStart: number;
 }) {
+  const departments = useDepartments();
   const [mode, setMode] = useState<"multi" | "csv">("multi");
   const [rows, setRows] = useState<BulkRow[]>([BLANK_BULK_ROW(), BLANK_BULK_ROW(), BLANK_BULK_ROW()]);
   const [csvRows, setCsvRows] = useState<BulkRow[]>([]);
@@ -626,8 +785,24 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
 
   function handleImport() {
     const source = mode === "multi" ? rows : csvRows;
-    const valid = source.filter((r) => r.name.trim() && r.email.trim() && !r._err);
-    if (valid.length === 0) { setToast("No valid rows to import."); setTimeout(() => setToast(""), 3000); return; }
+    // Re-validate every non-empty row at import time (edits clear _err), so bad
+    // phone numbers / salaries / emails can never slip through (EMP-001 retest).
+    const annotated = source.map((r) =>
+      isEmptyBulkRow(r) ? { ...r, _err: undefined } : { ...r, _err: validateBulkRow(r) ?? undefined }
+    );
+    const valid = annotated.filter((r) => !isEmptyBulkRow(r) && !r._err);
+    const invalid = annotated.filter((r) => !isEmptyBulkRow(r) && r._err).length;
+    // Surface the errors on the preview rows so it's clear why a row was rejected.
+    if (mode === "multi") setRows(annotated); else setCsvRows(annotated);
+    if (valid.length === 0) {
+      setToast(invalid > 0 ? "No valid rows — fix the highlighted errors first." : "No valid rows to import.");
+      setTimeout(() => setToast(""), 3500);
+      return;
+    }
+    if (invalid > 0) {
+      setToast(`${invalid} row${invalid !== 1 ? "s" : ""} with invalid data (phone/salary/email) skipped — see highlighted rows.`);
+      setTimeout(() => setToast(""), 4500);
+    }
     const emps = valid.map((r, i) =>
       rowToEmployee(r, `EMP${String(nextIdStart + i).padStart(3, "0")}`)
     );
@@ -635,7 +810,7 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
   }
 
   const previewRows = mode === "multi" ? rows : csvRows;
-  const validCount = previewRows.filter((r) => r.name.trim() && r.email.trim() && !r._err).length;
+  const validCount = previewRows.filter((r) => !isEmptyBulkRow(r) && !validateBulkRow(r)).length;
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -680,6 +855,7 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                       <th className="px-2 py-2 text-left min-w-[110px]">Phone</th>
                       <th className="px-2 py-2 text-left min-w-[130px]">Designation</th>
                       <th className="px-2 py-2 text-left min-w-[110px]">Department</th>
+                      <th className="px-2 py-2 text-left min-w-[100px]">Role</th>
                       <th className="px-2 py-2 text-left min-w-[90px]">Work Mode</th>
                       <th className="px-2 py-2 text-left min-w-[90px]">Type</th>
                       <th className="px-2 py-2 text-left min-w-[100px]">Date of Join</th>
@@ -712,7 +888,12 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                         <td className="px-2 py-2"><input value={row.designation} onChange={(e) => setCell(i, "designation", e.target.value)} placeholder="Software Eng." className={inputCls} /></td>
                         <td className="px-2 py-2">
                           <select value={row.department || "Sales"} onChange={(e) => setCell(i, "department", e.target.value)} className={selectCls}>
-                            {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
+                            {departments.map(d => <option key={d}>{d}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-2 py-2">
+                          <select value={row.role || ROLES[0]} onChange={(e) => setCell(i, "role", e.target.value)} className={selectCls}>
+                            {ROLES.map(r => <option key={r}>{r}</option>)}
                           </select>
                         </td>
                         <td className="px-2 py-2">
@@ -732,8 +913,8 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                           </select>
                         </td>
                         <td className="px-2 py-2">
-                          <select value={row.status || "Active"} onChange={(e) => setCell(i, "status", e.target.value)} className={selectCls}>
-                            {["Active","Probation","Intern","On Leave"].map(s => <option key={s}>{s}</option>)}
+                          <select value={normalizeEmployeeStatus(row.status)} onChange={(e) => setCell(i, "status", e.target.value)} className={selectCls}>
+                            {EMPLOYEE_STATUSES.map(s => <option key={s}>{s}</option>)}
                           </select>
                         </td>
                         <td className="px-2 py-2">
@@ -827,11 +1008,14 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
 interface CreatedCreds { name: string; email: string; password: string; empId: string; }
 
 export default function EmployeesPage() {
+  const departmentOptions = ["All", ...useDepartments()];
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
+  const EMP_CACHE = "hr_employees_v2";
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("All");
   const [showAdd, setShowAdd] = useState(false);
+  const [addEmpId, setAddEmpId] = useState("");
   const [showBulk, setShowBulk] = useState(false);
   const [viewEmp, setViewEmp] = useState<Employee | null>(null);
   const [viewTab, setViewTab] = useState<"info" | "employment" | "documents">("info");
@@ -855,8 +1039,16 @@ export default function EmployeesPage() {
   const loadEmployees = useCallback(async () => {
     try {
       const docs = await getEmployees();
+      const statusFixes: { docId: string; status: EmployeeStatus }[] = [];
       const data: Employee[] = docs.map((d) => {
         const r = d as Record<string, unknown>;
+        const normStatus = normalizeEmployeeStatus(r.status);
+        // Self-heal (EMP-009): a stored status that isn't a valid employee status
+        // (e.g. an imported Recruitment "applied") is corrected in Firestore, not
+        // just masked on display — so every other screen reading it sees a valid value.
+        if (typeof r.status === "string" && r.status.trim() && !EMPLOYEE_STATUSES.includes(r.status.trim() as EmployeeStatus)) {
+          statusFixes.push({ docId: r.id as string, status: normStatus });
+        }
         return {
           id: (r.employeeId ?? r.id) as string,
           name: (r.name as string) ?? "",
@@ -866,7 +1058,7 @@ export default function EmployeesPage() {
           workMode: ((r.workMode as WorkMode) ?? "Remote"),
           employmentType: ((r.employmentType as EmpType) ?? "Full-Time"),
           doj: (r.doj as string) ?? "",
-          status: ((r.status as EmployeeStatus) ?? "Active"),
+          status: normStatus,
           email: (r.email as string) ?? "",
           phone: (r.phone as string) ?? "",
           emergencyContact: (r.emergencyContact as string) ?? "",
@@ -904,9 +1096,17 @@ export default function EmployeesPage() {
           specialization: (r.specialization as string) ?? "",
           skills: (r.skills as string) ?? "",
           documents: (r.documents as Employee["documents"]) ?? [],
+          photoURL: (r.photoURL as string) || (r.profilePhoto as string) || undefined,
         };
       });
       setEmployees(data);
+      // Cache the fresh list so the next visit renders instantly
+      writeCache(EMP_CACHE, data);
+      // Persist any status corrections back to Firestore so stale/invalid values
+      // (from imports before EMP-009 was fixed) are cleaned up at the source.
+      for (const fix of statusFixes) {
+        updateEmployee(fix.docId, { status: fix.status }).catch(() => {});
+      }
     } catch (err) {
       setAddToast({ msg: "Failed to load employees. Please refresh and try again.", ok: false });
       setTimeout(() => setAddToast(null), 5000);
@@ -914,7 +1114,15 @@ export default function EmployeesPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadEmployees(); }, [loadEmployees]);
+  useEffect(() => {
+    // Show cached employees immediately, then refresh from Firestore in the background
+    const cached = readCache<Employee[]>(EMP_CACHE);
+    if (cached && cached.length) {
+      setEmployees(cached);
+      setLoading(false);
+    }
+    loadEmployees();
+  }, [loadEmployees]);
 
   // Load HR-uploaded docs when viewing an employee
   useEffect(() => {
@@ -953,9 +1161,47 @@ export default function EmployeesPage() {
   });
 
   async function handleAdd() {
-    if (!form.name.trim()) {
-      setAddToast({ msg: "Employee name is required.", ok: false });
+    // Mandatory fields — mirror the "*" markers shown in the Add Employee form.
+    const requiredFields: [keyof typeof form, string][] = [
+      ["name", "Employee name"],
+      ["email", "Work email"],
+      ["phone", "Phone number"],
+      ["emergencyContact", "Emergency contact number"],
+      ["designation", "Designation"],
+      ["department", "Department"],
+    ];
+    for (const [key, label] of requiredFields) {
+      if (!String(form[key] ?? "").trim()) {
+        setAddToast({ msg: `${label} is required.`, ok: false });
+        setTimeout(() => setAddToast(null), 3500);
+        return;
+      }
+    }
+    // Work-email format + company-domain check.
+    const emailErr = validateWorkEmail(form.email);
+    if (emailErr) {
+      setAddToast({ msg: emailErr, ok: false });
       setTimeout(() => setAddToast(null), 3500);
+      return;
+    }
+    // Personal email (optional) — validate format + deliverable domain when provided.
+    const personal = form.personalEmail?.trim();
+    if (personal) {
+      if (!EMAIL_RE.test(personal)) {
+        setAddToast({ msg: "Please enter a valid personal email address.", ok: false });
+        setTimeout(() => setAddToast(null), 3500);
+        return;
+      }
+      if (!(await emailDomainAcceptsMail(personal))) {
+        setAddToast({ msg: "That personal email domain doesn't accept mail — please check the address.", ok: false });
+        setTimeout(() => setAddToast(null), 4000);
+        return;
+      }
+    }
+    const dobErr = validateDob(form.dob);
+    if (dobErr) {
+      setAddToast({ msg: dobErr, ok: false });
+      setTimeout(() => setAddToast(null), 4000);
       return;
     }
     const phoneErr = validatePhone(form.phone);
@@ -977,11 +1223,26 @@ export default function EmployeesPage() {
       return;
     }
     if (saving) return;
-    setSaving(true);
 
     const nums = employees.map((e) => parseInt(e.id.replace("EMP", ""), 10)).filter((n) => !isNaN(n));
     const next = Math.max(0, ...nums) + 1;
-    const newId = `EMP${String(next).padStart(3, "0")}`;
+    const autoId = `EMP${String(next).padStart(3, "0")}`;
+    const newId = addEmpId.trim() || autoId;
+
+    setSaving(true);
+
+    // Check Firestore directly — guarantee no duplicate ID regardless of local state
+    try {
+      const existing = await getDoc(fsDoc(db, "employees", newId));
+      if (existing.exists()) {
+        setAddToast({ msg: `Employee ID "${newId}" already exists. Please use a different ID.`, ok: false });
+        setTimeout(() => setAddToast(null), 5000);
+        setSaving(false);
+        return;
+      }
+    } catch {
+      // Network error — fall through and let upsert handle it
+    }
     const emp: Employee = { id: newId, ...form };
 
     // Snapshot form values before async operations reset the form
@@ -1008,7 +1269,9 @@ export default function EmployeesPage() {
     setForm({ ...blankForm });
     setEmployees((prev) => [...prev, emp]);
 
-    // Reload from Firestore to confirm persistence
+    // Reload from Firestore to confirm persistence + bust shared caches so
+    // other pages (dashboard, attendance, reports) re-fetch on next visit.
+    invalidateEmployees();
     loadEmployees();
 
     // Create Firebase Auth login if email was provided
@@ -1047,14 +1310,46 @@ export default function EmployeesPage() {
   }
 
   async function handleBulkImport(emps: Employee[]) {
-    const results = await Promise.allSettled(emps.map((emp) => {
+    // De-duplicate against existing employees AND within the batch, keyed on work
+    // email (the natural unique identifier). Re-importing the same file must not
+    // create duplicate records (EMP-001) — matching rows are skipped, not re-added.
+    const seen = new Set<string>();
+    for (const e of employees) {
+      const k = (e.email || "").trim().toLowerCase();
+      if (k) seen.add(k);
+    }
+    const toImport: Employee[] = [];
+    let duplicates = 0;
+    for (const emp of emps) {
+      const key = (emp.email || "").trim().toLowerCase();
+      if (key && seen.has(key)) { duplicates++; continue; }
+      if (key) seen.add(key);
+      toImport.push(emp);
+    }
+
+    const dupNote = duplicates > 0 ? ` ${duplicates} duplicate${duplicates !== 1 ? "s" : ""} skipped.` : "";
+    if (toImport.length === 0) {
+      showToast(`No new employees to import — all ${emps.length} row${emps.length !== 1 ? "s" : ""} already exist.`, false);
+      setShowBulk(false);
+      return;
+    }
+
+    const results = await Promise.allSettled(toImport.map((emp) => {
       const { id, ...rest } = emp;
       return upsertEmployee(id, { ...rest, employeeId: id });
     }));
-    const failed = results.filter(r => r.status === "rejected").length;
-    const succeeded = emps.length - failed;
-    if (failed > 0) showToast(succeeded + " imported, " + failed + " failed.", false);
-    else showToast("All " + emps.length + " employees imported.");
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const succeeded = toImport.length - rejected.length;
+    if (rejected.length > 0) {
+      const reason = rejected[0].reason as { code?: string; message?: string };
+      const detail = reason?.code === "permission-denied"
+        ? "permission denied — please sign out and sign in again"
+        : (reason?.message || reason?.code || "unknown error");
+      showToast(`${succeeded} imported, ${rejected.length} failed: ${detail}.${dupNote}`, false);
+    } else {
+      showToast(`${succeeded} employee${succeeded !== 1 ? "s" : ""} imported.${dupNote}`);
+    }
+    invalidateEmployees();
     await loadEmployees();
     setShowBulk(false);
   }
@@ -1065,7 +1360,10 @@ export default function EmployeesPage() {
     setDeleteError(null);
     try {
       await deleteEmployee(deleteEmp.id);
-      setEmployees(employees.filter((e) => e.id !== deleteEmp.id));
+      const next = employees.filter((e) => e.id !== deleteEmp.id);
+      setEmployees(next);
+      writeCache(EMP_CACHE, next);
+      invalidateEmployees();
       setDeleteEmp(null);
     } catch (err) {
       const code = (err as { code?: string }).code ?? "";
@@ -1082,11 +1380,57 @@ export default function EmployeesPage() {
     const { id, ...rest } = emp;
     void id;
     setEditEmp(emp);
-    setEditForm({ ...rest });
+    // Normalize the status so it always matches a real <select> option (EMP-010).
+    // A stored value the dropdown can't match (e.g. an "applied" status from a bad
+    // import) makes the native select silently fall back to its first option
+    // ("Active") without firing onChange — so a later "select Active" is a no-op and
+    // the invalid value gets written straight back. Seeding a valid status fixes that.
+    setEditForm({ ...rest, status: normalizeEmployeeStatus(rest.status) });
   }
 
   async function handleEditSave() {
     if (!editForm || !editEmp) return;
+    // Mandatory fields — cannot blank out required data on edit either.
+    const requiredFields: [keyof typeof editForm, string][] = [
+      ["name", "Employee name"],
+      ["email", "Work email"],
+      ["phone", "Phone number"],
+      ["emergencyContact", "Emergency contact number"],
+      ["designation", "Designation"],
+      ["department", "Department"],
+    ];
+    for (const [key, label] of requiredFields) {
+      if (!String(editForm[key] ?? "").trim()) {
+        setAddToast({ msg: `${label} is required.`, ok: false });
+        setTimeout(() => setAddToast(null), 3500);
+        return;
+      }
+    }
+    const emailErr = validateWorkEmail(editForm.email);
+    if (emailErr) {
+      setAddToast({ msg: emailErr, ok: false });
+      setTimeout(() => setAddToast(null), 3500);
+      return;
+    }
+    const editPersonal = editForm.personalEmail?.trim();
+    if (editPersonal) {
+      if (!EMAIL_RE.test(editPersonal)) {
+        setAddToast({ msg: "Please enter a valid personal email address.", ok: false });
+        setTimeout(() => setAddToast(null), 3500);
+        return;
+      }
+      if (!(await emailDomainAcceptsMail(editPersonal))) {
+        setAddToast({ msg: "That personal email domain doesn't accept mail — please check the address.", ok: false });
+        setTimeout(() => setAddToast(null), 4000);
+        return;
+      }
+    }
+    const dobErr = validateDob(editForm.dob);
+    if (dobErr) {
+      setAddToast({ msg: dobErr, ok: false });
+      setTimeout(() => setAddToast(null), 4000);
+      return;
+    }
     const phoneErr = validatePhone(editForm.phone);
     if (phoneErr) { setAddToast({ msg: phoneErr, ok: false }); setTimeout(() => setAddToast(null), 4000); return; }
     const altPhoneErr = validatePhone(editForm.alternatePhone);
@@ -1097,6 +1441,7 @@ export default function EmployeesPage() {
       await updateEmployee(editEmp.id, { ...editForm, employeeId: editEmp.id });
       setEditEmp(null);
       setEditForm(null);
+      invalidateEmployees();
       await loadEmployees();
     } catch (err) {
       setAddToast({ msg: "Failed to save changes. Please try again.", ok: false });
@@ -1169,7 +1514,7 @@ export default function EmployeesPage() {
           <button onClick={() => setShowBulk(true)} className="flex items-center gap-2 border border-[#4F3CC9] text-[#4F3CC9] rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#EDE9FF] transition">
             <Upload size={16} /> Bulk Import
           </button>
-          <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
+          <button onClick={() => { setAddEmpId(nextAddId); setShowAdd(true); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
             <Plus size={16} /> Add Employee
           </button>
         </div>
@@ -1186,7 +1531,7 @@ export default function EmployeesPage() {
           />
         </div>
         <select value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-          {depts.map((d) => <option key={d}>{d}</option>)}
+          {departmentOptions.map((d) => <option key={d}>{d}</option>)}
         </select>
       </div>
 
@@ -1208,11 +1553,9 @@ export default function EmployeesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {loading && (
-                <tr><td colSpan={10} className="px-4 py-10 text-center text-gray-400 text-sm">Loading employees...</td></tr>
-              )}
+              {loading && <SkeletonTableRows rows={6} cols={10} />}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={10} className="px-4 py-10 text-center text-gray-400 text-sm">No employees found.</td></tr>
+                <tr><td colSpan={10}><EmptyState title="No employees found" subtitle={employees.length === 0 ? "Add your first employee to get started." : "No employees match the current search or filter."} /></td></tr>
               )}
               {filtered.map((emp) => (
                 <tr key={emp.id} className="hover:bg-gray-50 transition">
@@ -1264,7 +1607,8 @@ export default function EmployeesPage() {
       {showAdd && (
         <FormModal
           title="Add New Employee"
-          empId={nextAddId}
+          empId={addEmpId}
+          onEmpIdChange={setAddEmpId}
           form={form}
           setForm={setForm}
           onSave={handleAdd}

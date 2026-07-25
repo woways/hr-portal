@@ -1,0 +1,6 @@
+﻿Full Name,Work Email,Phone Number,Designation,Department,Employment Type,Work Mode,Date of Joining,Gender,Date of Birth,Reporting Manager,Branch,Shift,Salary,Notice Period,Status,City,State,PIN Code,Skills
+Ravi Sharma,ravi.sharma@woways.in,9876543210,Software Engineer,Engineering,Full-Time,Remote,2026-03-01,Male,1995-06-15,,Bengaluru HQ,9AM–6PM,850000,30 Days,Active,Bengaluru,Karnataka,560001,"React, Node.js"
+Priya Nair,priya.nair@woways.in,8765432109,HR Executive,HR,Full-Time,On-site,2026-04-10,Female,1997-01-20,Ravi Sharma,Chennai,9AM–6PM,600000,30 Days,Probation,Chennai,Tamil Nadu,600001,"Recruiting, Onboarding"
+Arjun Verma,arjun.verma@woways.in,7654321098,Sales Manager,Sales,Full-Time,Hybrid,2026-05-05,Male,1994-11-02,Ravi Sharma,Mumbai,10AM–7PM,"₹7,20,000",60 Days,applied,Mumbai,Maharashtra,400001,"B2B Sales"
+Sneha Iyer,sneha.iyer@woways.in,9012345678,Marketing Analyst,Marketing,Intern,Remote,2026-06-01,Female,2001-08-25,Priya Nair,Bengaluru HQ,9AM–6PM,300000,15 Days,On-Leave,Pune,Maharashtra,411001,"SEO, Content"
+Rahul Menon,rahul.menon@woways.in,8899776655,DevOps Engineer,Engineering,Contract,On-site,2026-02-15,Male,1993-03-30,Ravi Sharma,Bengaluru HQ,9AM–6PM,950000,30 Days,Active,Bengaluru,Karnataka,560002,"AWS, Kubernetes"

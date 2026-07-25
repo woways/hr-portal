@@ -1,8 +1,13 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { Plus, Search, Eye, Pencil, Trash2, X, Check } from "lucide-react";
-import { getGoals as fsGetGoals, upsertGoal, updateGoal, deleteGoal as fsDeleteGoal, getEmployees, markHRNotifRead } from "@/lib/firebaseService";
+import { upsertGoal, updateGoal, deleteGoal as fsDeleteGoal, getEmployees, markHRNotifRead } from "@/lib/firebaseService";
+import { cachedEmployees, invalidateGoals } from "@/lib/cachedService";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { DEPARTMENTS } from "@/lib/constants";
+import { useDepartments } from "@/lib/useDepartments";
+import { EmptyState } from "@/components/EmptyState";
 
 type GoalStatus = "Not Started" | "In Progress" | "Completed";
 
@@ -45,6 +50,7 @@ const blankEdit = { name: "", assignedTo: "", empId: "", department: depts[0], k
 const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]";
 
 export default function GoalsPage() {
+  const departments = useDepartments();
   const [goals, setGoals]   = useState<Goal[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -66,47 +72,46 @@ export default function GoalsPage() {
 
   function showMsg(msg: string) { setToast(msg); setTimeout(() => setToast(null), 3000); }
 
+  function parseGoalDoc(d: { data(): Record<string, unknown>; id: string }): Goal {
+    const r = d.data();
+    return {
+      id: d.id,
+      name: (r.name as string) ?? "",
+      assignedTo: (r.assignedTo as string) ?? "",
+      empId: (r.empId as string) ?? "",
+      department: (r.department as string) ?? "",
+      kpi: (r.kpi as string) ?? "",
+      deadline: (r.deadline as string) ?? "",
+      progress: Number(r.progress ?? 0),
+      status: ((r.status as GoalStatus) ?? "Not Started"),
+      description: (r.description as string) ?? "",
+      notes: (r.notes as string) ?? "",
+      feedback: (r.feedback as string) ?? "",
+      assignedOn: (r.assignedOn as string) ?? "",
+      lastUpdated: (r.lastUpdated as string) ?? undefined,
+    };
+  }
+
   const loadGoals = useCallback(async () => {
-    try {
-      const docs = await fsGetGoals();
-      setGoals(docs.map((d) => {
-        const r = d as Record<string, unknown>;
-        return {
-          id: r.id as string,
-          name: (r.name as string) ?? "",
-          assignedTo: (r.assignedTo as string) ?? "",
-          empId: (r.empId as string) ?? "",
-          department: (r.department as string) ?? "",
-          kpi: (r.kpi as string) ?? "",
-          deadline: (r.deadline as string) ?? "",
-          progress: Number(r.progress ?? 0),
-          status: ((r.status as GoalStatus) ?? "Not Started"),
-          description: (r.description as string) ?? "",
-          notes: (r.notes as string) ?? "",
-          feedback: (r.feedback as string) ?? "",
-          assignedOn: (r.assignedOn as string) ?? "",
-          lastUpdated: (r.lastUpdated as string) ?? undefined,
-        };
-      }));
-    } catch { /* ignore */ }
+    // kept for explicit post-mutation refreshes; onSnapshot below handles real-time updates
   }, []);
 
   // Auto-mark all unread goal notifications as read when HR opens this page
   useEffect(() => { const t = setTimeout(() => markHRNotifRead("goal"), 10000); return () => clearTimeout(t); }, []);
 
   useEffect(() => {
-    loadGoals();
-    const t = setInterval(loadGoals, 8000);
-    return () => clearInterval(t);
-  }, [loadGoals]);
+    const unsub = onSnapshot(collection(db, "goals"), (snap) => {
+      setGoals(snap.docs.map(parseGoalDoc));
+    }, () => {});
+    return unsub;
+  }, []);
 
   useEffect(() => {
-    getEmployees()
-      .then((docs) => {
-        const emps = docs.map((d) => { const r = d as Record<string, unknown>; return { id: (r.employeeId ?? r.id) as string, name: (r.name as string) ?? "", department: (r.department as string) ?? "" }; });
-        setEmpList(emps);
-      })
-      .catch(() => {});
+    // Cache-first employee list — assignee picker renders instantly on repeat visits
+    cachedEmployees((docs) => {
+      const emps = docs.map((d) => { const r = d as Record<string, unknown>; return { id: (r.employeeId ?? r.id) as string, name: (r.name as string) ?? "", department: (r.department as string) ?? "" }; });
+      setEmpList(emps);
+    }).catch(() => {});
   }, []);
 
   // Deduplicate by id in case concurrent adds created duplicates in state
@@ -141,6 +146,7 @@ export default function GoalsPage() {
           })
         )
       );
+      invalidateGoals();
       await loadGoals();
       setForm({ ...blankAdd, assignees: [blankAssignee()] });
       setEmpSearch("");
@@ -183,6 +189,7 @@ export default function GoalsPage() {
     if (!editGoal) return;
     await updateGoal(editGoal.id, { ...editForm });
     setGoals((prev) => prev.map((g) => g.id === editGoal.id ? { ...g, ...editForm } : g));
+    invalidateGoals();
     setEditGoal(null);
     showMsg("Goal updated");
   }
@@ -201,6 +208,7 @@ export default function GoalsPage() {
     await updateGoal(viewGoal.id, { progress: detailProgress, status: newStatus, notes: newNotes, feedback: detailFeedback });
     markHRNotifRead("goal", viewGoal.empId);
     setGoals((prev) => prev.map((g) => g.id === viewGoal.id ? { ...g, progress: detailProgress, status: newStatus, notes: newNotes, feedback: detailFeedback } : g));
+    invalidateGoals();
     setViewGoal(null);
     showMsg("Goal progress saved");
   }
@@ -209,6 +217,7 @@ export default function GoalsPage() {
     try {
       await fsDeleteGoal(id);
       setGoals((prev) => prev.filter((g) => g.id !== id));
+      invalidateGoals();
       showMsg("Goal deleted");
     } catch {
       showMsg("Failed to delete goal. Please try again.");
@@ -304,7 +313,7 @@ export default function GoalsPage() {
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400 text-sm">No goals found</td></tr>
+                <tr><td colSpan={9}><EmptyState title="No goals found" subtitle="No goals match the current search or filter." /></td></tr>
               )}
             </tbody>
           </table>
@@ -500,7 +509,7 @@ export default function GoalsPage() {
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
                   <select value={editForm.department} onChange={(e) => setEditForm({ ...editForm, department: e.target.value })} className={inputCls}>
-                    {depts.map((d) => <option key={d}>{d}</option>)}
+                    {departments.map((d) => <option key={d}>{d}</option>)}
                   </select>
                 </div>
               </div>

@@ -7,7 +7,7 @@ import { saveSettingsDoc } from "@/lib/firebaseService";
 
 const roleCards = [
   { role: "Super Admin", border: "border-purple-400", bg: "bg-purple-50", text: "text-purple-700", desc: "Full access to all modules including settings, access control, payroll, and system configuration.", count: 1 },
-  { role: "HR Admin",    border: "border-blue-400",   bg: "bg-blue-50",   text: "text-blue-700",   desc: "Access to Hiring, Employees, Attendance, Leave management, and Compensation modules.", count: 2 },
+  { role: "HR Admin",    border: "border-blue-400",   bg: "bg-blue-50",   text: "text-blue-700",   desc: "Access to Hiring, Employees, Attendance, Leave management, and Payroll modules.", count: 2 },
   { role: "Manager",     border: "border-green-400",  bg: "bg-green-50",  text: "text-green-700",  desc: "Access to Team Goals, Leave Approval, and Attendance Visibility for their direct reports.", count: 2 },
 ];
 
@@ -16,7 +16,7 @@ const permissionModules = [
   { module: "Recruitment",          perms: ["View", "Edit"] },
   { module: "Attendance",           perms: ["View", "Approve"] },
   { module: "Leave",                perms: ["View", "Approve", "Override"] },
-  { module: "Compensation",         perms: ["View", "Edit"] },
+  { module: "Payroll",              perms: ["View", "Edit"] },
   { module: "Reports",              perms: ["View", "Download"] },
   { module: "Settings",             perms: ["View", "Edit"] },
   { module: "Notifications",        perms: ["Send"] },

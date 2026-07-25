@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WOWAYS HR Portal — Product Requirements Document</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: #1a1f2e; font-size: 10.5pt; line-height: 1.5; margin: 0;
+  }
+  h1, h2, h3, h4 { color: #0B1929; margin: 0; }
+  a { color: #0f766e; text-decoration: none; }
+
+  /* Cover */
+  .cover {
+    height: 247mm; display: flex; flex-direction: column;
+    justify-content: center; align-items: flex-start;
+    background: #0B1929; color: #fff; margin: -18mm -16mm 0; padding: 0 22mm;
+    page-break-after: always;
+  }
+  .cover .logo { font-size: 46pt; font-weight: 900; letter-spacing: -1px; margin-bottom: 8px; }
+  .cover .logo .teal { color: #14B8A6; }
+  .cover h1 { color: #fff; font-size: 26pt; font-weight: 800; margin: 18px 0 6px; }
+  .cover .sub { color: #9fb3c8; font-size: 13pt; margin-bottom: 40px; }
+  .cover .meta { color: #6b8299; font-size: 10pt; line-height: 1.9; border-top: 1px solid #223344; padding-top: 18px; }
+  .cover .meta b { color: #cfe0ee; font-weight: 600; }
+
+  h2 {
+    font-size: 15pt; border-bottom: 2px solid #14B8A6; padding-bottom: 5px;
+    margin: 26px 0 12px; page-break-after: avoid;
+  }
+  h3 { font-size: 12pt; color: #14524d; margin: 16px 0 7px; page-break-after: avoid; }
+  h4 { font-size: 10.5pt; margin: 12px 0 4px; }
+  p { margin: 6px 0; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 9.5pt; page-break-inside: avoid; }
+  th { background: #0B1929; color: #fff; text-align: left; padding: 6px 8px; font-weight: 600; }
+  td { border: 1px solid #d8e0e8; padding: 5px 8px; vertical-align: top; }
+  tr:nth-child(even) td { background: #f4f8fb; }
+
+  .tag { display: inline-block; background: #e6f5f3; color: #0f766e; border-radius: 4px; padding: 1px 7px; font-size: 8.5pt; font-weight: 600; margin: 1px; }
+  .box { background: #f4f8fb; border-left: 3px solid #14B8A6; padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; }
+  .muted { color: #5a6b7b; }
+  .section { page-break-inside: avoid; }
+  code { background: #eef2f6; color: #0B1929; padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 9pt; }
+  .toc li { margin: 4px 0; }
+  .pill { background:#0B1929; color:#fff; border-radius: 20px; padding: 2px 10px; font-size: 8.5pt; font-weight:600; }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="logo">WO<span class="teal">WAYS</span></div>
+  <h1>HR Portal</h1>
+  <div class="sub">Product Requirements Document (PRD)</div>
+  <div class="meta">
+    <b>Product:</b> WOWAYS HR Management System &nbsp;·&nbsp; Enterprise HRMS<br>
+    <b>Version:</b> 1.0 &nbsp;·&nbsp; <b>Status:</b> Live in Production<br>
+    <b>Date:</b> July 2026<br>
+    <b>Platform:</b> Web (Next.js + Firebase)<br>
+    <b>Prepared for:</b> WOWAYS
+  </div>
+</div>
+
+<!-- TOC -->
+<h2>Table of Contents</h2>
+<ol class="toc">
+  <li>Executive Summary</li>
+  <li>Product Goals &amp; Objectives</li>
+  <li>Target Users &amp; Personas</li>
+  <li>System Architecture</li>
+  <li>HR Admin Dashboard — Functional Requirements</li>
+  <li>Employee Self-Service Portal — Functional Requirements</li>
+  <li>Data Model (Firestore Collections)</li>
+  <li>Authentication &amp; Authorization</li>
+  <li>Non-Functional Requirements</li>
+  <li>Caching &amp; Performance Strategy</li>
+  <li>Design System &amp; Branding</li>
+  <li>Deployment &amp; Infrastructure</li>
+  <li>Assumptions, Constraints &amp; Future Scope</li>
+</ol>
+
+<!-- 1 -->
+<div class="section">
+<h2>1. Executive Summary</h2>
+<p>The <b>WOWAYS HR Portal</b> is an enterprise-grade Human Resource Management System (HRMS) delivered as two connected web applications sharing a single Firebase backend. It digitises the complete employee lifecycle — from recruitment and onboarding through attendance, leave, payroll, performance and offboarding — while giving employees a self-service portal for their personal data, attendance, leave, payslips and goals.</p>
+<div class="box">
+<b>Two applications, one source of truth:</b><br>
+• <b>HR Admin Dashboard</b> — the control centre used by HR administrators to manage the entire workforce.<br>
+• <b>Employee Self-Service Portal</b> — a focused portal where employees view and update their own information.<br>
+Both apps read/write the same Firebase project, so every change is reflected across the system in real time.
+</div>
+</div>
+
+<!-- 2 -->
+<div class="section">
+<h2>2. Product Goals &amp; Objectives</h2>
+<table>
+<tr><th style="width:32%">Goal</th><th>Description</th></tr>
+<tr><td>Centralise HR operations</td><td>Provide a single system for all employee data, replacing spreadsheets and disconnected tools.</td></tr>
+<tr><td>Enable employee self-service</td><td>Let employees manage their own profile, leave, attendance and documents without HR intervention.</td></tr>
+<tr><td>Real-time synchronisation</td><td>Changes made by HR (leave approvals, goals, notifications) reflect instantly on the employee side.</td></tr>
+<tr><td>Data accuracy &amp; compliance</td><td>Structured records for statutory data (PAN, Aadhar, PF, UAN) with role-based access control.</td></tr>
+<tr><td>Fast, responsive experience</td><td>Cache-first loading with skeleton states so pages render instantly on repeat visits.</td></tr>
+</table>
+</div>
+
+<!-- 3 -->
+<div class="section">
+<h2>3. Target Users &amp; Personas</h2>
+<h3>3.1 HR Administrator</h3>
+<p class="muted">Manages the full workforce: creates employee accounts, approves leave, runs payroll, tracks recruitment and monitors attendance and performance across the organisation.</p>
+<h3>3.2 Employee</h3>
+<p class="muted">Uses the self-service portal to view their profile, clock attendance, apply for leave, download payslips, track goals and upload personal documents.</p>
+<table>
+<tr><th>Capability</th><th>HR Admin</th><th>Employee</th></tr>
+<tr><td>Manage all employee records</td><td>✓</td><td>—</td></tr>
+<tr><td>View / edit own profile</td><td>✓</td><td>✓ (own only)</td></tr>
+<tr><td>Approve / reject leave</td><td>✓</td><td>— (apply only)</td></tr>
+<tr><td>Run payroll</td><td>✓</td><td>— (view payslip)</td></tr>
+<tr><td>Recruitment &amp; hiring</td><td>✓</td><td>—</td></tr>
+<tr><td>Assign goals</td><td>✓</td><td>Update progress</td></tr>
+<tr><td>Send announcements</td><td>✓</td><td>Receive</td></tr>
+</table>
+</div>
+
+<!-- 4 -->
+<div class="section">
+<h2>4. System Architecture</h2>
+<table>
+<tr><th style="width:26%">Layer</th><th>Technology</th></tr>
+<tr><td>Frontend framework</td><td>Next.js 16.2 (App Router) with static export (<code>output: "export"</code>)</td></tr>
+<tr><td>Language</td><td>TypeScript, React 19</td></tr>
+<tr><td>Styling</td><td>Tailwind CSS</td></tr>
+<tr><td>Charts &amp; data viz</td><td>Recharts</td></tr>
+<tr><td>Icons</td><td>Lucide React</td></tr>
+<tr><td>Spreadsheet import/export</td><td>SheetJS (xlsx)</td></tr>
+<tr><td>Authentication</td><td>Firebase Authentication (Email/Password)</td></tr>
+<tr><td>Database</td><td>Cloud Firestore (NoSQL, real-time)</td></tr>
+<tr><td>File storage</td><td>Firebase Storage (photos, documents, certificates)</td></tr>
+<tr><td>Hosting</td><td>Firebase Hosting — two sites, one project</td></tr>
+</table>
+<div class="box">
+<b>Deployment topology:</b> A single Firebase project (<code>hrmanagement-6b903</code>) backs two hosting targets — the HR dashboard (<code>hrmanagement-6b903.web.app</code>) and the employee portal (<code>woways-employee.web.app</code>). Both share the same Firestore database, Storage bucket and Auth user pool, keeping the two apps perfectly in sync.
+</div>
+</div>
+
+<!-- 5 -->
+<div class="section">
+<h2>5. HR Admin Dashboard — Functional Requirements</h2>
+
+<h3>5.1 Dashboard / Overview</h3>
+<ul>
+<li>KPI cards: total employees, interns, active, on probation, on leave, exited.</li>
+<li>Attendance overview: present, absent, late logins, half-day, average working hours (today).</li>
+<li>Leave summary (pending / approved / rejected) and goal completion breakdown.</li>
+<li>Charts: department-wise headcount, 6-month leave trends, monthly hiring trend.</li>
+<li>Live clock and personalised welcome header.</li>
+</ul>
+
+<h3>5.2 Employee Directory <span class="tag">/dashboard/employees</span></h3>
+<ul>
+<li>Add, edit, view and delete employees via a multi-tab form (personal, employment, statutory, education, documents).</li>
+<li>Auto-generated employee IDs (EMP001, EMP002 …) and automatic Firebase Auth account creation with generated credentials.</li>
+<li>Profile photos, searchable/filterable list by department, bulk CSV/Excel import, and export.</li>
+<li>HR-managed document uploads (offer letters, internship letters) per employee.</li>
+</ul>
+
+<h3>5.3 Attendance &amp; Time <span class="tag">/dashboard/attendance</span></h3>
+<ul>
+<li>Daily attendance logs, live clock-in/out records and regularisation requests.</li>
+<li>Status tracking: Present, Absent, Half-Day, Late, Week Off; working-hours calculation.</li>
+</ul>
+
+<h3>5.4 Leave Management <span class="tag">/dashboard/leave</span></h3>
+<ul>
+<li>Real-time queue of leave requests with approve / reject actions.</li>
+<li>Leave types (Casual, Sick, Emergency), medical-proof attachments, and status sync back to the employee.</li>
+</ul>
+
+<h3>5.5 Payroll &amp; Compensation <span class="tag">/dashboard/payroll · /compensation</span></h3>
+<ul>
+<li>Salary table, monthly payroll runs, CTC management and incentives.</li>
+<li>Payslip generation available to employees for download.</li>
+</ul>
+
+<h3>5.6 Recruitment &amp; Hiring <span class="tag">/dashboard/recruitment · /hiring</span></h3>
+<ul>
+<li>Candidate pipeline / applicant tracking (ATS), job postings and sourcing channels.</li>
+</ul>
+
+<h3>5.7 Performance &amp; Goals <span class="tag">/dashboard/goals · /performance</span></h3>
+<ul>
+<li>Assign goals/KPIs, track status (Not Started, In Progress, On Track, At Risk, Completed) and record performance reviews.</li>
+</ul>
+
+<h3>5.8 Onboarding, Documents, Reports &amp; Admin</h3>
+<ul>
+<li><b>Onboarding</b> — new-hire checklists.</li>
+<li><b>Documents</b> — central document repository.</li>
+<li><b>Reports &amp; Analytics</b> — workforce analytics and exports.</li>
+<li><b>Admin &amp; Access</b> — role assignment and access control.</li>
+<li><b>Notifications</b> — company-wide and targeted announcements.</li>
+<li><b>Help &amp; Support</b> — employee query inbox.</li>
+<li><b>Settings</b> — organisation configuration, holidays.</li>
+</ul>
+</div>
+
+<!-- 6 -->
+<div class="section">
+<h2>6. Employee Self-Service Portal — Functional Requirements</h2>
+<table>
+<tr><th style="width:26%">Module</th><th>Capabilities</th></tr>
+<tr><td>Dashboard</td><td>Personal overview, today's clock-in status, leave balance summary, live clock.</td></tr>
+<tr><td>My Profile</td><td>View/edit personal info, upload profile photo, education, work experience, skills, government IDs (HR-locked where applicable), documents.</td></tr>
+<tr><td>My Attendance</td><td>Monthly attendance log and working-hours history.</td></tr>
+<tr><td>My Leave</td><td>Apply for leave, attach proof, and track request status in real time.</td></tr>
+<tr><td>My Payslip</td><td>View and download monthly payslips.</td></tr>
+<tr><td>My Goals</td><td>Track assigned goals and update progress.</td></tr>
+<tr><td>Calendar</td><td>Month view with company holidays highlighted and today marked.</td></tr>
+<tr><td>Notifications</td><td>Company announcements and personal alerts with unread badges.</td></tr>
+<tr><td>Compensation</td><td>Personal compensation and incentive records.</td></tr>
+<tr><td>Help &amp; Support</td><td>Raise queries to HR with optional attachments.</td></tr>
+</table>
+</div>
+
+<!-- 7 -->
+<div class="section">
+<h2>7. Data Model — Firestore Collections</h2>
+<table>
+<tr><th style="width:24%">Collection</th><th>Purpose</th></tr>
+<tr><td><code>employees</code></td><td>Master employee records (doc ID = employee ID, e.g. EMP003). Includes profile, statutory data, photo URL, skills, work experience.</td></tr>
+<tr><td><code>users</code></td><td>Auth-linked profiles mapping Firebase UID → employeeId and role.</td></tr>
+<tr><td><code>attendance</code></td><td>Daily check-in/out records (doc ID = <code>date-empId</code>).</td></tr>
+<tr><td><code>clockRecords</code></td><td>Raw clock-in/out event log.</td></tr>
+<tr><td><code>regularization</code></td><td>Attendance correction requests.</td></tr>
+<tr><td><code>leaveRequests</code></td><td>Leave applications with real-time status sync.</td></tr>
+<tr><td><code>goals</code> / <code>personalGoals</code></td><td>Assigned KPIs and personal goals.</td></tr>
+<tr><td><code>performanceReviews</code></td><td>Performance review records.</td></tr>
+<tr><td><code>payroll</code></td><td>Monthly payroll records (HR-write).</td></tr>
+<tr><td><code>compensation</code> / <code>incentives</code></td><td>Salary and incentive data.</td></tr>
+<tr><td><code>candidates</code> / <code>jobPostings</code></td><td>Recruitment pipeline and open positions.</td></tr>
+<tr><td><code>onboarding</code></td><td>New-hire checklists.</td></tr>
+<tr><td><code>documents</code> / <code>employeeDocuments</code></td><td>Uploaded document metadata (HR + employee).</td></tr>
+<tr><td><code>notifications</code></td><td>Announcements and alerts (real-time).</td></tr>
+<tr><td><code>helpQueries</code></td><td>Employee support tickets.</td></tr>
+<tr><td><code>settings</code></td><td>Organisation config incl. holidays.</td></tr>
+</table>
+</div>
+
+<!-- 8 -->
+<div class="section">
+<h2>8. Authentication &amp; Authorization</h2>
+<ul>
+<li><b>Auth method:</b> Firebase Email/Password with local persistence.</li>
+<li><b>Account provisioning:</b> HR creates an employee → a Firebase Auth account is generated with credentials, and a <code>users/{uid}</code> document links the UID to the employee ID.</li>
+<li><b>Identity resolution:</b> The system resolves an employee's Firestore record by email lookup (most reliable) with a fallback to <code>users/{uid}.employeeId</code>.</li>
+<li><b>Role-based rules:</b> Firestore security rules enforce that employees access only their own leave/payroll/profile data, while HR admins (identified by a role claim / users-doc role) have broader access. All access requires authentication.</li>
+<li><b>Storage rules:</b> Profile photos, documents, certificates and attachments are readable/writable only by authenticated users.</li>
+</ul>
+</div>
+
+<!-- 9 -->
+<div class="section">
+<h2>9. Non-Functional Requirements</h2>
+<table>
+<tr><th style="width:26%">Attribute</th><th>Requirement</th></tr>
+<tr><td>Performance</td><td>Cache-first rendering; pages show cached data instantly then refresh in the background. Skeleton loaders during first load.</td></tr>
+<tr><td>Availability</td><td>Served via Firebase Hosting CDN with global edge distribution.</td></tr>
+<tr><td>Real-time</td><td>Firestore <code>onSnapshot</code> listeners for leave, goals, notifications and sidebar profile data.</td></tr>
+<tr><td>Security</td><td>Firestore + Storage rules; secrets kept in <code>.env.local</code> (never committed).</td></tr>
+<tr><td>Responsiveness</td><td>Tailwind-based responsive layouts across desktop and tablet.</td></tr>
+<tr><td>Maintainability</td><td>Shared service layer (<code>firebaseService</code>, <code>cachedService</code>) and typed models.</td></tr>
+</table>
+</div>
+
+<!-- 10 -->
+<div class="section">
+<h2>10. Caching &amp; Performance Strategy</h2>
+<ul>
+<li><b>Session cache:</b> Frequently viewed lists (e.g. employees) and sidebar identity are cached in <code>sessionStorage</code> and rendered immediately on load.</li>
+<li><b>Cache-then-network:</b> The cached service returns a cached value first (instant paint), then re-fetches from Firestore and updates both the UI and the cache.</li>
+<li><b>Skeleton components:</b> Dedicated skeleton loaders (header, stat grid, chart, card) prevent layout shift during first fetch.</li>
+<li><b>Cache invalidation:</b> Any create/edit/delete re-runs the loader, which rewrites the cache, so it never goes stale.</li>
+</ul>
+</div>
+
+<!-- 11 -->
+<div class="section">
+<h2>11. Design System &amp; Branding</h2>
+<table>
+<tr><th style="width:26%">Token</th><th>Value / Usage</th></tr>
+<tr><td>Brand navy</td><td><code>#0B1929</code> — sidebars, dashboard headers, primary surfaces.</td></tr>
+<tr><td>Brand teal accent</td><td><code>#14B8A6</code> — "WAYS" logo, highlights, accent lines.</td></tr>
+<tr><td>Purple (legacy accent)</td><td><code>#4F3CC9</code> / <code>#EDE9FF</code> — buttons, active states in content areas.</td></tr>
+<tr><td>Logo</td><td>Wordmark "WO<span style="color:#14B8A6">WAYS</span>" — white + teal on navy sidebar.</td></tr>
+<tr><td>Typography</td><td>System sans-serif (Segoe UI / system stack).</td></tr>
+<tr><td>Components</td><td>Rounded cards (2xl radius), soft shadows, badge pills, avatar with initials fallback.</td></tr>
+</table>
+</div>
+
+<!-- 12 -->
+<div class="section">
+<h2>12. Deployment &amp; Infrastructure</h2>
+<ul>
+<li><b>Build:</b> Next.js static export (<code>next build</code> → <code>out/</code>) for each app.</li>
+<li><b>Hosting:</b> <code>firebase deploy --only hosting</code> deploys both sites from the HR dashboard directory (multi-target config).</li>
+<li><b>Sites:</b> HR → <code>hrmanagement-6b903.web.app</code>; Employee → <code>woways-employee.web.app</code>.</li>
+<li><b>Config:</b> Firebase credentials injected via <code>NEXT_PUBLIC_*</code> environment variables; both apps use the same project.</li>
+<li><b>Rules deployment:</b> Firestore and Storage rules versioned in the repo (<code>firestore.rules</code>, <code>storage.rules</code>).</li>
+</ul>
+</div>
+
+<!-- 13 -->
+<div class="section">
+<h2>13. Assumptions, Constraints &amp; Future Scope</h2>
+<h4>Assumptions</h4>
+<ul>
+<li>Single organisation (WOWAYS); one Firebase project per deployment.</li>
+<li>Employees receive credentials created by HR; email/password is the only auth method.</li>
+</ul>
+<h4>Constraints</h4>
+<ul>
+<li>Static export — no server-side rendering or server API routes; all logic runs client-side against Firebase.</li>
+<li>Statutory features (PF/tax) are record-keeping, not a certified payroll engine.</li>
+</ul>
+<h4>Future Scope</h4>
+<ul>
+<li>Push/email notifications, biometric/geo attendance, mobile app.</li>
+<li>Advanced analytics &amp; AI insights, multi-tenant support, SSO.</li>
+<li>Automated payslip PDF generation and statutory filing exports.</li>
+</ul>
+</div>
+
+<p class="muted" style="margin-top:30px; border-top:1px solid #d8e0e8; padding-top:10px; font-size:9pt;">
+WOWAYS HR Portal — Product Requirements Document · Version 1.0 · July 2026 · Confidential
+</p>
+
+</body>
+</html>

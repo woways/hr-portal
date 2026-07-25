@@ -10,13 +10,13 @@
       "target": "hr-dashboard",
       "public": "hr-dashboard/out",
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+      "rewrites": [{ "source": "**", "destination": "/404.html" }]
     },
     {
       "target": "employee-dashboard",
       "public": "employee-dashboard/out",
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+      "rewrites": [{ "source": "**", "destination": "/404.html" }]
     }
   ]
 }

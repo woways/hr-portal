@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail } from "firebase/auth";
-import { doc as fsDoc, getDoc, getDocs, collection, query, where, updateDoc, deleteField } from "firebase/firestore";
+import { onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail, updateProfile } from "firebase/auth";
+import { doc as fsDoc, getDoc, getDocs, collection, query, where, updateDoc, setDoc, deleteField } from "firebase/firestore";
 import { auth, db, storage } from "@/lib/firebase";
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { uploadDocFile, saveDocMeta, loadDocMeta } from "@/lib/documentService";
@@ -322,20 +322,25 @@ export default function ProfilePage() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) return;
       try {
-        const snap = await getDoc(fsDoc(db, "users", user.uid));
-        if (!snap.exists()) return;
-        const eid = snap.data().employeeId as string;
-        if (!eid) return;
-        setCurrentEmpId(eid);
-        // Fetch employee record directly from Firestore
+        // Try email lookup first — this finds the actual Firestore doc
         let empRecord: EmpRecord | null = null;
-        const empDoc = await getDoc(fsDoc(db, "employees", eid));
-        if (empDoc.exists()) {
-          empRecord = { ...empDoc.data(), id: empDoc.id } as EmpRecord;
+        if (user.email) {
+          const emailSnap = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
+          if (!emailSnap.empty) {
+            empRecord = { ...emailSnap.docs[0].data(), id: emailSnap.docs[0].id } as EmpRecord;
+            setEmpDocId(emailSnap.docs[0].id);
+          }
         }
-        if (!empRecord && user.email) {
-          const empSnap = await getDocs(query(collection(db, "employees"), where("email", "==", user.email)));
-          if (!empSnap.empty) empRecord = { ...empSnap.docs[0].data(), id: empSnap.docs[0].id } as EmpRecord;
+        // Fallback: users/{uid}.employeeId
+        const snap = await getDoc(fsDoc(db, "users", user.uid));
+        const eid = snap.exists() ? (snap.data().employeeId as string ?? "") : "";
+        if (eid) setCurrentEmpId(eid);
+        if (!empRecord && eid) {
+          const empDoc = await getDoc(fsDoc(db, "employees", eid));
+          if (empDoc.exists()) {
+            empRecord = { ...empDoc.data(), id: empDoc.id } as EmpRecord;
+            setEmpDocId(empDoc.id);
+          }
         }
         const emp = empRecord;
         if (emp) {
@@ -477,6 +482,7 @@ export default function ProfilePage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const docSlotRefs = useRef<{ [id: string]: HTMLInputElement | null }>({});
   const [currentEmpId, setCurrentEmpId] = useState<string | null>(null);
+  const [empDocId,     setEmpDocId]     = useState<string | null>(null); // actual Firestore doc ID
 
   // Load documents from Firestore when empId resolves
   useEffect(() => {
@@ -601,14 +607,31 @@ export default function ProfilePage() {
 
   async function confirmPhoto() {
     const file = uploadFileRef.current;
-    if (!file || !previewPhoto || !currentEmpId) return;
+    if (!file || !previewPhoto) return;
+    // Resolve doc ID — empDocId (email-lookup) is most reliable, fall back to users/{uid}.employeeId
+    // If both are null, do a fresh email lookup right here as a safety net
+    let docId: string | null = empDocId || currentEmpId;
+    if (!docId && auth.currentUser?.email) {
+      try {
+        const s = await getDocs(query(collection(db, "employees"), where("email", "==", auth.currentUser.email)));
+        if (!s.empty) { docId = s.docs[0].id; setEmpDocId(docId); }
+      } catch { /* ignore */ }
+    }
+    if (!docId) return;
     setShowPhotoModal(false);
     setPhotoUploading(true);
     try {
-      const sRef = storageRef(storage, `profile-photos/${currentEmpId}`);
+      const sRef = storageRef(storage, `profile-photos/${docId}`);
       await uploadBytes(sRef, file);
       const url = await getDownloadURL(sRef);
-      await updateDoc(fsDoc(db, "employees", currentEmpId), { photoURL: url });
+      // setDoc with merge: safe even if doc structure has changed, never fails on missing field
+      await setDoc(fsDoc(db, "employees", docId), { photoURL: url }, { merge: true });
+      // Also update Firebase Auth user profile so sidebar can read it from auth.currentUser
+      if (auth.currentUser) {
+        try { await updateProfile(auth.currentUser, { photoURL: url }); } catch { /* ignore */ }
+      }
+      // Broadcast to sidebar and any other mounted components on the same page
+      window.dispatchEvent(new CustomEvent("employeePhotoUpdated", { detail: { url } }));
       setProfilePhoto(url);
       setPhotoToast(true);
       setTimeout(() => setPhotoToast(false), 3000);
@@ -622,13 +645,24 @@ export default function ProfilePage() {
   }
 
   async function removePhoto() {
-    if (currentEmpId) {
+    let docId: string | null = empDocId || currentEmpId;
+    if (!docId && auth.currentUser?.email) {
       try {
-        await deleteObject(storageRef(storage, `profile-photos/${currentEmpId}`));
+        const s = await getDocs(query(collection(db, "employees"), where("email", "==", auth.currentUser.email)));
+        if (!s.empty) docId = s.docs[0].id;
+      } catch { /* ignore */ }
+    }
+    if (docId) {
+      try {
+        await deleteObject(storageRef(storage, `profile-photos/${docId}`));
       } catch { /* may not exist */ }
       try {
-        await updateDoc(fsDoc(db, "employees", currentEmpId), { photoURL: deleteField() });
+        await setDoc(fsDoc(db, "employees", docId), { photoURL: deleteField() }, { merge: true });
       } catch { /* ignore */ }
+      if (auth.currentUser) {
+        try { await updateProfile(auth.currentUser, { photoURL: "" }); } catch { /* ignore */ }
+      }
+      window.dispatchEvent(new CustomEvent("employeePhotoUpdated", { detail: { url: "" } }));
     }
     setProfilePhoto(null);
     setShowPhotoModal(false);

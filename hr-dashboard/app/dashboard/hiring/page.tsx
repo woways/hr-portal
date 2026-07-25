@@ -1,11 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
 import { Plus, Globe, Users, Star, BarChart2, Settings, X, Link2, Trash2 } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { onAuthStateChanged } from "firebase/auth";
 import { getDocs, addDoc, deleteDoc, collection, doc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { JobPosting } from "@/lib/types";
-import { DEPARTMENTS } from "@/lib/constants";
+import { useDepartments } from "@/lib/useDepartments";
 
 const sourcingChannels: { name: string; percentage: number; count: number; icon: typeof Link2; color: string; iconColor: string; barColor: string }[] = [];
 
@@ -34,6 +35,7 @@ async function loadPostings(): Promise<JobPosting[]> {
 }
 
 export default function HiringPage() {
+  const departments = useDepartments();
   const [postings, setPostings] = useState<JobPosting[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(defaultForm);
@@ -205,8 +207,8 @@ export default function HiringPage() {
               </tr>
             ) : postings.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-400">
-                  No job postings found.
+                <td colSpan={6}>
+                  <EmptyState title="No job postings found" subtitle="Create a job posting to start hiring." />
                 </td>
               </tr>
             ) : (
@@ -281,7 +283,7 @@ export default function HiringPage() {
                   onChange={(e) => setForm({ ...form, department: e.target.value })}
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/20 focus:border-[#4F3CC9] bg-white"
                 >
-                  {DEPARTMENTS.map((d) => (
+                  {departments.map((d) => (
                     <option key={d}>{d}</option>
                   ))}
                 </select>

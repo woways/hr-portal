@@ -209,8 +209,24 @@ export default function CalendarPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 size={32} className="animate-spin text-[#4F3CC9]" />
+        <div className="grid grid-cols-3 gap-6">
+          <div className="col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="grid grid-cols-7 gap-2 mb-4">
+              {Array.from({ length: 7 }, (_, i) => <div key={i} className="h-4 bg-gray-200/70 animate-pulse rounded" />)}
+            </div>
+            <div className="grid grid-cols-7 gap-2">
+              {Array.from({ length: 35 }, (_, i) => <div key={i} className="h-16 bg-gray-100 animate-pulse rounded-lg" />)}
+            </div>
+          </div>
+          <div className="space-y-4">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                <div className="h-4 w-32 bg-gray-200/70 animate-pulse rounded mb-3" />
+                <div className="h-3 w-full bg-gray-200/70 animate-pulse rounded mb-2" />
+                <div className="h-3 w-24 bg-gray-200/70 animate-pulse rounded" />
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-6">

@@ -79,11 +79,34 @@ interface WorkExp {
 }
 const EMP_TYPES = ["Full-Time","Part-Time","Internship","Freelance","Contract"];
 
+// Module-level so its identity is stable across renders. Defining this inside a
+// render/map recreates the component every keystroke, which remounts the inputs
+// and drops focus (PROF-002).
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-xs text-gray-400 mb-1">{label}</p>
+      {children}
+    </div>
+  );
+}
+
 function WorkExperienceSection({ empId }: { empId?: string | null }) {
   const blank = (): WorkExp => ({ id: Date.now().toString(), company: "", role: "", empType: "Full-Time", startMonth: "", startYear: "", endMonth: "", endYear: "", currentlyWorking: false, location: "", description: "" });
   const [list, setList] = useState<WorkExp[]>([]);
   const [editId, setEditId] = useState<string | null>(null);
   const [draft, setDraft] = useState<WorkExp | null>(null);
+  const [error, setError] = useState("");
+
+  // Validate the draft before saving so blank entries can't be added.
+  function saveDraft(d: WorkExp) {
+    if (!d.company.trim() || !d.role.trim()) {
+      setError("Please enter at least the company and job title before saving.");
+      return;
+    }
+    setError("");
+    saveList(list.map((x) => x.id === d.id ? d : x));
+  }
 
   // Load from Firestore on mount
   useEffect(() => {
@@ -128,7 +151,7 @@ function WorkExperienceSection({ empId }: { empId?: string | null }) {
                 {!isEd ? (
                   <><button onClick={() => { setEditId(w.id); setDraft({ ...w }); }} className="p-1.5 rounded-lg hover:bg-[#EDE9FF] text-[#4F3CC9]"><Edit2 size={13} /></button><button onClick={() => saveList(list.filter((x) => x.id !== w.id))} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"><Trash2 size={13} /></button></>
                 ) : (
-                  <><button onClick={() => saveList(list.map((x) => x.id === d.id ? d : x))} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-3 py-1.5 rounded-full"><Save size={12} /> Save</button><button onClick={() => { setEditId(null); setDraft(null); if (!w.company) setList((p) => p.filter((x) => x.id !== w.id)); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-full">Cancel</button></>
+                  <><button onClick={() => saveDraft(d)} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-3 py-1.5 rounded-full"><Save size={12} /> Save</button><button onClick={() => { setEditId(null); setDraft(null); setError(""); if (!w.company) setList((p) => p.filter((x) => x.id !== w.id)); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-full">Cancel</button></>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-4 pr-24">
@@ -141,6 +164,7 @@ function WorkExperienceSection({ empId }: { empId?: string | null }) {
                 {!d.currentlyWorking && <div><p className="text-xs text-gray-400 mb-1">End</p>{isEd ? <div className="flex gap-2"><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.endMonth} onChange={(e) => setDraft({ ...d, endMonth: e.target.value })}><option value="">Month</option>{["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map((m) => <option key={m}>{m}</option>)}</select><select className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={d.endYear} onChange={(e) => setDraft({ ...d, endYear: e.target.value })}><option value="">Year</option>{Array.from({length:30},(_,i)=>String(2025-i)).map((y) => <option key={y}>{y}</option>)}</select></div> : <p className="text-sm font-medium text-gray-900">{d.endMonth} {d.endYear}</p>}</div>}
                 <div className="col-span-2"><p className="text-xs text-gray-400 mb-1">Description / Key Responsibilities</p>{isEd ? <textarea rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9] resize-none" value={d.description} onChange={(e) => setDraft({ ...d, description: e.target.value })} /> : <p className="text-sm text-gray-700">{d.description || "—"}</p>}</div>
               </div>
+              {isEd && error && <p className="text-xs text-red-500 mt-3">{error}</p>}
             </div>
           );
         })}
@@ -212,6 +236,51 @@ function GovtIdSection({ empId }: { empId?: string | null }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ aadhar: "", pan: "", passport: "", drivingLicense: "", dob: "", bloodGroup: "", gender: "", maritalStatus: "", nationality: "" });
   const [draft, setDraft] = useState({ ...form });
+  const [error, setError] = useState("");
+
+  // Format checks for structured fields (each only enforced when non-empty).
+  function validate(): string | null {
+    const pan = draft.pan.trim().toUpperCase();
+    if (pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) return "PAN must be 10 characters in the format ABCDE1234F.";
+    const aadhar = draft.aadhar.replace(/\s/g, "");
+    if (aadhar && !/^\d{12}$/.test(aadhar)) return "Aadhar number must be exactly 12 digits.";
+    const passport = draft.passport.trim().toUpperCase();
+    if (passport && !/^[A-Z][0-9]{7}$/.test(passport)) return "Passport must be 1 letter followed by 7 digits (e.g. A1234567).";
+    const bg = draft.bloodGroup.trim().toUpperCase();
+    if (bg && !["A+","A-","B+","B-","O+","O-","AB+","AB-"].includes(bg)) return "Blood group must be one of A+, A-, B+, B-, O+, O-, AB+, AB-.";
+    if (draft.dob) {
+      const d = new Date(draft.dob);
+      if (isNaN(d.getTime())) return "Please enter a valid date of birth (YYYY-MM-DD).";
+      if (d > new Date()) return "Date of birth cannot be in the future.";
+    }
+    return null;
+  }
+
+  async function handleSave() {
+    const err = validate();
+    if (err) { setError(err); return; }
+    setError("");
+    // Normalise the structured values before saving.
+    const normalized = {
+      ...draft,
+      pan: draft.pan.trim().toUpperCase(),
+      aadhar: draft.aadhar.replace(/\s/g, ""),
+      passport: draft.passport.trim().toUpperCase(),
+      bloodGroup: draft.bloodGroup.trim().toUpperCase(),
+    };
+    setForm(normalized); setDraft(normalized); setEditing(false);
+    if (!empId) return;
+    try {
+      const { updateDoc: ud, doc: fsD } = await import("firebase/firestore");
+      const { db } = await import("@/lib/firebase");
+      await ud(fsD(db, "employees", empId), {
+        aadharNumber: normalized.aadhar, panNumber: normalized.pan, passport: normalized.passport,
+        drivingLicense: normalized.drivingLicense, dob: normalized.dob, bloodGroup: normalized.bloodGroup,
+        gender: normalized.gender, maritalStatus: normalized.maritalStatus, nationality: normalized.nationality,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     if (!empId) return;
@@ -239,15 +308,16 @@ function GovtIdSection({ empId }: { empId?: string | null }) {
   const inp = (f: keyof typeof draft, label: string) => (
     <div key={f}>
       <p className="text-xs text-gray-400 mb-1">{label}</p>
-      {editing ? <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={draft[f]} onChange={(e) => setDraft({ ...draft, [f]: e.target.value })} /> : <p className="text-sm font-medium text-gray-900">{form[f] || "—"}</p>}
+      {editing ? <input type={f === "dob" ? "date" : "text"} max={f === "dob" ? new Date().toISOString().split("T")[0] : undefined} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4F3CC9]" value={draft[f]} onChange={(e) => setDraft({ ...draft, [f]: e.target.value })} /> : <p className="text-sm font-medium text-gray-900">{form[f] || "—"}</p>}
     </div>
   );
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
       <div className="flex items-center justify-between mb-5">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Lock size={16} className="text-[#4F3CC9]" /> Personal & Government IDs</h3>
-        {!editing ? <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 text-sm text-[#4F3CC9] font-medium hover:underline"><Edit2 size={14} /> Edit</button> : <div className="flex gap-2"><button onClick={() => setEditing(false)} className="text-sm text-gray-500 font-medium">Cancel</button><button onClick={async () => { setForm({ ...draft }); setEditing(false); if (!empId) return; try { const { updateDoc: ud, doc: fsD } = await import("firebase/firestore"); const { db } = await import("@/lib/firebase"); await ud(fsD(db, "employees", empId), { aadharNumber: draft.aadhar, panNumber: draft.pan, passport: draft.passport, drivingLicense: draft.drivingLicense, dob: draft.dob, bloodGroup: draft.bloodGroup, gender: draft.gender, maritalStatus: draft.maritalStatus, nationality: draft.nationality, updatedAt: new Date().toISOString() }); } catch{ /* ignore */ }}} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-4 py-1.5 rounded-full"><Save size={12} /> Save</button></div>}
+        {!editing ? <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 text-sm text-[#4F3CC9] font-medium hover:underline"><Edit2 size={14} /> Edit</button> : <div className="flex gap-2"><button onClick={() => { setEditing(false); setError(""); setDraft({ ...form }); }} className="text-sm text-gray-500 font-medium">Cancel</button><button onClick={handleSave} className="flex items-center gap-1 text-xs bg-[#4F3CC9] text-white px-4 py-1.5 rounded-full"><Save size={12} /> Save</button></div>}
       </div>
+      {editing && error && <p className="text-xs text-red-500 mb-3">{error}</p>}
       <div className="grid grid-cols-2 gap-4">
         {inp("dob","Date of Birth")}
         {inp("gender","Gender")}
@@ -500,6 +570,18 @@ export default function ProfilePage() {
 
   async function saveEdu() {
     if (!eduDraft) return;
+    // Require at least a degree and institute so blank entries can't be saved.
+    if (!eduDraft.degree.trim() || !eduDraft.institute.trim()) {
+      setEduToast("Please enter at least a degree and institute before saving.");
+      setTimeout(() => setEduToast(null), 3000);
+      return;
+    }
+    // Grade / Percentage / CGPA must contain a numeric value when provided.
+    if (eduDraft.grade.trim() && !/\d/.test(eduDraft.grade)) {
+      setEduToast("Percentage / Grade / CGPA must be a number (e.g. 8.5 or 85%).");
+      setTimeout(() => setEduToast(null), 3000);
+      return;
+    }
     const next = (() => {
       const prev = education;
       const exists = prev.find((e) => e.id === eduDraft.id);
@@ -589,7 +671,8 @@ export default function ProfilePage() {
       .then((snap) => {
         if (snap.exists()) {
           const d = snap.data() as Record<string, unknown>;
-          if (d.profilePhoto) setProfilePhoto(String(d.profilePhoto));
+          const photo = d.photoURL ?? d.profilePhoto;
+          if (photo) setProfilePhoto(String(photo));
         }
       })
       .catch(() => {});
@@ -776,9 +859,12 @@ export default function ProfilePage() {
         const downloadUrl = await getDownloadURL(snap.ref);
         setProfilePhoto(downloadUrl);
         if (currentEmpId) await updateDoc(fsDocQ(db, "employees", currentEmpId), {
+          photoURL: downloadUrl,
           profilePhoto: downloadUrl,
           updatedAt: new Date().toISOString(),
         });
+        // Notify the sidebar (same-session instant update)
+        window.dispatchEvent(new CustomEvent("employeePhotoUpdated", { detail: { url: downloadUrl } }));
       } catch {
         // fallback: keep in-memory preview so user at least sees it this session
         setProfilePhoto(previewPhoto);
@@ -803,9 +889,11 @@ export default function ProfilePage() {
     setPreviewPhoto(null);
     if (currentEmpId) {
       updateDoc(fsDocQ(db, "employees", currentEmpId), {
+        photoURL: deleteField(),
         profilePhoto: deleteField(),
         updatedAt: new Date().toISOString(),
       }).catch(() => {});
+      window.dispatchEvent(new CustomEvent("employeePhotoUpdated", { detail: { url: "" } }));
     }
   }
 
@@ -1340,13 +1428,6 @@ export default function ProfilePage() {
               {education.map((edu) => {
                 const isEditing = editEduId === edu.id && eduDraft;
                 const d = isEditing ? eduDraft! : edu;
-
-                const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">{label}</p>
-                    {children}
-                  </div>
-                );
 
                 const inp = (field: keyof EduEntry) => (
                   <input

@@ -1,10 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, onSnapshot, updateDoc, doc, addDoc, getDocs, getDoc, deleteDoc } from "firebase/firestore";
+import { collection, onSnapshot, updateDoc, doc, addDoc, getDocs, getDoc, deleteDoc, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { markHRNotifRead } from "@/lib/firebaseService";
 import { Eye, Pencil, X, CheckCircle, XCircle, Wifi, Loader2, Clock, ChevronLeft, ChevronRight, Users, Trash2 } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
+import { SkeletonTableRows } from "@/components/Skeleton";
 
 type LeaveStatus = "Pending" | "Approved" | "Rejected";
 
@@ -38,6 +40,20 @@ function displayName(r: LeaveRequest) { return r.empName ?? r.name ?? "Unknown";
 
 function initials(name: string) {
   return name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
+}
+
+// Turn a caught Firebase/JS error into a specific, actionable message.
+function describeError(err: unknown): string {
+  const e = err as { code?: string; message?: string };
+  switch (e.code) {
+    case "permission-denied":  return "you don't have permission — please sign out and sign in again";
+    case "unauthenticated":    return "your session expired — please sign in again";
+    case "unavailable":        return "network unavailable — check your connection and retry";
+    case "not-found":          return "the record no longer exists";
+    case "deadline-exceeded":  return "the request timed out — please retry";
+    case "failed-precondition":return "the data changed on the server — refresh and try again";
+    default:                   return e.message || e.code || "unexpected error";
+  }
 }
 
 const statusColor: Record<LeaveStatus, string> = {
@@ -85,7 +101,10 @@ export default function LeavePage() {
   const [editBal,      setEditBal]      = useState<LeaveBalance | null>(null);
   const [editBalForm,  setEditBalForm]  = useState<LeaveBalance | null>(null);
   const [showOverride, setShowOverride] = useState(false);
-  const [overrideForm, setOverrideForm] = useState({ employee: "", startDate: "", endDate: "", reason: "", approveImmediately: false });
+  const [overrideForm, setOverrideForm] = useState({ employee: "", empId: "", startDate: "", endDate: "", reason: "", approveImmediately: false });
+  const [overrideSubmitting, setOverrideSubmitting] = useState(false);
+  const [overrideError, setOverrideError] = useState("");
+  const [empList, setEmpList] = useState<{ id: string; name: string; empId: string }[]>([]);
   const [viewReq,      setViewReq]      = useState<LeaveRequest | null>(null);
   const [editReq,      setEditReq]      = useState<LeaveRequest | null>(null);
   const [editForm,     setEditForm]     = useState<{ status: LeaveStatus; hrComment: string }>({ status: "Pending", hrComment: "" });
@@ -106,20 +125,40 @@ export default function LeavePage() {
   // Auto-mark all unread leave notifications as read when HR opens this page
   useEffect(() => { const t = setTimeout(() => markHRNotifRead("leave"), 10000); return () => clearTimeout(t); }, []);
 
+
   // Real-time listener — replaces polling; HR sees employee submissions instantly
   useEffect(() => {
     let snapUnsub: (() => void) | null = null;
     const authUnsub = onAuthStateChanged(auth, (user) => {
       if (!user) { setReady(true); return; }
 
-      snapUnsub = onSnapshot(collection(db, "leaveRequests"), (snap) => {
-        // Cross-reference with active employees to exclude deleted employee data
-        getDocs(collection(db, "employees")).then((empSnap) => {
-          const activeEmpIds = new Set(empSnap.docs.flatMap(d => {
-            const data = d.data();
-            return [d.id, String(data.employeeId ?? "")].filter(Boolean);
-          }));
+      // Fetch employees and leave policies ONCE — snapshot callback does pure JS only
+      Promise.all([
+        getDocs(collection(db, "employees")).catch(() => null),
+        getDoc(doc(db, "settings", "leavePolicies")).catch(() => null),
+      ]).then(([empSnap, policySnap]) => {
+        if (!empSnap) { setReady(true); return; }
 
+        const activeEmpIds = new Set(empSnap.docs.flatMap(d => {
+          const data = d.data();
+          return [d.id, String(data.employeeId ?? "")].filter(Boolean);
+        }));
+        const dm: Record<string, string> = {};
+        empSnap.docs.forEach(d => { dm[d.id] = String(d.data().department ?? ""); });
+        setEmpDeptMap(dm);
+
+        // Store employee list for override search
+        setEmpList(empSnap.docs
+          .map(d => ({ id: d.id, name: String(d.data().name ?? ""), empId: String(d.data().employeeId ?? d.id) }))
+          .filter(e => e.name)
+        );
+
+        const policyList: Array<{type: string; days: number}> = policySnap?.exists() ? (policySnap.data().list ?? []) : [];
+        const defaultDays: Record<string, number> = { "Casual Leave": 6, "Sick Leave": 10, "Emergency Leave": 2, "Paid Leave": 18, "Annual Leave": 18 };
+        const getTotal = (type: string) => policyList.find(p => p.type === type)?.days ?? defaultDays[type] ?? 6;
+        const typeToKey: Record<string, string> = { "Casual Leave": "casual", "Sick Leave": "sick", "Emergency Leave": "emergency", "Paid Leave": "paid", "Annual Leave": "paid" };
+
+        snapUnsub = onSnapshot(collection(db, "leaveRequests"), (snap) => {
           const allDocs: LeaveRequest[] = snap.docs.map(d => {
             const r = d.data() as Record<string, unknown>;
             return {
@@ -139,19 +178,11 @@ export default function LeavePage() {
             };
           });
 
-          // Only show requests from active (non-deleted) employees
-          const docs = allDocs.filter(r => !r.empId || activeEmpIds.has(r.empId));
+          const docs = allDocs;
           setRequests(docs.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn)));
           setReady(true);
 
-        Promise.all([
-          Promise.resolve(empSnap),
-          getDoc(doc(db, "settings", "leavePolicies")),
-        ]).then(([empSnap, policySnap]) => {
-          const policyList: Array<{type: string; days: number}> = policySnap.exists() ? (policySnap.data().list ?? []) : [];
-          const defaultDays: Record<string, number> = { "Casual Leave": 6, "Sick Leave": 10, "Emergency Leave": 2, "Paid Leave": 18, "Annual Leave": 18 };
-          const getTotal = (type: string) => policyList.find(p => p.type === type)?.days ?? defaultDays[type] ?? 6;
-          const typeToKey: Record<string, string> = { "Casual Leave": "casual", "Sick Leave": "sick", "Emergency Leave": "emergency", "Paid Leave": "paid", "Annual Leave": "paid" };
+          // Compute balances from in-memory data — zero additional Firestore reads
           const usedMap: Record<string, Record<string, number>> = {};
           docs.filter(r => r.status === "Approved").forEach(r => {
             if (!usedMap[r.empId!]) usedMap[r.empId!] = {};
@@ -163,12 +194,8 @@ export default function LeavePage() {
             return { id: d.id, name: (d.data().name as string) ?? "", casual: { used: used.casual ?? 0, total: getTotal("Casual Leave") }, sick: { used: used.sick ?? 0, total: getTotal("Sick Leave") }, emergency: { used: used.emergency ?? 0, total: getTotal("Emergency Leave") }, paid: { used: used.paid ?? 0, total: getTotal("Paid Leave") } };
           });
           setBalances(computed);
-          const dm: Record<string, string> = {};
-          empSnap.docs.forEach(d => { dm[d.id] = String(d.data().department ?? ""); });
-          setEmpDeptMap(dm);
-        }).catch(() => {});
-        }).catch(() => {});
-      }, () => setReady(true));
+        }, () => setReady(true));
+      }).catch(() => setReady(true));
     });
     return () => { authUnsub(); snapUnsub?.(); };
   }, []);
@@ -203,8 +230,8 @@ export default function LeavePage() {
       markHRNotifRead("leave", req?.empId, (msg) => msg.includes(req?.startDate ?? "") && msg.includes(req?.endDate ?? ""));
       setHrComments(p => { const n = { ...p }; delete n[id]; return n; });
       showToast("Approved — employee will see the update instantly.");
-    } catch {
-      showToast("Failed to approve. Please check your connection.", false);
+    } catch (err) {
+      showToast(`Failed to approve: ${describeError(err)}`, false);
     }
   }
 
@@ -232,8 +259,8 @@ export default function LeavePage() {
       markHRNotifRead("leave", req?.empId, (msg) => msg.includes(req?.startDate ?? "") && msg.includes(req?.endDate ?? ""));
       setHrComments(p => { const n = { ...p }; delete n[id]; return n; });
       showToast("Rejected — employee will see the update instantly.");
-    } catch {
-      showToast("Failed to reject. Please check your connection.", false);
+    } catch (err) {
+      showToast(`Failed to reject: ${describeError(err)}`, false);
     }
   }
 
@@ -269,8 +296,8 @@ export default function LeavePage() {
       }
       setEditReq(null);
       showToast("Leave request updated successfully.");
-    } catch {
-      showToast("Failed to update. Please check your connection.", false);
+    } catch (err) {
+      showToast(`Failed to update: ${describeError(err)}`, false);
     } finally {
       setSavingEdit(false);
     }
@@ -290,14 +317,18 @@ export default function LeavePage() {
       await deleteDoc(doc(db, "leaveRequests", id));
       setRequests(prev => prev.filter(r => r.id !== id));
       showToast("Leave request permanently deleted.");
-    } catch {
-      showToast("Failed to delete. Please try again.", false);
+    } catch (err) {
+      showToast(`Failed to delete: ${describeError(err)}`, false);
     }
   }
 
+  // Requests hidden from the HR view via "clear" — excluded everywhere (list AND calendar)
+  // so the two views always reflect the same underlying data.
+  const visibleRequests = requests.filter(r => !clearedIds.has(r.id));
+
   // Calendar — build per-day leave map for the viewed month
   const calDayMap: Record<number, LeaveRequest[]> = {};
-  requests.filter(r => r.status === "Approved").forEach(r => {
+  visibleRequests.filter(r => r.status === "Approved").forEach(r => {
     const start = new Date(r.startDate + "T00:00:00");
     const end   = new Date(r.endDate   + "T00:00:00");
     for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
@@ -327,7 +358,6 @@ export default function LeavePage() {
     else setViewMonth(m => m + 1);
   }
 
-  const visibleRequests = requests.filter(r => !clearedIds.has(r.id));
   const pending  = visibleRequests.filter(r => r.status === "Pending").length;
   const approved = visibleRequests.filter(r => r.status === "Approved").length;
   const rejected = visibleRequests.filter(r => r.status === "Rejected").length;
@@ -338,35 +368,63 @@ export default function LeavePage() {
   }
   async function saveEditBal() {
     if (!editBalForm) return;
+    // Validate every leave type: no negatives, and used must not exceed total.
+    const types: { key: "casual" | "sick" | "emergency" | "paid"; label: string }[] = [
+      { key: "casual", label: "Casual" }, { key: "sick", label: "Sick" },
+      { key: "emergency", label: "Emergency" }, { key: "paid", label: "Paid" },
+    ];
+    for (const { key, label } of types) {
+      const { used, total } = editBalForm[key];
+      if (!Number.isFinite(used) || !Number.isFinite(total) || used < 0 || total < 0) {
+        showToast(`${label} leave: values cannot be negative or blank.`, false);
+        return;
+      }
+      if (used > total) {
+        showToast(`${label} leave: used (${used}) cannot exceed allotted (${total}).`, false);
+        return;
+      }
+    }
     const previous = balances.find(b => b.id === editBalForm.id);
     setBalances(balances.map(b => b.id === editBalForm.id ? editBalForm : b));
     try {
-      await updateDoc(doc(db, "leaveBalances", editBalForm.id), {
+      // Balances are computed in-memory and may not have a stored document yet —
+      // setDoc+merge creates it if missing (updateDoc would throw "No document to update").
+      await setDoc(doc(db, "leaveBalances", editBalForm.id), {
+        name:      editBalForm.name,
         casual:    editBalForm.casual,
         sick:      editBalForm.sick,
         emergency: editBalForm.emergency,
         paid:      editBalForm.paid,
         updatedAt: new Date().toISOString(),
-      });
+      }, { merge: true });
       setEditBal(null); setEditBalForm(null);
-    } catch {
+    } catch (err) {
       if (previous) setBalances(balances.map(b => b.id === previous.id ? previous : b));
-      showToast("Failed to save balance. Please try again.", false);
+      showToast(`Failed to save balance: ${describeError(err)}`, false);
     }
   }
 
   async function handleEmergencyOverride() {
+    setOverrideError("");
     if (!overrideForm.employee || !overrideForm.startDate || !overrideForm.endDate) {
-      showToast("Please fill in employee name, start date and end date.", false);
+      setOverrideError("Please fill in employee name, start date and end date.");
       return;
     }
     const start = new Date(overrideForm.startDate + "T00:00:00");
     const end   = new Date(overrideForm.endDate   + "T00:00:00");
-    if (end < start) { showToast("End date must be after start date.", false); return; }
+    if (end < start) { setOverrideError("End date must be after start date."); return; }
     const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+    // Confirmation step — this override bypasses the normal request flow, so require explicit sign-off.
+    const action = overrideForm.approveImmediately ? "approve immediately" : "submit";
+    if (!window.confirm(
+      `Emergency Override\n\nThis will ${action} ${days} day(s) of Emergency Leave for ${overrideForm.employee} (${overrideForm.startDate} to ${overrideForm.endDate}).\n\nContinue?`
+    )) {
+      return;
+    }
+    setOverrideSubmitting(true);
     try {
-      const found = balances.find(b => b.name.toLowerCase().trim() === overrideForm.employee.toLowerCase().trim());
-      const empId = found?.id ?? "";
+      const empId = overrideForm.empId ||
+        (empList.find(e => e.name.toLowerCase().trim() === overrideForm.employee.toLowerCase().trim())?.id ?? "");
       await addDoc(collection(db, "leaveRequests"), {
         empName:   overrideForm.employee,
         empId,
@@ -381,10 +439,13 @@ export default function LeavePage() {
         createdAt: new Date().toISOString(),
       });
       setShowOverride(false);
-      setOverrideForm({ employee: "", startDate: "", endDate: "", reason: "", approveImmediately: false });
+      setOverrideForm({ employee: "", empId: "", startDate: "", endDate: "", reason: "", approveImmediately: false });
+      setOverrideError("");
       showToast(`Emergency leave ${overrideForm.approveImmediately ? "approved" : "submitted"} for ${overrideForm.employee}.`);
-    } catch {
-      showToast("Failed to save override. Please try again.", false);
+    } catch (err) {
+      setOverrideError("Failed to save override. Please check your connection and try again.");
+    } finally {
+      setOverrideSubmitting(false);
     }
   }
 
@@ -392,7 +453,7 @@ export default function LeavePage() {
     <div className="space-y-6">
       {/* Toast */}
       {actionToast && (
-        <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-2xl text-white text-sm font-medium shadow-lg flex items-center gap-2 ${actionToast.ok ? "bg-green-500" : "bg-red-500"}`}>
+        <div className={`fixed top-5 right-5 z-[9999] px-5 py-3 rounded-2xl text-white text-sm font-medium shadow-lg flex items-center gap-2 ${actionToast.ok ? "bg-green-500" : "bg-red-500"}`}>
           {actionToast.ok ? <CheckCircle size={15} /> : <XCircle size={15} />}
           {actionToast.msg}
         </div>
@@ -452,15 +513,22 @@ export default function LeavePage() {
         {activeTab === "Leave Requests" && (
           <div>
             {!ready ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 size={24} className="animate-spin text-[#4F3CC9]" />
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
+                      {["Employee","Leave Type","Start","End","Days","Reason","Status","Applied On","HR Comment","Actions"].map(h => (
+                        <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <SkeletonTableRows rows={6} cols={10} />
+                  </tbody>
+                </table>
               </div>
             ) : visibleRequests.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                <Clock size={36} className="mb-3 text-gray-200" />
-                <p className="text-sm font-medium text-gray-500">No leave requests yet</p>
-                <p className="text-xs mt-1">Employee submissions will appear here in real time</p>
-              </div>
+              <EmptyState icon={Clock} title="No leave requests yet" subtitle="Employee submissions will appear here in real time." />
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -539,7 +607,7 @@ export default function LeavePage() {
         {activeTab === "Leave Balances" && (
           <div className="overflow-x-auto">
             {balances.length === 0 ? (
-              <p className="text-center text-gray-400 text-sm py-12">No leave balances configured.</p>
+              <EmptyState title="No leave balances configured" subtitle="Add leave balances to track employee entitlements." />
             ) : (
               <table className="w-full text-sm">
                 <thead>
@@ -668,7 +736,7 @@ export default function LeavePage() {
                 <span className="font-semibold text-gray-700">{Object.keys(calDayMap).length}</span> days with approved leaves
               </span>
               <span className="text-xs text-gray-500">
-                <span className="font-semibold text-gray-700">{requests.filter(r => r.status === "Approved").length}</span> total approved
+                <span className="font-semibold text-gray-700">{visibleRequests.filter(r => r.status === "Approved").length}</span> total approved
               </span>
               {!isCurrentMonth && !isFutureMonth && (
                 <span className="text-xs text-amber-600 font-medium">Viewing past month</span>
@@ -814,18 +882,51 @@ export default function LeavePage() {
 
       {/* Emergency Override Modal */}
       {showOverride && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowOverride(false)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { setShowOverride(false); setOverrideError(""); }}>
           <div className="bg-white rounded-2xl w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-5 border-b">
               <h2 className="text-base font-bold text-red-600">Emergency Leave Override</h2>
-              <button onClick={() => setShowOverride(false)}><X size={18} /></button>
+              <button onClick={() => { setShowOverride(false); setOverrideError(""); }}><X size={18} /></button>
             </div>
             <div className="p-5 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Employee Name</label>
-                <input placeholder="Enter employee name" value={overrideForm.employee}
+                <input
+                  placeholder="Type name or employee ID…"
+                  value={overrideForm.employee}
                   onChange={e => setOverrideForm(f => ({ ...f, employee: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-red-500" />
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-red-500"
+                />
+                {(() => {
+                  const q = overrideForm.employee.trim().toLowerCase();
+                  if (!q) return null;
+                  const suggestions = empList.filter(e =>
+                    e.name.toLowerCase().includes(q) || e.empId.toLowerCase().includes(q)
+                  ).slice(0, 6);
+                  if (suggestions.length === 0) return (
+                    <p className="text-xs text-gray-400 mt-1 px-1">No employees found</p>
+                  );
+                  return (
+                    <div className="mt-1 border border-gray-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
+                      {suggestions.map(e => (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={() => setOverrideForm(f => ({ ...f, employee: e.name, empId: e.id }))}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-red-50 text-left transition-colors border-b border-gray-50 last:border-0"
+                        >
+                          <div className="w-7 h-7 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xs font-bold shrink-0">
+                            {e.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">{e.name}</p>
+                            <p className="text-xs text-gray-400">{e.empId}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -852,12 +953,17 @@ export default function LeavePage() {
                   onChange={e => setOverrideForm(f => ({ ...f, approveImmediately: e.target.checked }))} className="rounded" />
                 Auto-approve immediately
               </label>
+              {overrideError && (
+                <p className="text-sm text-red-600 bg-red-50 rounded-xl px-3 py-2">{overrideError}</p>
+              )}
             </div>
             <div className="flex gap-3 p-5 pt-0">
-              <button onClick={() => setShowOverride(false)}
+              <button onClick={() => { setShowOverride(false); setOverrideError(""); }}
                 className="flex-1 border border-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm hover:bg-gray-50">Cancel</button>
-              <button onClick={handleEmergencyOverride}
-                className="flex-1 bg-red-500 text-white px-4 py-2 rounded-full text-sm hover:bg-red-600">Submit Override</button>
+              <button onClick={handleEmergencyOverride} disabled={overrideSubmitting}
+                className="flex-1 bg-red-500 text-white px-4 py-2 rounded-full text-sm hover:bg-red-600 disabled:opacity-60 flex items-center justify-center gap-2">
+                {overrideSubmitting ? <><Loader2 size={14} className="animate-spin" /> Submitting…</> : "Submit Override"}
+              </button>
             </div>
           </div>
         </div>

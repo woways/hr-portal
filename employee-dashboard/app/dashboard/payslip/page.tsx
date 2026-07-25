@@ -96,9 +96,17 @@ export default function PayslipPage() {
   const grossEarnings = selected
     ? (selected.salary || 0) + (selected.incentive || 0) + (selected.bonus || 0)
     : 0;
+  // Net pay is always derived from the figures shown on the slip, so it reconciles:
+  // Net = Gross (salary + incentive + bonus) − Deductions.
+  const computedNet = selected ? grossEarnings - (selected.deductions || 0) : 0;
 
   function handleDownload() {
     if (!selected) return;
+    // Block payslip generation until the payroll run is finalized (Paid).
+    if (selected.paymentStatus !== "Paid") {
+      alert(`Payslip not available yet — payroll for ${selected.month} is still ${selected.paymentStatus}. You can download it once HR finalizes the payment.`);
+      return;
+    }
     const gross = grossEarnings;
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Payslip – ${selected.month}</title>
@@ -121,7 +129,7 @@ export default function PayslipPage() {
 </style></head><body>
 <div class="header">
   <div><div class="co">Woways</div><div class="co-sub">tech@woways.in</div></div>
-  <div class="period"><div class="period-label">Salary Slip</div><div class="period-val">${selected.month.toUpperCase()}</div></div>
+  <div class="period"><div class="period-label">Payslip</div><div class="period-val">${selected.month.toUpperCase()}</div></div>
 </div>
 <div class="info-band">
   <div><div class="label">Employee Name</div><div class="val">${empName || selected.name}</div></div>
@@ -133,10 +141,10 @@ export default function PayslipPage() {
   <div class="grid">
     <div>
       <div class="section-title">Earnings</div>
-      <div class="row"><span>Basic Salary</span><span class="right">${fmt(selected.salary)}</span></div>
+      <div class="row"><span>Basic Payroll</span><span class="right">${fmt(selected.salary)}</span></div>
       ${selected.incentive > 0 ? `<div class="row"><span>Incentive</span><span class="right">${fmt(selected.incentive)}</span></div>` : ""}
       ${selected.bonus > 0 ? `<div class="row"><span>Bonus</span><span class="right">${fmt(selected.bonus)}</span></div>` : ""}
-      <div class="row total"><span>Gross Salary</span><span class="right">${fmt(gross)}</span></div>
+      <div class="row total"><span>Gross Payroll</span><span class="right">${fmt(gross)}</span></div>
     </div>
     <div>
       <div class="section-title">Deductions</div>
@@ -145,11 +153,11 @@ export default function PayslipPage() {
     </div>
   </div>
   <div class="net">
-    <div class="net-label">Net Salary — ${selected.month} (${selected.paymentStatus})</div>
-    <div class="net-amount">${fmt(selected.netPay)}</div>
+    <div class="net-label">Net Payroll — ${selected.month} (${selected.paymentStatus})</div>
+    <div class="net-amount">${fmt(computedNet)}</div>
   </div>
 </div>
-<div class="footer">This is a system-generated salary slip and does not require a physical signature. | Woways | ${selected.month}</div>
+<div class="footer">This is a system-generated payslip and does not require a physical signature. | Woways | ${selected.month}</div>
 <script>window.onload=function(){window.print()}<\/script>
 </body></html>`;
 
@@ -163,7 +171,7 @@ export default function PayslipPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Payslip</h1>
-          <p className="text-gray-500 text-sm mt-1">View and download your monthly salary slips.</p>
+          <p className="text-gray-500 text-sm mt-1">View and download your monthly payslips.</p>
         </div>
 
         {/* Month selector — only shows months with real records */}
@@ -224,7 +232,7 @@ export default function PayslipPage() {
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-purple-200 text-xs uppercase tracking-wider">Salary Slip</p>
+                <p className="text-purple-200 text-xs uppercase tracking-wider">Payslip</p>
                 <p className="font-bold text-xl">{selected.month.toUpperCase()}</p>
               </div>
             </div>
@@ -263,7 +271,7 @@ export default function PayslipPage() {
                 </h3>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Basic Salary</span>
+                    <span className="text-sm text-gray-600">Basic Payroll</span>
                     <span className="text-sm font-medium text-gray-900">{fmt(selected.salary)}</span>
                   </div>
                   {selected.incentive > 0 && (
@@ -279,7 +287,7 @@ export default function PayslipPage() {
                     </div>
                   )}
                   <div className="border-t border-gray-100 pt-3 mt-3 flex justify-between items-center">
-                    <span className="text-sm font-bold text-gray-900">Gross Salary</span>
+                    <span className="text-sm font-bold text-gray-900">Gross Payroll</span>
                     <span className="text-sm font-bold text-gray-900">{fmt(grossEarnings)}</span>
                   </div>
                 </div>
@@ -315,7 +323,7 @@ export default function PayslipPage() {
                   <CreditCard size={18} className="text-white" />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">Net Salary</p>
+                  <p className="text-xs text-gray-500">Net Payroll</p>
                   <div className="flex items-center gap-2 mt-0.5">
                     <p className="text-xs text-gray-400">{selected.month}</p>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -329,7 +337,7 @@ export default function PayslipPage() {
                   )}
                 </div>
               </div>
-              <p className="text-3xl font-bold text-[#4F3CC9]">{fmt(selected.netPay)}</p>
+              <p className="text-3xl font-bold text-[#4F3CC9]">{fmt(computedNet)}</p>
             </div>
           </div>
 
@@ -337,10 +345,17 @@ export default function PayslipPage() {
           <div className="px-8 pb-6">
             <button
               onClick={handleDownload}
-              className="w-full flex items-center justify-center gap-2 bg-[#4F3CC9] text-white py-3 rounded-full text-sm font-medium hover:bg-[#3d2fa3] transition-colors"
+              disabled={selected.paymentStatus !== "Paid"}
+              title={selected.paymentStatus !== "Paid" ? "Available once payroll is finalized (Paid)" : "Download payslip"}
+              className="w-full flex items-center justify-center gap-2 bg-[#4F3CC9] text-white py-3 rounded-full text-sm font-medium hover:bg-[#3d2fa3] transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#4F3CC9]"
             >
               <Download size={16} /> Download Payslip
             </button>
+            {selected.paymentStatus !== "Paid" && (
+              <p className="text-xs text-gray-400 text-center mt-2">
+                Payslip becomes available once payroll for {selected.month} is finalized (currently {selected.paymentStatus}).
+              </p>
+            )}
           </div>
         </div>
       )}

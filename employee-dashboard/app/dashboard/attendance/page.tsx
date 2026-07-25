@@ -98,8 +98,20 @@ export default function AttendancePage() {
   const [workingSeconds, setWorkingSeconds]   = useState(0);
   const [finalSeconds, setFinalSeconds]       = useState<number | null>(null);
   const [isLate, setIsLate]                   = useState(false);
-  const [lateHour, setLateHour]               = useState(10);
-  const [lateMinute, setLateMinute]           = useState(0);
+  const [lateHour, setLateHour]               = useState(9);
+  const [lateMinute, setLateMinute]           = useState(30);
+  // Attendance rules from Settings → Attendance Rules (hours).
+  const [minHours, setMinHours]               = useState(7);
+  const [halfDayThreshold, setHalfDayThreshold] = useState(4);
+
+  // Derive attendance status from working hours per the configured thresholds.
+  function statusFromHours(totalSeconds: number, isWeekend: boolean): AttStatus {
+    if (isWeekend) return "Week Off";
+    const hrs = totalSeconds / 3600;
+    if (hrs >= minHours) return "Present";
+    if (hrs >= halfDayThreshold) return "Half Day";
+    return "Absent";
+  }
 
   // UI state
   const [currentTime, setCurrentTime]   = useState("");
@@ -129,7 +141,11 @@ export default function AttendancePage() {
         const eid = (userData.employeeId as string) ?? "";
         if (!eid) return;
 
-        const empSnap = await getDoc(doc(db, "employees", eid));
+        const [empSnap, timingsSnap, rulesSnap] = await Promise.all([
+          getDoc(doc(db, "employees", eid)),
+          getDoc(doc(db, "settings", "workTimings")),
+          getDoc(doc(db, "settings", "attendanceRules")),
+        ]);
         if (!empSnap.exists()) return;
         const empData = empSnap.data();
         setEmpId(eid);
@@ -137,11 +153,17 @@ export default function AttendancePage() {
         setEmpDept(empData.department ?? "");
 
         // Load late threshold from HR settings (e.g. "09:30")
-        const timingsSnap = await getDoc(doc(db, "settings", "workTimings"));
         if (timingsSnap.exists()) {
-          const threshold = (timingsSnap.data().lateThreshold as string) ?? "10:00";
+          const threshold = (timingsSnap.data().lateThreshold as string) ?? "09:30";
           const [h, m] = threshold.split(":").map(Number);
           if (!isNaN(h)) { setLateHour(h); setLateMinute(m || 0); }
+        }
+        // Load min-hours / half-day thresholds (e.g. 8 / 4 hours)
+        if (rulesSnap.exists()) {
+          const mh = parseFloat(rulesSnap.data().minHours as string);
+          const hd = parseFloat(rulesSnap.data().halfDayThreshold as string);
+          if (!isNaN(mh)) setMinHours(mh);
+          if (!isNaN(hd)) setHalfDayThreshold(hd);
         }
       } catch { /* ignore */ }
     });
@@ -150,6 +172,8 @@ export default function AttendancePage() {
 
   // Ref to track active clock session — prevents HR corrections from overwriting live state
   const isClockedInRef = useRef(false);
+  // Cache clockRecords so we only fetch once (historical backfill data doesn't change)
+  const crCacheRef = useRef<Record<string, { clockIn: string; clockOut: string; totalSeconds: number }> | null>(null);
   useEffect(() => { isClockedInRef.current = isClockedIn; }, [isClockedIn]);
 
   // ── Live listener for today's record — reflects HR corrections instantly ────
@@ -224,27 +248,30 @@ export default function AttendancePage() {
         e.status === "Present" && (e.clockIn === "—" || e.clockOut === "—" || e.hours === "—")
       );
       if (incomplete.length > 0) {
-        const dates = [...new Set(incomplete.map(e => e.isoDate))];
-        const chunks: string[][] = [];
-        for (let i = 0; i < dates.length; i += 30) chunks.push(dates.slice(i, i + 30));
+        // Fetch clockRecords only once; subsequent snapshot fires reuse the cache
+        if (crCacheRef.current === null) {
+          crCacheRef.current = {};
+          const dates = [...new Set(incomplete.map(e => e.isoDate))];
+          const chunks: string[][] = [];
+          for (let i = 0; i < dates.length; i += 30) chunks.push(dates.slice(i, i + 30));
+          await Promise.all(chunks.map(async chunk => {
+            const crSnap = await getDocs(query(
+              collection(db, "clockRecords"),
+              where("empId", "==", empId),
+              where("date", "in", chunk)
+            ));
+            crSnap.docs.forEach(d => {
+              const r = d.data() as Record<string, unknown>;
+              crCacheRef.current![r.date as string] = {
+                clockIn:      (r.clockInStr  as string) ?? "",
+                clockOut:     (r.clockOutStr as string) ?? "",
+                totalSeconds: (r.totalSeconds as number) ?? 0,
+              };
+            });
+          }));
+        }
 
-        const crMap: Record<string, { clockIn: string; clockOut: string; totalSeconds: number }> = {};
-        await Promise.all(chunks.map(async chunk => {
-          const crSnap = await getDocs(query(
-            collection(db, "clockRecords"),
-            where("empId", "==", empId),
-            where("date", "in", chunk)
-          ));
-          crSnap.docs.forEach(d => {
-            const r = d.data() as Record<string, unknown>;
-            crMap[r.date as string] = {
-              clockIn:      (r.clockInStr  as string) ?? "",
-              clockOut:     (r.clockOutStr as string) ?? "",
-              totalSeconds: (r.totalSeconds as number) ?? 0,
-            };
-          });
-        }));
-
+        const crMap = crCacheRef.current;
         past = past.map(e => {
           const cr = crMap[(e as AttEntry & { isoDate: string }).isoDate];
           if (!cr) return e;
@@ -316,7 +343,9 @@ export default function AttendancePage() {
 
     if (!isClockedIn) {
       const h = now.getHours(), m = now.getMinutes();
-      const late = h > lateHour || (h === lateHour && m > lateMinute);
+      const dayOfWeek = now.getDay();
+      const isWeekendToday = dayOfWeek === 0 || dayOfWeek === 6;
+      const late = !isWeekendToday && (h > lateHour || (h === lateHour && m > lateMinute));
       const attId = `${date}-${empId}`;
       const payload = {
         empId, name: empName, dept: empDept,
@@ -347,10 +376,13 @@ export default function AttendancePage() {
       const m = Math.floor((total % 3600) / 60);
       const wh = `${h}h ${String(m).padStart(2, "0")}m`;
       const attId = `${date}-${empId}`;
+      // Derive Present / Half Day from hours worked against configured thresholds.
+      const isWeekendToday = [0, 6].includes(new Date(date + "T00:00:00").getDay());
+      const derivedStatus = statusFromHours(total, isWeekendToday);
       try {
         await updateDoc(doc(db, "attendance", attId), {
           clockOut: timeStr, clockOutTs: ts, totalSeconds: total,
-          workingHours: wh, status: "Present", updatedAt: new Date().toISOString(),
+          workingHours: wh, status: derivedStatus, updatedAt: new Date().toISOString(),
         });
         // Persist to clockRecords so history backfill can recover times
         await setDoc(doc(db, "clockRecords", attId), {
@@ -583,6 +615,10 @@ export default function AttendancePage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Attendance</h1>
           <p className="text-gray-500 text-sm mt-1">Track your daily attendance and working hours.</p>
+          {/* Same rule line the HR view shows, so both sides read the same cutoff (ATT-003). */}
+          <p className="text-xs text-gray-400 mt-1">
+            Status rule: Present ≥ {minHours}h worked · Half Day {halfDayThreshold}–{minHours}h · Absent &lt; {halfDayThreshold}h
+          </p>
         </div>
         {empId && (
           <div className="text-right">
@@ -794,7 +830,16 @@ export default function AttendancePage() {
                   </td>
                 </tr>
               ))}
-              {visibleRows.length === 0 && (
+              {visibleRows.length === 0 && !empId && (
+                <>{Array.from({ length: 6 }, (_, i) => (
+                  <tr key={`skel-${i}`} className="border-b border-gray-100">
+                    {Array.from({ length: 7 }, (_, j) => (
+                      <td key={j} className="px-6 py-4"><div className="h-3.5 w-24 bg-gray-200/70 animate-pulse rounded" /></td>
+                    ))}
+                  </tr>
+                ))}</>
+              )}
+              {visibleRows.length === 0 && empId && (
                 <tr><td colSpan={7} className="px-6 py-8 text-center text-gray-400 text-sm">No records for this month</td></tr>
               )}
             </tbody>

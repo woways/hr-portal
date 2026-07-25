@@ -108,7 +108,40 @@ export default function AttendancePage() {
   const [currentTime, setCurrentTime] = useState("");
   const [currentDate, setCurrentDate] = useState("");
   const [isLate, setIsLate] = useState(false);
+  const [minHours, setMinHours] = useState(7);
+  const [halfDayThreshold, setHalfDayThreshold] = useState(4);
+  const [lateHour, setLateHour] = useState(9);
+  const [lateMinute, setLateMinute] = useState(30);
   const [selectedMonth, setSelectedMonth] = useState(getTodayMonthLabel);
+
+  // Derive Present / Half Day / Absent from hours worked per configured thresholds.
+  function statusFromHours(totalSeconds: number, isWeekend: boolean): AttStatus {
+    if (isWeekend) return "Week Off";
+    const hrs = totalSeconds / 3600;
+    if (hrs >= minHours) return "Present";
+    if (hrs >= halfDayThreshold) return "Half Day";
+    return "Absent";
+  }
+
+  useEffect(() => {
+    getDoc(doc(db, "settings", "attendanceRules"))
+      .then((snap) => {
+        if (!snap.exists()) return;
+        const mh = parseFloat(snap.data().minHours as string);
+        const hd = parseFloat(snap.data().halfDayThreshold as string);
+        if (!isNaN(mh)) setMinHours(mh);
+        if (!isNaN(hd)) setHalfDayThreshold(hd);
+      })
+      .catch(() => { /* keep defaults */ });
+    // Load the configured Late Login Threshold (e.g. "09:30") so late status is
+    // driven by settings, not a hardcoded 10:00 cutoff.
+    getDoc(doc(db, "settings", "workTimings"))
+      .then((snap) => {
+        const t = snap.exists() ? (snap.data().lateThreshold as string) : "";
+        if (t) { const [h, m] = t.split(":").map(Number); if (!isNaN(h)) { setLateHour(h); setLateMinute(m || 0); } }
+      })
+      .catch(() => { /* keep defaults */ });
+  }, []);
   const [historyYear, setHistoryYear]         = useState(() => new Date().getFullYear());
   const [historyMonthIdx, setHistoryMonthIdx] = useState(() => new Date().getMonth());
   const [showMonthPicker, setShowMonthPicker] = useState(false);
@@ -379,7 +412,7 @@ export default function AttendancePage() {
     const now2 = new Date().toISOString();
 
     if (!isClockedIn) {
-      const late = now.getHours() >= 10 || (now.getHours() === 10 && now.getMinutes() > 0);
+      const late = now.getHours() > lateHour || (now.getHours() === lateHour && now.getMinutes() > lateMinute);
       setClockInTime(timeStr);
       setClockInTimestamp(ts);
       setClockOutTime(null);
@@ -424,7 +457,7 @@ export default function AttendancePage() {
         }, { merge: true }),
         setDoc(doc(db, "attendance", clockId), {
           clockOut: timeStr, workingHours: workingHoursStr,
-          status: "Present", updatedAt: now2,
+          status: statusFromHours(total, [0, 6].includes(new Date(date + "T00:00:00").getDay())), updatedAt: now2,
         }, { merge: true }),
       ]).catch(() => {});
     }
@@ -463,7 +496,7 @@ export default function AttendancePage() {
         ...entry,
         status: "Present" as const,
         clockIn: `${String(h12).padStart(2, "0")}:${String(m).padStart(2, "0")} ${suffix}`,
-        late: h > 10 || (h === 10 && m > 0),
+        late: h > lateHour || (h === lateHour && m > lateMinute),
       };
     });
   }, [todayEntry, requests, pastLog]);
@@ -595,6 +628,10 @@ export default function AttendancePage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Attendance</h1>
           <p className="text-gray-500 text-sm mt-1">Track your daily attendance and working hours.</p>
+          {/* Same rule line the HR view shows, so both sides read the same cutoff (ATT-003). */}
+          <p className="text-xs text-gray-400 mt-1">
+            Status rule: Present ≥ {minHours}h worked · Half Day {halfDayThreshold}–{minHours}h · Absent &lt; {halfDayThreshold}h
+          </p>
         </div>
         {empId && (
           <div className="text-right">
@@ -653,7 +690,7 @@ export default function AttendancePage() {
           { label: "Present Days",   val: presentCount,  sub: `Out of ${totalWorkDays} working days`, icon: <CheckCircle size={18} className="text-green-600" />,  bg: "bg-green-50"  },
           { label: "Absent Days",    val: absentCount,   sub: "Unmarked absences",                     icon: <XCircle size={18} className="text-red-500" />,        bg: "bg-red-50"    },
           { label: "Half Days",      val: halfDayCount,  sub: "Partial attendance",                    icon: <AlertCircle size={18} className="text-yellow-500" />, bg: "bg-yellow-50" },
-          { label: "Late Logins",    val: lateCount,     sub: "After 10:00 AM",                        icon: <Clock size={18} className="text-[#4F3CC9]" />,        bg: "bg-purple-50" },
+          { label: "Late Logins",    val: lateCount,     sub: `After ${String(lateHour).padStart(2,"0")}:${String(lateMinute).padStart(2,"0")}`, icon: <Clock size={18} className="text-[#4F3CC9]" />,        bg: "bg-purple-50" },
         ].map(({ label, val, sub, icon, bg }) => (
           <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-center justify-between mb-3">

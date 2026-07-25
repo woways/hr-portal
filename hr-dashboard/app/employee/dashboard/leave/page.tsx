@@ -68,6 +68,13 @@ function StatusBadge({ status }: { status: string }) {
 
 const LEAVE_TYPES = ["Annual Leave", "Sick Leave", "Casual Leave", "Emergency Leave", "Maternity Leave", "Paternity Leave", "Unpaid Leave"];
 
+const DEFAULT_POLICIES: { type: string; days: number }[] = [
+  { type: "Casual Leave", days: 12 },
+  { type: "Sick Leave", days: 10 },
+  { type: "Emergency Leave", days: 3 },
+  { type: "Paid Leave", days: 15 },
+];
+
 export default function LeavePage() {
   const today = localDate();
 
@@ -77,6 +84,17 @@ export default function LeavePage() {
 
   const [requests,  setRequests]  = useState<LeaveRequest[]>([]);
   const [liveReady, setLiveReady] = useState(false);
+  const [policies,  setPolicies]  = useState(DEFAULT_POLICIES);
+
+  // Load the HR-configured leave policies (entitlement days per type).
+  useEffect(() => {
+    getDoc(doc(db, "settings", "leavePolicies"))
+      .then((snap) => {
+        const list = snap.exists() ? (snap.data().list as { type: string; days: number }[]) : null;
+        if (Array.isArray(list) && list.length) setPolicies(list.map((p) => ({ type: p.type, days: Number(p.days) || 0 })));
+      })
+      .catch(() => { /* keep defaults */ });
+  }, []);
 
   const [showModal,  setShowModal]  = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -193,9 +211,26 @@ export default function LeavePage() {
       return;
     }
 
+    const days = calcDays(leaveForm.startDate, leaveForm.endDate);
+
+    // Enforce leave balance: block when the request exceeds the remaining allocation.
+    // Committed = approved + pending days (pending already reserves the balance),
+    // so repeated applications can't exceed the entitlement. Types with no policy
+    // (e.g. Unpaid Leave) are not capped.
+    const policy = policies.find(p => p.type === leaveForm.leaveType);
+    if (policy) {
+      const committed = requests
+        .filter(r => r.leaveType === leaveForm.leaveType && (r.status === "Approved" || r.status === "Pending"))
+        .reduce((s, r) => s + (Number(r.days) || 0), 0);
+      const remaining = policy.days - committed;
+      if (days > remaining) {
+        showToast(`Insufficient ${leaveForm.leaveType} balance — ${Math.max(0, remaining)} day(s) remaining, but you requested ${days}.`, false);
+        return;
+      }
+    }
+
     setSubmitting(true);
     const leaveId = `LR-${empId}-${Date.now()}`;
-    const days    = calcDays(leaveForm.startDate, leaveForm.endDate);
 
     try {
       const proofUrls: string[]      = [];
@@ -279,8 +314,24 @@ export default function LeavePage() {
       showToast("End date must be on or after start date.", false);
       return;
     }
-    setSubmitting(true);
+
     const days = calcDays(editForm.startDate, editForm.endDate);
+
+    // Validate the edited duration against the remaining balance (excluding the
+    // request being edited, since it's being replaced).
+    const editPolicy = policies.find(p => p.type === editForm.leaveType);
+    if (editPolicy) {
+      const committed = requests
+        .filter(r => r.id !== editingReq.id && r.leaveType === editForm.leaveType && (r.status === "Approved" || r.status === "Pending"))
+        .reduce((s, r) => s + (Number(r.days) || 0), 0);
+      const remaining = editPolicy.days - committed;
+      if (days > remaining) {
+        showToast(`Insufficient ${editForm.leaveType} balance — ${Math.max(0, remaining)} day(s) remaining, but you requested ${days}.`, false);
+        return;
+      }
+    }
+
+    setSubmitting(true);
 
     try {
       const proofUrls      = [...existingProofUrls];
@@ -342,6 +393,18 @@ export default function LeavePage() {
   const approved = requests.filter(r => r.status === "Approved").length;
   const rejected = requests.filter(r => r.status === "Rejected").length;
 
+  // Leave balance: entitlement (policy days) minus approved days used, per type.
+  const usedByType: Record<string, number> = {};
+  requests.filter(r => r.status === "Approved").forEach((r) => {
+    usedByType[r.leaveType] = (usedByType[r.leaveType] ?? 0) + (Number(r.days) || 0);
+  });
+  const balances = policies.map((p) => {
+    const used = usedByType[p.type] ?? 0;
+    return { type: p.type, total: p.days, used, remaining: Math.max(0, p.days - used) };
+  });
+  const totalEntitlement = balances.reduce((s, b) => s + b.total, 0);
+  const totalRemaining   = balances.reduce((s, b) => s + b.remaining, 0);
+
   return (
     <div className="space-y-6">
       {toast && (
@@ -374,6 +437,25 @@ export default function LeavePage() {
         <span className="ml-auto flex items-center gap-1.5 text-xs text-green-600 font-medium">
           <Wifi size={12} /> Live sync
         </span>
+      </div>
+
+      {/* Leave balance / entitlement */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-gray-900">Leave Balance</h2>
+          <span className="text-xs text-gray-500">
+            <span className="font-semibold text-gray-900">{totalRemaining}</span> of {totalEntitlement} days remaining
+          </span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {balances.map((b) => (
+            <div key={b.type} className="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+              <p className="text-xs text-gray-500 truncate">{b.type}</p>
+              <p className="text-xl font-bold text-gray-900 mt-1">{b.remaining}<span className="text-sm font-medium text-gray-400"> / {b.total}</span></p>
+              <p className="text-[11px] text-gray-400 mt-0.5">{b.used} used</p>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Leave Requests Table */}

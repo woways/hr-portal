@@ -7,7 +7,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { getEmployees } from "@/lib/firebaseService";
-import { DEPARTMENTS } from "@/lib/constants";
+import { useDepartments } from "@/lib/useDepartments";
 import {
   Plus, X, Bell, CalendarOff, Clock, IndianRupee,
   Megaphone, Target, CheckCheck, Wifi, Loader2, Search, User, Check, Building2, Users, Trash2,
@@ -65,6 +65,7 @@ interface EmpOption { empId: string; name: string; email: string; department: st
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function HRNotificationsPage() {
+  const departments = useDepartments();
   const [notifs,      setNotifs]      = useState<LiveNotif[]>([]);
   const [ready,       setReady]       = useState(false);
   const [activeTab,   setActiveTab]   = useState<Tab>("All");
@@ -225,7 +226,7 @@ export default function HRNotificationsPage() {
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────
-  const allDepts = [...DEPARTMENTS];
+  const allDepts = [...departments];
 
   function recipientCount() {
     if (targetMode === "all")        return empList.length;
@@ -363,7 +364,7 @@ export default function HRNotificationsPage() {
           return (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 text-sm font-medium rounded-t-xl transition-colors relative ${activeTab === tab ? "bg-white border border-b-white border-gray-100 text-[#4F3CC9]" : "text-gray-500 hover:text-gray-700"}`}>
-              {tab}
+              {tab === "Payroll" ? "Payroll" : tab}
               {count > 0 && (
                 <span className="ml-1.5 bg-[#4F3CC9] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{count}</span>
               )}
@@ -380,9 +381,18 @@ export default function HRNotificationsPage() {
       {/* Notification List */}
       <div className="space-y-3">
         {!ready ? (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 flex items-center justify-center">
-            <Loader2 size={24} className="animate-spin text-[#4F3CC9]" />
-          </div>
+          <>
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-gray-200/70 animate-pulse" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3.5 w-56 bg-gray-200/70 animate-pulse rounded" />
+                  <div className="h-3 w-40 bg-gray-200/70 animate-pulse rounded" />
+                </div>
+                <div className="h-3 w-16 bg-gray-200/70 animate-pulse rounded" />
+              </div>
+            ))}
+          </>
         ) : filtered.length === 0 ? (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
             <Bell size={36} className="text-gray-200 mx-auto mb-3" />

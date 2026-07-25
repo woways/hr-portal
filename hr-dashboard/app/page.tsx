@@ -1,16 +1,16 @@
 "use client";
 import { useState, type FormEvent } from "react";
-import { Eye, EyeOff, Mail, ArrowLeft } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, ArrowRight, ArrowLeft, Rocket, BarChart3, Wallet, ShieldCheck, Check } from "lucide-react";
 import { signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from "firebase/auth";
 import { collection, query, where, getDocs, doc, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { getUserProfile } from "@/lib/authService";
 
 const FEATURES = [
-  { icon: "🚀", text: "Embedded execution across Sales, Ops, Marketing & Tech" },
-  { icon: "📊", text: "14-18 day pilots before scaling to full engagement" },
-  { icon: "💰", text: "Commission-based model — we win when you win" },
-  { icon: "🔒", text: "Role-based portals for every stakeholder" },
+  { Icon: Rocket,      text: "Embedded execution across Sales, Ops, Marketing & Tech" },
+  { Icon: BarChart3,   text: "14–18 day pilots before scaling to full engagement" },
+  { Icon: Wallet,      text: "Commission-based model — we win when you win" },
+  { Icon: ShieldCheck, text: "Role-based portals for every stakeholder" },
 ];
 
 type View = "login" | "forgot";
@@ -19,6 +19,7 @@ export default function LoginPage() {
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw]     = useState(false);
+  const [remember, setRemember] = useState(true);
   const [error, setError]       = useState("");
   const [loading, setLoading]   = useState(false);
 
@@ -147,52 +148,72 @@ export default function LoginPage() {
     <div className="min-h-screen flex">
 
       {/* ── Left panel ── */}
-      <div className="hidden lg:flex w-1/2 bg-[#0B1929] flex-col items-center justify-center p-14 relative overflow-hidden">
-        {/* Decorative circles */}
-        <div className="absolute top-[-100px] left-[-100px] w-[380px] h-[380px] rounded-full bg-[#0d3349] opacity-70" />
-        <div className="absolute top-[-60px] right-[-60px] w-[260px] h-[260px] rounded-full bg-[#0a2a40] opacity-80" />
-        <div className="absolute bottom-[-80px] left-[-40px] w-[240px] h-[240px] rounded-full bg-[#093040] opacity-60" />
+      <div className="hidden lg:flex w-1/2 flex-col items-center justify-center p-14 relative overflow-hidden bg-gradient-to-br from-[#0A1622] via-[#0B1E2E] to-[#0C2A38]">
+        {/* Decorative glows */}
+        <div className="absolute top-[-120px] left-[-120px] w-[420px] h-[420px] rounded-full bg-[#0e3a4d] opacity-60 blur-[10px]" />
+        <div className="absolute top-[-60px] right-[-80px] w-[280px] h-[280px] rounded-full bg-[#0a2a40] opacity-70 blur-[8px]" />
+        <div className="absolute bottom-[-100px] left-[-40px] w-[300px] h-[300px] rounded-full bg-[#093040] opacity-50 blur-[10px]" />
+        <div className="absolute bottom-[10%] right-[-60px] w-[220px] h-[220px] rounded-full bg-[#14B8A6] opacity-[0.06] blur-[20px]" />
 
         {/* Centered content */}
-        <div className="relative z-10 flex flex-col items-center text-center w-full max-w-sm">
-          {/* Logo */}
-          <div className="mb-3">
-            <span className="text-5xl font-black text-white tracking-tight">WO</span>
-            <span className="text-5xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
+        <div className="relative z-10 flex flex-col items-center text-center w-full max-w-md">
+          {/* Logo mark + wordmark */}
+          <div className="flex items-center gap-3 mb-4">
+            <svg width="76" height="48" viewBox="0 0 54 34" fill="none" className="shrink-0" style={{ filter: "drop-shadow(0 3px 9px rgba(0,194,168,0.4))" }}>
+              <path d="M2 13 L11 30 L26 4" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M28 13 L37 30 L52 4" stroke="#00C2A8" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div className="text-5xl font-black leading-none" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px", textShadow: "0 2px 10px rgba(0,0,0,0.45)" }}>
+              <span className="text-white">WO</span>
+              <span style={{ color: "#00C2A8" }}>WAYS</span>
+            </div>
           </div>
-          <p className="text-gray-400 text-sm mb-12">Your Execution Partner</p>
+
+          {/* Divider label */}
+          <div className="flex items-center gap-3 w-full max-w-sm mb-14">
+            <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#14B8A6]/40" />
+            <span className="text-[13px] font-semibold tracking-[0.28em] text-gray-400 uppercase whitespace-nowrap">
+              Additional Execution Partner
+            </span>
+            <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#14B8A6]/40" />
+          </div>
 
           {/* Features */}
-          <div className="space-y-5 w-full">
-            {FEATURES.map((f) => (
-              <div key={f.text} className="flex items-center gap-4 text-left">
-                <div className="w-10 h-10 rounded-xl bg-[#112233] flex items-center justify-center text-xl shrink-0">
-                  {f.icon}
+          <div className="space-y-5 w-full max-w-md">
+            {FEATURES.map(({ Icon, text }) => (
+              <div key={text} className="flex items-center gap-4 text-left">
+                <div className="w-12 h-12 rounded-xl bg-[#14B8A6]/10 border border-[#14B8A6]/20 flex items-center justify-center shrink-0">
+                  <Icon size={22} className="text-[#2DD4BF]" />
                 </div>
-                <p className="text-gray-300 text-sm leading-relaxed">{f.text}</p>
+                <p className="text-gray-300 text-base font-normal leading-relaxed">{text}</p>
               </div>
             ))}
           </div>
         </div>
-
-        <p className="absolute bottom-6 z-10 text-gray-600 text-xs">© 2026 Woways · All rights reserved</p>
       </div>
 
       {/* ── Right panel ── */}
-      <div className="flex-1 bg-white flex items-center justify-center p-10">
+      <div className="flex-1 bg-white flex items-center justify-center pl-10 pr-28 py-10" style={{ fontFamily: "var(--font-inter), sans-serif" }}>
         <div className="w-full max-w-sm">
 
           {/* Mobile logo */}
-          <div className="flex lg:hidden justify-center mb-8">
-            <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
-            <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
+          <div className="flex lg:hidden items-center justify-center gap-2 mb-8">
+            <svg width="58" height="36" viewBox="0 0 54 34" fill="none" className="shrink-0" style={{ filter: "drop-shadow(0 2px 6px rgba(0,194,168,0.35))" }}>
+              <path d="M2 13 L11 30 L26 4" stroke="#0A2540" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M28 13 L37 30 L52 4" stroke="#00C2A8" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div className="text-3xl font-black leading-none" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px" }}>
+              <span style={{ color: "#0A2540" }}>WO</span>
+              <span style={{ color: "#00C2A8" }}>WAYS</span>
+            </div>
           </div>
 
           {/* ─── LOGIN VIEW ─── */}
           {view === "login" && (
             <>
-              <h1 className="text-3xl font-bold text-[#0B1929] mb-1">Welcome back</h1>
-              <p className="text-gray-500 text-sm mb-8">Sign in to your Woways portal</p>
+              <p className="text-[#14B8A6] text-sm font-bold tracking-[0.28em] uppercase mb-3">Welcome</p>
+              <h1 className="text-4xl font-bold text-[#0B1929] mb-2">Sign in to Woways</h1>
+              <p className="text-gray-500 text-[15px] mb-8">Your execution portal, right where you left off.</p>
 
               <form onSubmit={handleSignIn} className="space-y-5">
                 {/* Email */}
@@ -200,14 +221,16 @@ export default function LoginPage() {
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">
                     Email address
                   </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@woways.in"
-                    autoComplete="email"
-                    className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-transparent"
-                  />
+                  <div className="relative">
+                    <Mail size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      autoComplete="email"
+                      className="w-full pl-11 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50/60 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:border-transparent focus:bg-white transition-colors"
+                    />
+                  </div>
                 </div>
 
                 {/* Password */}
@@ -216,22 +239,49 @@ export default function LoginPage() {
                     Password
                   </label>
                   <div className="relative">
+                    <Lock size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                     <input
                       type={showPw ? "text" : "password"}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
                       autoComplete="current-password"
-                      className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-transparent pr-11"
+                      className="w-full pl-11 pr-11 py-3 rounded-xl border border-gray-200 bg-gray-50/60 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:border-transparent focus:bg-white transition-colors"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPw(!showPw)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                     >
-                      {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                      {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
                   </div>
+                </div>
+
+                {/* Remember me + Forgot password */}
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={remember}
+                      onChange={(e) => setRemember(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <span
+                      className={`w-5 h-5 rounded-md flex items-center justify-center transition-colors ${
+                        remember ? "bg-[#14B8A6] border-2 border-[#14B8A6]" : "bg-white border-2 border-gray-300"
+                      }`}
+                    >
+                      {remember && <Check size={13} strokeWidth={3} className="text-white" />}
+                    </span>
+                    <span className="text-sm text-gray-600">Remember me</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={openForgot}
+                    className="text-sm text-[#0EA5A4] hover:underline font-semibold"
+                  >
+                    Forgot password?
+                  </button>
                 </div>
 
                 {/* Error */}
@@ -245,26 +295,17 @@ export default function LoginPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+                  className="w-full bg-gradient-to-r from-[#14B8A6] to-[#2563EB] hover:from-[#0EA5A4] hover:to-[#1d4ed8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#14B8A6]/25 hover:shadow-[#14B8A6]/40"
                 >
                   {loading ? (
                     <>
                       <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
                       Signing in…
                     </>
-                  ) : "Sign in →"}
+                  ) : (
+                    <>Sign in <ArrowRight size={16} /></>
+                  )}
                 </button>
-
-                {/* Forgot password */}
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={openForgot}
-                    className="text-sm text-[#2563EB] hover:underline font-medium"
-                  >
-                    Forgot password?
-                  </button>
-                </div>
               </form>
             </>
           )}
@@ -279,8 +320,8 @@ export default function LoginPage() {
                 <ArrowLeft size={15} /> Back to sign in
               </button>
 
-              <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-5">
-                <Mail size={22} className="text-[#2563EB]" />
+              <div className="w-12 h-12 rounded-2xl bg-[#14B8A6]/10 flex items-center justify-center mb-5">
+                <Mail size={22} className="text-[#14B8A6]" />
               </div>
 
               <h1 className="text-2xl font-bold text-[#0B1929] mb-1">Reset your password</h1>
@@ -319,7 +360,7 @@ export default function LoginPage() {
                     </button>
                     <button
                       onClick={() => { setView("login"); setResetStatus("idle"); setResetMsg(""); }}
-                      className="flex-1 bg-[#2563EB] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#1d4ed8] transition-colors"
+                      className="flex-1 bg-gradient-to-r from-[#14B8A6] to-[#2563EB] text-white py-2.5 rounded-lg text-sm font-semibold hover:from-[#0EA5A4] hover:to-[#1d4ed8] transition-all"
                     >
                       Back to sign in
                     </button>
@@ -337,7 +378,7 @@ export default function LoginPage() {
                       onChange={(e) => setResetEmail(e.target.value)}
                       placeholder="you@woways.in"
                       autoFocus
-                      className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-transparent"
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#14B8A6] focus:border-transparent"
                     />
                   </div>
 
@@ -350,7 +391,7 @@ export default function LoginPage() {
                   <button
                     type="submit"
                     disabled={resetLoading}
-                    className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+                    className="w-full bg-gradient-to-r from-[#14B8A6] to-[#2563EB] hover:from-[#0EA5A4] hover:to-[#1d4ed8] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-all flex items-center justify-center gap-2"
                   >
                     {resetLoading ? (
                       <>

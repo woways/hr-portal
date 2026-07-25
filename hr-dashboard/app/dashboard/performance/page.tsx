@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { Eye, Pencil, Trash2, Star, Plus, X } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { Goal, GoalStatus } from "@/lib/types";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -283,8 +284,8 @@ export default function PerformancePage() {
                   ))}
                   {goals.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-400">
-                        No goals found.
+                      <td colSpan={6}>
+                        <EmptyState title="No goals found" subtitle="Add a goal to start tracking performance." />
                       </td>
                     </tr>
                   )}
@@ -344,8 +345,8 @@ export default function PerformancePage() {
                   ))}
                   {reviews.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">
-                        No reviews found.
+                      <td colSpan={5}>
+                        <EmptyState title="No reviews found" subtitle="Performance reviews will appear here once recorded." />
                       </td>
                     </tr>
                   )}

@@ -1,9 +1,10 @@
 "use client";
 import { useState, useEffect } from "react";
 import { Plus, X, CheckCircle, Clock, XCircle, CalendarX, Loader2 } from "lucide-react";
-import { collection, query, where, getDocs, addDoc, getDoc, doc } from "firebase/firestore";
+import { collection, query, where, getDocs, addDoc, getDoc, doc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
+import { SkeletonListRow } from "@/components/Skeleton";
 
 const LEAVE_TYPE_COLORS: Record<string, string> = {
   "Annual Leave":    "#4F3CC9",
@@ -65,7 +66,8 @@ export default function LeavePage() {
   const [empName, setEmpName] = useState("");
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
+    let reqUnsub: (() => void) | null = null;
+    const authUnsub = onAuthStateChanged(auth, async (user) => {
       if (!user) { setLoading(false); return; }
       try {
         // Resolve empId: users/{uid}.employeeId first, employees email lookup as fallback
@@ -81,22 +83,21 @@ export default function LeavePage() {
         if (!id) { setLoading(false); return; }
         setEmpId(id);
 
-        // Load employee name for leave submission payload
-        try {
-          const empSnap = await getDoc(doc(db, "employees", id));
-          if (empSnap.exists()) {
-            setEmpName((empSnap.data().name as string) ?? "");
-          }
-        } catch { /* ignore */ }
+        // Load employee name + leave policies in parallel
+        const [empSnap, policySnap] = await Promise.all([
+          getDoc(doc(db, "employees", id)).catch(() => null),
+          getDoc(doc(db, "settings", "leavePolicies")).catch(() => null),
+        ]);
 
-        // Load leave policies from HR settings
-        const policySnap = await getDoc(doc(db, "settings", "leavePolicies"));
-        if (policySnap.exists() && policySnap.data().list) {
+        if (empSnap?.exists()) {
+          setEmpName((empSnap.data().name as string) ?? "");
+        }
+
+        if (policySnap?.exists() && policySnap.data().list) {
           const policies = policySnap.data().list as LeavePolicy[];
           setLeavePolicies(policies);
           setLeaveForm((f) => ({ ...f, leaveType: policies[0]?.type ?? "" }));
         } else {
-          // Fallback defaults
           const defaults: LeavePolicy[] = [
             { id: "1", type: "Annual Leave",    days: 18, carryForward: false, resetMonth: "January" },
             { id: "2", type: "Sick Leave",      days: 10, carryForward: false, resetMonth: "January" },
@@ -107,29 +108,33 @@ export default function LeavePage() {
           setLeaveForm((f) => ({ ...f, leaveType: defaults[0].type }));
         }
 
-        // Load leave requests for this employee
-        const snap = await getDocs(query(collection(db, "leaveRequests"), where("empId", "==", id)));
-        const loaded = snap.docs.map((d) => {
-          const r = d.data() as Record<string, unknown>;
-          return {
-            id: d.id,
-            empId: String(r.empId ?? ""),
-            leaveType: String(r.leaveType ?? r.type ?? ""),
-            startDate: String(r.startDate ?? r.from ?? ""),
-            endDate: String(r.endDate ?? r.to ?? ""),
-            days: Number(r.days ?? 0),
-            reason: String(r.reason ?? ""),
-            status: String(r.status ?? "Pending"),
-            appliedOn: String(r.appliedOn ?? ""),
-          } as LeaveRequest;
-        });
-        // Extra guard: only show requests that truly belong to this employee
-        loaded.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn));
-        setRequests(loaded.filter(r => r.empId === id));
-      } catch { /* ignore */ }
-      setLoading(false);
+        // Real-time listener for this employee's leave requests — updates instantly when HR approves/rejects
+        reqUnsub = onSnapshot(
+          query(collection(db, "leaveRequests"), where("empId", "==", id)),
+          (snap) => {
+            const loaded = snap.docs.map((d) => {
+              const r = d.data() as Record<string, unknown>;
+              return {
+                id: d.id,
+                empId: String(r.empId ?? ""),
+                leaveType: String(r.leaveType ?? r.type ?? ""),
+                startDate: String(r.startDate ?? r.from ?? ""),
+                endDate: String(r.endDate ?? r.to ?? ""),
+                days: Number(r.days ?? 0),
+                reason: String(r.reason ?? ""),
+                status: String(r.status ?? "Pending"),
+                appliedOn: String(r.appliedOn ?? ""),
+              } as LeaveRequest;
+            });
+            loaded.sort((a, b) => b.appliedOn.localeCompare(a.appliedOn));
+            setRequests(loaded);
+            setLoading(false);
+          },
+          () => setLoading(false)
+        );
+      } catch { setLoading(false); }
     });
-    return () => unsub();
+    return () => { authUnsub(); reqUnsub?.(); };
   }, []);
 
   // Compute remaining days per leave type from approved requests
@@ -234,8 +239,8 @@ export default function LeavePage() {
           <h2 className="font-semibold text-gray-900">Leave Requests</h2>
         </div>
         {loading ? (
-          <div className="flex items-center justify-center py-14 gap-2 text-gray-400">
-            <Loader2 size={18} className="animate-spin" /> Loading…
+          <div>
+            {Array.from({ length: 4 }, (_, i) => <SkeletonListRow key={i} withAvatar={false} />)}
           </div>
         ) : requests.length === 0 ? (
           <div className="py-14 text-center text-gray-400 text-sm">No leave requests yet.</div>

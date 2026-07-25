@@ -37,7 +37,7 @@ export default function PayslipPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Payslip</h1>
-          <p className="text-gray-500 text-sm mt-1">View and download your monthly salary slips.</p>
+          <p className="text-gray-500 text-sm mt-1">View and download your monthly payslips.</p>
         </div>
         <div className="relative">
           <select
@@ -71,7 +71,7 @@ export default function PayslipPage() {
               </div>
             </div>
             <div className="text-right">
-              <p className="text-purple-200 text-xs uppercase tracking-wider">Salary Slip</p>
+              <p className="text-purple-200 text-xs uppercase tracking-wider">Payslip</p>
               <p className="font-bold text-xl">{selectedMonth.toUpperCase()}</p>
             </div>
           </div>
@@ -114,7 +114,7 @@ export default function PayslipPage() {
                   </div>
                 ))}
                 <div className="border-t border-gray-100 pt-3 flex justify-between items-center">
-                  <span className="text-sm font-bold text-gray-900">Gross Salary</span>
+                  <span className="text-sm font-bold text-gray-900">Gross Payroll</span>
                   <span className="text-sm font-bold text-gray-900">₹{gross.toLocaleString("en-IN")}</span>
                 </div>
               </div>
@@ -145,7 +145,7 @@ export default function PayslipPage() {
                 <CreditCard size={18} className="text-white" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">Net Salary Credited</p>
+                <p className="text-xs text-gray-500">Net Payroll Credited</p>
                 <p className="text-xs text-gray-400">{selectedMonth}</p>
               </div>
             </div>

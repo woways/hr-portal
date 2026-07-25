@@ -2,6 +2,9 @@
 import { useState, useEffect, useRef } from "react";
 import { Pencil, FileText, Plus, X, Search, Loader2 } from "lucide-react";
 import { getCompensation, addCompensation, updateCompensation, getIncentives, addIncentive, getEmployees, markHRNotifRead } from "@/lib/firebaseService";
+import { cachedEmployees, cachedCompensation, cachedIncentives, invalidateCompensation, invalidateIncentives } from "@/lib/cachedService";
+import { SkeletonTableRows } from "@/components/Skeleton";
+import { EmptyState } from "@/components/EmptyState";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -64,26 +67,29 @@ export default function CompensationPage() {
   // Auto-mark all unread payroll notifications as read when HR opens this page
   useEffect(() => { const t = setTimeout(() => markHRNotifRead("payroll"), 10000); return () => clearTimeout(t); }, []);
 
-  // Load employees + existing compensation & incentives from Firestore
+  // Load employees + existing compensation & incentives (cache-first)
   useEffect(() => {
-    async function load() {
-      try {
-        const [empDocs, comps, incs] = await Promise.all([
-          getEmployees(),
-          getCompensation(),
-          getIncentives(),
-        ]);
-        const emps = empDocs
-          .map((d) => { const r = d as Record<string, unknown>; return { id: (r.employeeId ?? r.id) as string, name: (r.name as string) ?? "", designation: (r.designation as string) ?? "", department: (r.department as string) ?? "", status: (r.status as string) ?? "Active" }; })
-          .filter((e) => e.status !== "Exited");
-        setEmpList(emps.map((e) => ({ id: e.id, name: e.name, empId: e.id, designation: e.designation, department: e.department })));
-        setRecords(comps.map((c) => c as unknown as CompRecord));
-        setIncentives(incs.map((i) => i as unknown as Incentive));
-      } catch { /* ignore */ } finally {
-        setLoading(false);
-      }
-    }
-    load();
+    let resolved = 0;
+    const bump = () => { resolved += 1; if (resolved >= 3) setLoading(false); };
+    const seen = { emps: false, comps: false, incs: false };
+
+    cachedEmployees((empDocs) => {
+      const emps = empDocs
+        .map((d) => { const r = d as Record<string, unknown>; return { id: (r.employeeId ?? r.id) as string, name: (r.name as string) ?? "", designation: (r.designation as string) ?? "", department: (r.department as string) ?? "", status: (r.status as string) ?? "Active" }; })
+        .filter((e) => e.status !== "Exited");
+      setEmpList(emps.map((e) => ({ id: e.id, name: e.name, empId: e.id, designation: e.designation, department: e.department })));
+      if (!seen.emps) { seen.emps = true; bump(); }
+    }).catch(() => { if (!seen.emps) { seen.emps = true; bump(); } });
+
+    cachedCompensation((comps) => {
+      setRecords(comps.map((c) => c as unknown as CompRecord));
+      if (!seen.comps) { seen.comps = true; bump(); }
+    }).catch(() => { if (!seen.comps) { seen.comps = true; bump(); } });
+
+    cachedIncentives((incs) => {
+      setIncentives(incs.map((i) => i as unknown as Incentive));
+      if (!seen.incs) { seen.incs = true; bump(); }
+    }).catch(() => { if (!seen.incs) { seen.incs = true; bump(); } });
   }, []);
 
   function showMsg(msg: string) { setToast(msg); setTimeout(() => setToast(null), 3000); }
@@ -103,10 +109,11 @@ export default function CompensationPage() {
       };
       const docId = await addCompensation(data);
       setRecords((p) => [...p, { id: docId, ...data, paymentStatus: data.paymentStatus as PaymentStatus }]);
+      invalidateCompensation();
       setShowAdd(false);
       setAddForm({ ...blankAdd, empId: "" });
       setEmpSearch("");
-      showMsg("Compensation record saved.");
+      showMsg("Payroll record saved.");
     } catch { showMsg("Failed to save. Please try again."); }
     finally { setSaving(false); }
   }
@@ -118,6 +125,7 @@ export default function CompensationPage() {
       const data = { month: incForm.month, employee: incForm.employee, type: incForm.type, amount: incForm.amount, basis: incForm.basis, status: "Pending" as const };
       const docId = await addIncentive(data);
       setIncentives((p) => [...p, { id: docId, ...data }]);
+      invalidateIncentives();
       setShowIncentive(false);
       setIncForm({ ...blankInc });
       showMsg("Incentive added and pending approval.");
@@ -143,8 +151,9 @@ export default function CompensationPage() {
     try {
       await updateCompensation(editRecord.id, editForm as unknown as Record<string, unknown>);
       setRecords(records.map((r) => r.id === editRecord.id ? { ...r, ...editForm } : r));
+      invalidateCompensation();
       setEditRecord(null); setEditForm(null);
-      showMsg("Compensation updated.");
+      showMsg("Payroll updated.");
     } catch { showMsg("Failed to update."); }
     finally { setSaving(false); }
   }
@@ -178,7 +187,7 @@ export default function CompensationPage() {
     const workDays = mIdx >= 0 && yr ? new Date(parseInt(yr), mIdx + 1, 0).getDate() : 30;
 
     const earningRows: string[] = [
-      `<tr><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Basic Salary</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.salary.toLocaleString("en-IN")}</td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Total Deductions</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.deductions > 0 ? emp.deductions.toLocaleString("en-IN") : ""}</td></tr>`,
+      `<tr><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Basic Payroll</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.salary.toLocaleString("en-IN")}</td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Total Deductions</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.deductions > 0 ? emp.deductions.toLocaleString("en-IN") : ""}</td></tr>`,
     ];
     if (emp.incentive > 0) earningRows.push(`<tr><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Incentive</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.incentive.toLocaleString("en-IN")}</td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td></tr>`);
     if (emp.bonus > 0) earningRows.push(`<tr><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;">Bonus</td><td style="border:1px solid #e8eaf3;padding:7px 12px;text-align:right;font-size:11px;">${emp.bonus.toLocaleString("en-IN")}</td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td><td style="border:1px solid #e8eaf3;padding:7px 12px;font-size:11px;"></td></tr>`);
@@ -194,7 +203,7 @@ export default function CompensationPage() {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Salary Slip - ${emp.month}</title>
+  <title>Payslip - ${emp.month}</title>
   <style>
     @page{size:A4;margin:12mm 14mm}
     *{box-sizing:border-box;margin:0;padding:0}
@@ -246,7 +255,7 @@ export default function CompensationPage() {
       </div>
     </div>
     <div class="title-bar">
-      <span class="lbl">Salary Slip</span>
+      <span class="lbl">Payslip</span>
       <span class="mo">${emp.month}</span>
     </div>
     <div class="emp-grid">
@@ -278,7 +287,7 @@ export default function CompensationPage() {
             <td class="amt" style="text-align:right">₹ ${emp.deductions.toLocaleString("en-IN")}</td>
           </tr>
           <tr class="subtotal">
-            <td>Net Pay (A – B)</td>
+            <td>Net Payroll (A – B)</td>
             <td class="amt" style="text-align:right">₹ ${totalPay.toLocaleString("en-IN")}</td>
             <td colspan="2"></td>
           </tr>
@@ -297,7 +306,7 @@ export default function CompensationPage() {
       <div class="sig-block"><div class="sig-line"></div><div class="sig-label">HR / Authorised Signatory</div></div>
     </div>
     <div class="footer">
-      <p>&#9432;&nbsp; This is a computer-generated salary slip and does not require a physical signature. &nbsp;|&nbsp; Woways Technologies Pvt. Ltd. &nbsp;|&nbsp; ${emp.month}</p>
+      <p>&#9432;&nbsp; This is a computer-generated payslip and does not require a physical signature. &nbsp;|&nbsp; Woways Technologies Pvt. Ltd. &nbsp;|&nbsp; ${emp.month}</p>
     </div>
   </div>
 </body>
@@ -305,12 +314,17 @@ export default function CompensationPage() {
   }
 
   function downloadSlip(emp: CompRecord) {
+    // Block payslip generation until the payroll run is finalized (Paid).
+    if (emp.paymentStatus !== "Paid") {
+      alert(`Payslip not available yet — payroll for ${emp.name} (${emp.month}) is still ${emp.paymentStatus}. Finalize the payment before generating the payslip.`);
+      return;
+    }
     const html = buildSlipHtml(emp);
     const blob = new Blob([html], { type: "application/octet-stream" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
-    a.download = `Salary_Slip_${emp.name.replace(/\s+/g, "_")}_${emp.month.replace(/\s+/g, "_")}.html`;
+    a.download = `Payslip_${emp.name.replace(/\s+/g, "_")}_${emp.month.replace(/\s+/g, "_")}.html`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -348,7 +362,7 @@ export default function CompensationPage() {
             <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
             <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
           </div>
-          <p className="text-xs text-gray-400">Salary Slip for {emp.month}</p>
+          <p className="text-xs text-gray-400">Payslip for {emp.month}</p>
         </div>
         <div className="px-8 py-5 bg-gray-50/60 border-b border-gray-100">
           <div className="grid grid-cols-2 gap-x-10 gap-y-4">
@@ -377,7 +391,7 @@ export default function CompensationPage() {
           <div className="px-7 py-5">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Earnings</p>
             <div className="space-y-2.5 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">Basic Salary</span><span className="font-semibold text-gray-900">{fmt(emp.salary)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Basic Payroll</span><span className="font-semibold text-gray-900">{fmt(emp.salary)}</span></div>
               {emp.incentive > 0 && <div className="flex justify-between"><span className="text-gray-500">Incentive</span><span className="font-semibold text-gray-900">{fmt(emp.incentive)}</span></div>}
               {emp.bonus > 0 && <div className="flex justify-between"><span className="text-gray-500">Bonus</span><span className="font-semibold text-gray-900">{fmt(emp.bonus)}</span></div>}
               <div className="flex justify-between font-bold border-t border-gray-100 pt-2.5 mt-1 text-gray-900">
@@ -399,20 +413,22 @@ export default function CompensationPage() {
         </div>
         <div className="px-8 py-5 bg-[#EDE9FF]/50 border-t border-[#4F3CC9]/10 flex items-center justify-between">
           <div>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Net Pay</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Net Payroll</p>
             <p className="text-2xl font-black text-[#4F3CC9]">{fmt(emp.netPay)}</p>
           </div>
           <button
             onClick={() => downloadSlip(emp)}
-            className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-[#3d2fa8] transition-colors shadow-sm">
-            <FileText size={14} /> Download Payslip
+            disabled={emp.paymentStatus !== "Paid"}
+            title={emp.paymentStatus !== "Paid" ? "Available once payroll is finalized (Paid)" : "Download payslip"}
+            className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-[#3d2fa8] transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#4F3CC9]">
+            <FileText size={14} /> {emp.paymentStatus !== "Paid" ? "Payslip Pending" : "Download Payslip"}
           </button>
         </div>
       </div>
     );
   }
 
-  const TABS = ["Department-wise Payroll", "Compensation Records", "Incentive Management", "Payrolls"] as const;
+  const TABS = ["Department-wise Payroll", "Payroll Records", "Incentive Management", "Payslips"] as const;
   type Tab = typeof TABS[number];
   const [activeTab, setActiveTab] = useState<Tab>("Department-wise Payroll");
 
@@ -421,8 +437,8 @@ export default function CompensationPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Compensation</h1>
-          <p className="text-gray-500 text-sm mt-1">Manage payroll, incentives and compensation records</p>
+          <h1 className="text-2xl font-bold text-gray-900">Payroll</h1>
+          <p className="text-gray-500 text-sm mt-1">Manage payroll and incentives</p>
         </div>
       </div>
 
@@ -432,7 +448,7 @@ export default function CompensationPage() {
           { label: "Total Monthly Payroll", value: fmt(totalPayroll),   color: "bg-purple-50 border-purple-100", text: "text-purple-700" },
           { label: "Incentives Paid",        value: fmt(incentivesPaid), color: "bg-green-50 border-green-100",  text: "text-green-700"  },
           { label: "Pending Payments",       value: fmt(pendingPay),     color: "bg-yellow-50 border-yellow-100",text: "text-yellow-700" },
-          { label: "Avg Salary",             value: fmt(avgSalary),      color: "bg-blue-50 border-blue-100",    text: "text-blue-700"   },
+          { label: "Avg Payroll",             value: fmt(avgSalary),      color: "bg-blue-50 border-blue-100",    text: "text-blue-700"   },
           { label: "Top Dept (Payroll)",     value: topDept,              color: "bg-orange-50 border-orange-100",text: "text-orange-700" },
         ].map((c) => (
           <div key={c.label} className={`${c.color} border rounded-2xl p-5`}>
@@ -463,11 +479,11 @@ export default function CompensationPage() {
           ))}
         </div>
 
-        {/* ── Department-wise Payroll ── */}
+        {/* ── Department-wise Compensation ── */}
         {activeTab === "Department-wise Payroll" && (
           <div className="p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Department-wise Payroll</h2>
-            <p className="text-xs text-gray-400 mb-5">Total net pay grouped by department across all compensation records</p>
+            <p className="text-xs text-gray-400 mb-5">Total net pay grouped by department across all payroll records</p>
             {loading ? (
               <div className="flex items-center justify-center py-16">
                 <Loader2 size={24} className="animate-spin text-[#4F3CC9]" />
@@ -476,7 +492,7 @@ export default function CompensationPage() {
               <div className="flex flex-col items-center justify-center py-16 text-gray-400">
                 <svg className="w-12 h-12 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
                 <p className="text-sm font-medium">No payroll data yet</p>
-                <p className="text-xs mt-1">Add compensation records to see department breakdown</p>
+                <p className="text-xs mt-1">Add payroll records to see department breakdown</p>
               </div>
             ) : (
               <>
@@ -498,7 +514,7 @@ export default function CompensationPage() {
                       <tr className="text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
                         <th className="text-left pb-2 font-medium">Department</th>
                         <th className="text-right pb-2 font-medium">Employees</th>
-                        <th className="text-right pb-2 font-medium">Total Net Pay</th>
+                        <th className="text-right pb-2 font-medium">Total Net Payroll</th>
                         <th className="text-right pb-2 font-medium">Share</th>
                       </tr>
                     </thead>
@@ -539,12 +555,12 @@ export default function CompensationPage() {
         )}
 
         {/* ── Compensation Records ── */}
-        {activeTab === "Compensation Records" && (
+        {activeTab === "Payroll Records" && (
           <div>
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <h2 className="text-base font-semibold text-gray-900">Compensation Records</h2>
+              <h2 className="text-base font-semibold text-gray-900">Payroll Records</h2>
               <div className="flex gap-2">
-                <button onClick={() => downloadCSV("compensation.csv", records.map((r) => [r.name, r.empId, r.designation, r.empType, String(r.salary), String(r.incentive), String(r.bonus), String(r.deductions), String(r.netPay), r.paymentStatus, r.paymentDate]), ["Name","EmpID","Designation","Type","Salary","Incentive","Bonus","Deductions","NetPay","Status","PaymentDate"])} className="flex items-center gap-1.5 border border-gray-200 text-gray-600 rounded-xl px-3 py-2 text-sm font-medium hover:bg-gray-50 transition">
+                <button onClick={() => downloadCSV("payroll.csv", records.map((r) => [r.name, r.empId, r.designation, r.empType, String(r.salary), String(r.incentive), String(r.bonus), String(r.deductions), String(r.netPay), r.paymentStatus, r.paymentDate]), ["Name","EmpID","Designation","Type","Payroll","Incentive","Bonus","Deductions","NetPay","Status","PaymentDate"])} className="flex items-center gap-1.5 border border-gray-200 text-gray-600 rounded-xl px-3 py-2 text-sm font-medium hover:bg-gray-50 transition">
                   <FileText size={13} /> Download CSV
                 </button>
                 <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8]">
@@ -560,11 +576,11 @@ export default function CompensationPage() {
                     <th className="px-4 py-3 text-left">Emp ID</th>
                     <th className="px-4 py-3 text-left">Designation</th>
                     <th className="px-4 py-3 text-left">Type</th>
-                    <th className="px-4 py-3 text-right">Salary</th>
+                    <th className="px-4 py-3 text-right">Payroll</th>
                     <th className="px-4 py-3 text-right">Incentive</th>
                     <th className="px-4 py-3 text-right">Bonus</th>
                     <th className="px-4 py-3 text-right">Deductions</th>
-                    <th className="px-4 py-3 text-right">Net Pay</th>
+                    <th className="px-4 py-3 text-right">Net Payroll</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Actions</th>
                   </tr>
@@ -573,7 +589,7 @@ export default function CompensationPage() {
                   {loading ? (
                     <tr><td colSpan={11} className="px-4 py-10 text-center text-gray-400 text-sm"><Loader2 size={18} className="inline animate-spin mr-2" />Loading records…</td></tr>
                   ) : records.length === 0 ? (
-                    <tr><td colSpan={11} className="px-4 py-10 text-center text-gray-400 text-sm">No compensation records yet. Click &quot;Add&quot; to create one.</td></tr>
+                    <tr><td colSpan={11}><EmptyState title="No payroll records yet" subtitle="Click &quot;Add&quot; to create the first record." /></td></tr>
                   ) : records.map((r) => (
                     <tr key={r.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium">{r.name}</td>
@@ -643,7 +659,7 @@ export default function CompensationPage() {
         )}
 
         {/* ── Payrolls ── */}
-        {activeTab === "Payrolls" && (
+        {activeTab === "Payslips" && (
           <div>
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h2 className="text-base font-semibold text-gray-900">Payroll Records</h2>
@@ -664,11 +680,11 @@ export default function CompensationPage() {
                     <th className="px-4 py-3 text-left">Employee</th>
                     <th className="px-4 py-3 text-left">Emp ID</th>
                     <th className="px-4 py-3 text-left">Designation</th>
-                    <th className="px-4 py-3 text-right">Salary</th>
+                    <th className="px-4 py-3 text-right">Payroll</th>
                     <th className="px-4 py-3 text-right">Incentive</th>
                     <th className="px-4 py-3 text-right">Bonus</th>
                     <th className="px-4 py-3 text-right">Deductions</th>
-                    <th className="px-4 py-3 text-right">Net Pay</th>
+                    <th className="px-4 py-3 text-right">Net Payroll</th>
                     <th className="px-4 py-3 text-left">Payment Date</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Payslip</th>
@@ -676,14 +692,14 @@ export default function CompensationPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {loading ? (
-                    <tr><td colSpan={11} className="px-4 py-10 text-center text-gray-400 text-sm"><Loader2 size={18} className="inline animate-spin mr-2" />Loading…</td></tr>
+                    <SkeletonTableRows rows={6} cols={11} />
                   ) : records.filter((r) =>
                       !empIdSearch ||
                       r.name.toLowerCase().includes(empIdSearch.toLowerCase()) ||
                       r.empId.toLowerCase().includes(empIdSearch.toLowerCase())
                     ).length === 0 ? (
                     <tr><td colSpan={11} className="px-4 py-10 text-center text-gray-400 text-sm">
-                      {records.length === 0 ? "No payroll data yet. Add compensation records first." : "No results match your search."}
+                      {records.length === 0 ? "No payroll data yet. Add payroll records first." : "No results match your search."}
                     </td></tr>
                   ) : records
                       .filter((r) =>
@@ -729,7 +745,7 @@ export default function CompensationPage() {
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b">
               <div>
-                <h2 className="text-lg font-bold">Edit Compensation</h2>
+                <h2 className="text-lg font-bold">Edit Payroll</h2>
                 <p className="text-xs text-gray-400 mt-0.5">{editRecord.name} · {editRecord.empId}</p>
               </div>
               <button onClick={() => { setEditRecord(null); setEditForm(null); }}><X size={20} /></button>
@@ -746,7 +762,7 @@ export default function CompensationPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Salary (₹)</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Payroll (₹)</label>
                 <input type="number" value={editForm.salary} onChange={(e) => setEditForm({ ...editForm, salary: Number(e.target.value) })} className={inputCls} />
               </div>
               <div>
@@ -762,7 +778,7 @@ export default function CompensationPage() {
                 <input type="number" value={editForm.deductions} onChange={(e) => setEditForm({ ...editForm, deductions: Number(e.target.value) })} className={inputCls} />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Net Pay (₹)</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Net Payroll (₹)</label>
                 <input type="number" value={editForm.netPay} onChange={(e) => setEditForm({ ...editForm, netPay: Number(e.target.value) })} className={inputCls} />
               </div>
               <div>
@@ -820,7 +836,7 @@ export default function CompensationPage() {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { setShowAdd(false); setEmpSearch(""); }}>
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b">
-              <h2 className="text-lg font-bold">Add Compensation</h2>
+              <h2 className="text-lg font-bold">Add Payroll</h2>
               <button onClick={() => { setShowAdd(false); setEmpSearch(""); }}><X size={20} /></button>
             </div>
             <div className="p-6 grid grid-cols-2 gap-4">
@@ -880,7 +896,7 @@ export default function CompensationPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Salary (₹)</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Payroll (₹)</label>
                 <input type="number" value={addForm.salary || ""} onChange={(e) => setAddForm({ ...addForm, salary: Number(e.target.value) })} className={inputCls} />
               </div>
               <div>
@@ -917,7 +933,7 @@ export default function CompensationPage() {
             </div>
             <div className="px-6 pb-6">
               <button onClick={handleAddComp} disabled={saving} className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8] transition flex items-center justify-center gap-2 disabled:opacity-70">
-                {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : "Save Compensation"}
+                {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : "Save Payroll"}
               </button>
             </div>
           </div>

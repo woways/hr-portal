@@ -18,7 +18,7 @@ const navItems = [
   { label: "Profile",       href: "/employee/dashboard/profile",       icon: User,            notifType: null        },
   { label: "Calendar",      href: "/employee/dashboard/calendar",      icon: CalendarDays,    notifType: null        },
   { label: "Notifications", href: "/employee/dashboard/notifications", icon: Bell,            notifType: "_total"    },
-  { label: "Compensation",  href: "/employee/dashboard/compensation",  icon: IndianRupee,     notifType: "payroll"   },
+  { label: "Payroll",       href: "/employee/dashboard/compensation",  icon: IndianRupee,     notifType: "payroll"   },
   { label: "Help & Support",href: "/employee/dashboard/help",          icon: HelpCircle,      notifType: null        },
 ];
 
@@ -28,6 +28,8 @@ export default function EmployeeSidebar() {
   const [empDept,    setEmpDept]    = useState("");
   const [empRole,    setEmpRole]    = useState("");
   const [initials,   setInitials]   = useState("");
+  const [empPhoto,    setEmpPhoto]    = useState("");
+  const [photoError,  setPhotoError]  = useState("");
   const [notifEmpId, setNotifEmpId] = useState("");
   const [counts,     setCounts]     = useState<Record<string, number>>({});
 
@@ -51,10 +53,11 @@ export default function EmployeeSidebar() {
       try {
         const raw = sessionStorage.getItem(CACHE);
         if (raw) {
-          const cached = JSON.parse(raw) as { name: string; role: string; dept?: string; empId: string; notifId?: string; uid: string };
+          const cached = JSON.parse(raw) as { name: string; role: string; dept?: string; empId: string; notifId?: string; uid: string; photoURL?: string };
           if (cached.uid === user.uid) {
             applyName(cached.name, cached.dept ?? "", cached.role);
             setNotifEmpId(cached.notifId || cached.empId);
+            if (cached.photoURL) setEmpPhoto(cached.photoURL);
           }
         }
       } catch { /* ignore */ }
@@ -74,12 +77,11 @@ export default function EmployeeSidebar() {
         // Step 1: resolve empId from users/{uid} (primary) or email lookup (fallback)
         const uSnap = await getDoc(doc(db, "users", user.uid));
         const ud = uSnap.exists() ? (uSnap.data() as Record<string, unknown>) : null;
-        let empId = ud ? String(ud.employeeId ?? "") : "";
+        const eidFromUsers = ud ? String(ud.employeeId ?? "") : "";
 
-        if (!empId && emailEmpId) {
-          // users/{uid} missing or has no employeeId — use email-lookup result
-          empId = emailEmpId;
-        }
+        // Prefer emailEmpId (actual Firestore doc ID from email query).
+        // Fall back to eidFromUsers (users/{uid}.employeeId).
+        let empId = emailEmpId || eidFromUsers;
 
         if (!empId) {
           if (ud) {
@@ -108,8 +110,11 @@ export default function EmployeeSidebar() {
           const name = String(ed.name ?? "");
           const dept = String(ed.department ?? "");
           const role = String(ed.role ?? "");
+          const photo = String(ed.photoURL ?? ed.profilePhoto ?? "");
+          setEmpPhoto(photo);
+          setPhotoError("");
           applyName(name, dept, role);
-          sessionStorage.setItem(CACHE, JSON.stringify({ name, role, dept, empId, notifId, uid: user.uid }));
+          sessionStorage.setItem(CACHE, JSON.stringify({ name, role, dept, empId, notifId, uid: user.uid, photoURL: photo }));
         }, () => {
           const fallback = user.displayName ?? user.email?.split("@")[0] ?? "Employee";
           applyName(fallback, "Employee");
@@ -121,6 +126,18 @@ export default function EmployeeSidebar() {
     });
 
     return () => { authUnsub(); if (empUnsub) empUnsub(); };
+  }, []);
+
+  // Listen for same-session photo upload events
+  useEffect(() => {
+    if (auth.currentUser?.photoURL) setEmpPhoto(auth.currentUser.photoURL);
+    function onPhotoEvent(e: Event) {
+      const url = (e as CustomEvent<{ url: string }>).detail?.url ?? "";
+      setEmpPhoto(url);
+      setPhotoError("");
+    }
+    window.addEventListener("employeePhotoUpdated", onPhotoEvent);
+    return () => window.removeEventListener("employeePhotoUpdated", onPhotoEvent);
   }, []);
 
   useEffect(() => {
@@ -146,19 +163,20 @@ export default function EmployeeSidebar() {
 
   async function handleLogout() {
     try { await signOut(auth); } catch { /* ignore */ }
-    window.location.href = "/";
+    // Replace (not push) so the dashboard can't be returned to via Back.
+    window.location.replace("/");
   }
 
   return (
-    <aside className="w-[260px] min-h-screen bg-white dark:bg-[#13132a] border-r border-gray-100 dark:border-[#252545] flex flex-col py-6 px-4">
+    <aside className="w-[260px] min-h-screen bg-[#0B1929] flex flex-col pt-8 pb-6 px-4">
       {/* Logo */}
-      <div className="mb-6 flex items-center justify-center">
-        <span className="text-4xl font-black text-[#0B1929] dark:text-white tracking-tight leading-none">WO</span>
-        <span className="text-4xl font-black text-[#14B8A6] tracking-tight leading-none">WAYS</span>
+      <div className="mb-6 mt-1 flex items-center justify-center">
+        <span className="text-4xl font-black text-white leading-none" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px" }}>WO</span>
+        <span className="text-4xl font-black leading-none" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px", color: "#00C2A8" }}>WAYS</span>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 space-y-1">
+      <nav className="flex-1 space-y-1 mt-2">
         {navItems.map(({ label, href, icon: Icon, notifType }) => {
           const isActive =
             pathname === href ||
@@ -170,8 +188,8 @@ export default function EmployeeSidebar() {
               href={href}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all ${
                 isActive
-                  ? "bg-[#EDE9FF] dark:bg-[#2a2050] text-[#4F3CC9] dark:text-purple-300 font-semibold"
-                  : "text-[#4A4A6A] dark:text-gray-400 hover:bg-[#F5F3FF] dark:hover:bg-[#1e1e38]"
+                  ? "bg-white/15 text-white font-semibold"
+                  : "text-gray-400 hover:bg-white/10 hover:text-white"
               }`}
             >
               <Icon size={18} aria-hidden="true" />
@@ -187,21 +205,33 @@ export default function EmployeeSidebar() {
       </nav>
 
       {/* Employee info at bottom */}
-      <div className="border-t border-gray-100 dark:border-[#252545] pt-4 mt-4">
+      <div className="border-t border-white/10 pt-4 mt-4">
         <div className="flex items-center gap-3 px-3 py-2">
-          <div className="w-8 h-8 rounded-full bg-[#EDE9FF] dark:bg-[#2a2050] flex items-center justify-center text-[#4F3CC9] dark:text-purple-300 font-semibold text-xs shrink-0">
-            {initials || <User size={14} />}
+          <div className="w-8 h-8 rounded-full overflow-hidden shrink-0">
+            {empPhoto && !photoError ? (
+              <img
+                key={empPhoto}
+                src={empPhoto}
+                alt={empName}
+                className="w-full h-full object-cover"
+                onError={() => setPhotoError(empPhoto)}
+              />
+            ) : (
+              <div className="w-full h-full bg-white/20 flex items-center justify-center text-white font-semibold text-xs">
+                {initials || <User size={14} />}
+              </div>
+            )}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+            <p className="text-sm font-semibold text-white truncate">
               {empName || "Loading…"}
             </p>
-            {empRole && <p className="text-xs text-gray-600 dark:text-gray-300 truncate">{empRole}</p>}
-            {empDept && <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{empDept}</p>}
-            {!empRole && !empDept && <p className="text-xs text-gray-600 dark:text-gray-300">Employee</p>}
+            {empDept && <p className="text-xs text-gray-400 truncate">{empDept}</p>}
+            {empRole && <p className="text-xs text-gray-400 truncate">{empRole}</p>}
+            {!empRole && !empDept && <p className="text-xs text-gray-400">Employee</p>}
           </div>
           <button onClick={handleLogout} title="Logout" className="shrink-0">
-            <LogOut size={16} className="text-gray-400 hover:text-red-500 transition-colors" />
+            <LogOut size={16} className="text-gray-400 hover:text-red-400 transition-colors" />
           </button>
         </div>
       </div>

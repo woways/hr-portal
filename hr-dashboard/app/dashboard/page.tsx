@@ -4,7 +4,8 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line,
 } from "recharts";
-import { getEmployees, getAttendance, getLeaveRequests, getGoals } from "@/lib/firebaseService";
+import { cachedEmployees, cachedAttendance, cachedLeaveRequests, cachedGoals } from "@/lib/cachedService";
+import { SkeletonHeader, SkeletonStatGrid, SkeletonChart, SkeletonCard } from "@/components/Skeleton";
 
 interface Employee {
   id: string; status: string; employmentType: string; department: string;
@@ -36,37 +37,63 @@ export default function DashboardPage() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentTime, setCurrentTime] = useState("");
+  const [currentDate, setCurrentDate] = useState("");
 
   useEffect(() => {
-    Promise.all([
-      getEmployees().catch(() => []),
-      getAttendance(TODAY).catch(() => []),
-      getLeaveRequests().catch(() => []),
-      getGoals().catch(() => []),
-    ]).then(([emps, att, leaves, gs]) => {
-      setEmployees((emps as Record<string, unknown>[]).map(d => ({
+    const tick = () => {
+      const now = new Date();
+      setCurrentTime(now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setCurrentDate(now.toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" }));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    // Cache-first: each cached* returns any cached value immediately (isFresh=false)
+    // then re-fetches in the background (isFresh=true). Loading only clears once
+    // every collection has resolved at least once (from cache or network).
+    let resolved = 0;
+    const total = 4;
+    const bump = () => { resolved += 1; if (resolved >= total) setLoading(false); };
+    const seen = { emp: false, att: false, lve: false, gls: false };
+
+    cachedEmployees((emps) => {
+      setEmployees(emps.map(d => ({
         id: (d.employeeId ?? d.id) as string,
         status: (d.status as string) ?? "Active",
         employmentType: (d.employmentType as string) ?? "Full-Time",
         department: (d.department as string) ?? "",
         doj: (d.doj as string) ?? "",
       })));
-      setAttRecords((att as Record<string, unknown>[]).map(d => ({
+      if (!seen.emp) { seen.emp = true; bump(); }
+    }).catch(() => { if (!seen.emp) { seen.emp = true; bump(); } });
+
+    cachedAttendance((att) => {
+      setAttRecords(att.map(d => ({
         empId: (d.empId as string) ?? "",
         status: (d.status as string) ?? "",
         late: Boolean(d.late),
         workingHours: (d.workingHours as string) ?? "",
       })));
-      setLeaveRequests((leaves as Record<string, unknown>[]).map(d => ({
+      if (!seen.att) { seen.att = true; bump(); }
+    }, TODAY).catch(() => { if (!seen.att) { seen.att = true; bump(); } });
+
+    cachedLeaveRequests((leaves) => {
+      setLeaveRequests(leaves.map(d => ({
         status: (d.status as string) ?? "",
         leaveType: (d.leaveType as string) ?? "",
         startDate: (d.startDate as string) ?? "",
       })));
-      setGoals((gs as Record<string, unknown>[]).map(d => ({
-        status: (d.status as string) ?? "",
-      })));
-      setLoading(false);
-    });
+      if (!seen.lve) { seen.lve = true; bump(); }
+    }).catch(() => { if (!seen.lve) { seen.lve = true; bump(); } });
+
+    cachedGoals((gs) => {
+      setGoals(gs.map(d => ({ status: (d.status as string) ?? "" })));
+      if (!seen.gls) { seen.gls = true; bump(); }
+    }).catch(() => { if (!seen.gls) { seen.gls = true; bump(); } });
   }, []);
 
   // ── Employee overview ─────────────────────────────────────────────────────
@@ -162,17 +189,45 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400 text-sm">Loading dashboard...</div>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <SkeletonHeader />
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-3 w-40">
+            <div className="h-3 w-16 bg-gray-200/70 animate-pulse rounded mb-2 ml-auto" />
+            <div className="h-6 w-24 bg-gray-200/70 animate-pulse rounded ml-auto" />
+          </div>
+        </div>
+        <div>
+          <div className="h-3 w-40 bg-gray-200/70 animate-pulse rounded mb-3" />
+          <SkeletonStatGrid count={6} />
+        </div>
+        <div>
+          <div className="h-3 w-40 bg-gray-200/70 animate-pulse rounded mb-3" />
+          <SkeletonStatGrid count={5} cols="grid-cols-2 md:grid-cols-5" />
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <SkeletonChart />
+          <SkeletonChart />
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <SkeletonCard lines={4} />
+          <SkeletonCard lines={4} />
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 text-sm mt-1">Welcome back! Here&apos;s your HR overview for today.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Welcome back, HR Admin!</h1>
+          <p className="text-gray-500 text-sm mt-1">{currentDate}</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-3 text-right">
+          <p className="text-xs text-gray-400 mb-0.5">Current Time</p>
+          <p className="text-2xl font-bold text-[#0B1929] tabular-nums">{currentTime}</p>
+        </div>
       </div>
 
       {/* Employee Overview */}

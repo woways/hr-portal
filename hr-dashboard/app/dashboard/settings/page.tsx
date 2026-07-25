@@ -7,7 +7,7 @@ import { auth, firebaseConfig } from "@/lib/firebase";
 import { sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { initializeApp, getApps, deleteApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, collection, getDocs, query, where } from "firebase/firestore";
+import { doc, setDoc, collection, getDocs, query, where, getFirestore } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 type SettingsTab = "Company" | "Departments" | "Leave Policies" | "Work Timings" | "Attendance Rules" | "Holiday Calendar" | "Password Reset" | "HR Accounts";
@@ -36,7 +36,7 @@ const DEFAULT_HOLIDAYS = [
 ];
 
 const DEFAULT_WORK_TIMINGS = { start: "09:00", end: "18:00", lateThreshold: "09:30", weekOff: "Saturday & Sunday" };
-const DEFAULT_ATT_RULES    = { minHours: "8", halfDayThreshold: "4", gracePeriod: "15", autoAbsentAfter: "30", autoMarkEnabled: false, lateNotif: true, absentNotif: true };
+const DEFAULT_ATT_RULES    = { minHours: "7", halfDayThreshold: "4", gracePeriod: "15", autoAbsentAfter: "30", autoMarkEnabled: false, lateNotif: true, absentNotif: true };
 const DEFAULT_COMPANY      = { name: "", industry: "", website: "", address: "" };
 
 const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -123,20 +123,27 @@ export default function SettingsPage() {
     try {
       secondaryApp = getApps().find(a => a.name === secondaryAppName) ?? initializeApp(firebaseConfig, secondaryAppName);
       const secondaryAuth = getAuth(secondaryApp);
+      const secondaryDb = getFirestore(secondaryApp);
       const cred = await createUserWithEmailAndPassword(secondaryAuth, newHrEmail.trim(), newHrPassword);
-      await secondaryAuth.signOut();
-      await setDoc(doc(db, "users", cred.user.uid), {
+      // Write the profile via the SECONDARY app's Firestore while the new user is
+      // still signed in there — the users/{uid} rule requires request.auth.uid == uid,
+      // so this must run as the new user (not the admin), before signing out.
+      await setDoc(doc(secondaryDb, "users", cred.user.uid), {
         uid: cred.user.uid, email: newHrEmail.trim(), name: newHrName.trim(),
         role: "hr_admin", createdAt: new Date().toISOString(),
       });
+      await secondaryAuth.signOut();
       setHrSuccess(`HR account created for ${newHrEmail.trim()}`);
       setNewHrEmail(""); setNewHrName(""); setNewHrPassword("");
       loadHrAccounts();
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? "";
+      const msg = (err as { message?: string }).message ?? "";
       if (code === "auth/email-already-in-use") setHrError("This email is already registered.");
       else if (code === "auth/invalid-email")   setHrError("Invalid email address.");
-      else setHrError("Failed to create account. Please try again.");
+      else if (code === "auth/weak-password")    setHrError("Password is too weak — use at least 6 characters.");
+      else if (code === "permission-denied")     setHrError("Permission denied writing the account profile. Please sign out and sign in again.");
+      else setHrError(`Failed to create account: ${msg || code || "unexpected error"}`);
     } finally {
       setHrCreating(false);
       if (secondaryApp) { try { await deleteApp(secondaryApp); } catch { /* ignore */ } }

@@ -7,6 +7,7 @@ import {
   DollarSign, TrendingUp, Clock, CheckCircle, Download,
   Eye, EyeOff, CreditCard, X, Info, Loader2, FileText,
 } from "lucide-react";
+import { SkeletonTableRows } from "@/components/Skeleton";
 
 interface PaySlip {
   id: string;
@@ -153,11 +154,13 @@ export default function CompensationPage() {
           const incentive = Number(raw.incentive ?? 0);
           const bonus     = Number(raw.bonus     ?? 0);
           const deduction = Number(raw.deductions ?? 0);
-          const netPay    = Number(raw.netPay    ?? 0);
           const gross     = salary + incentive + bonus;
+          // Net always derived from the same figures shown, so it reconciles with
+          // the payslip: Net = Gross (salary + incentive + bonus) − Deductions.
+          const netPay    = gross - deduction;
 
           const earnings: { label: string; amount: number }[] = [
-            { label: "Basic Salary", amount: salary },
+            { label: "Basic Payroll", amount: salary },
           ];
           if (incentive > 0) earnings.push({ label: "Incentive", amount: incentive });
           if (bonus > 0)     earnings.push({ label: "Bonus",     amount: bonus     });
@@ -248,7 +251,7 @@ export default function CompensationPage() {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Salary Slip - ${slip.period}</title>
+  <title>Payslip - ${slip.period}</title>
   <style>
     @page{size:A4;margin:12mm 14mm}
     *{box-sizing:border-box;margin:0;padding:0}
@@ -301,9 +304,10 @@ export default function CompensationPage() {
       </div>
     </div>
     <div class="title-bar">
-      <span class="lbl">Salary Slip</span>
+      <span class="lbl">Payslip</span>
       <span class="mo">${slip.period}</span>
     </div>
+    ${slip.paymentStatus?.toLowerCase() !== "paid" ? `<div style="background:#FEF3C7;color:#92400E;text-align:center;padding:9px 12px;font-size:12px;font-weight:800;letter-spacing:0.4px;border-bottom:2px solid #F59E0B;">PROVISIONAL — PAYMENT ${String(slip.paymentStatus).toUpperCase()} · NOT AN OFFICIAL PAYSLIP UNTIL PAYMENT IS FINALIZED</div>` : ""}
     <div class="emp-grid">
       <div class="emp-cell"><div class="lbl">Employee Name</div><div class="val">${emp?.name ?? "—"}</div></div>
       <div class="emp-cell"><div class="lbl">Employee Code</div><div class="val">${emp?.empId ?? "—"}</div></div>
@@ -333,7 +337,7 @@ export default function CompensationPage() {
             <td class="amt">₹ ${slip.deduction.toLocaleString("en-IN")}</td>
           </tr>
           <tr class="subtotal">
-            <td>Net Pay (A – B)</td>
+            <td>Net Payroll (A – B)</td>
             <td class="amt">₹ ${slip.net.toLocaleString("en-IN")}</td>
             <td colspan="2"></td>
           </tr>
@@ -352,7 +356,7 @@ export default function CompensationPage() {
       <div class="sig-block"><div class="sig-line"></div><div class="sig-label">HR / Authorised Signatory</div></div>
     </div>
     <div class="footer">
-      <p>&#9432;&nbsp; This is a computer-generated salary slip and does not require a physical signature. &nbsp;|&nbsp; Woways Technologies Pvt. Ltd. &nbsp;|&nbsp; ${slip.period}</p>
+      <p>&#9432;&nbsp; This is a computer-generated payslip and does not require a physical signature. &nbsp;|&nbsp; Woways Technologies Pvt. Ltd. &nbsp;|&nbsp; ${slip.period}</p>
     </div>
   </div>
 </body>
@@ -360,12 +364,17 @@ export default function CompensationPage() {
   }
 
   function downloadSlip(slip: PaySlip) {
+    // Block payslip download until the payroll run is finalized (Paid).
+    if (slip.paymentStatus?.toLowerCase() !== "paid") {
+      alert(`Payslip not available yet — payroll for ${slip.period} is still ${slip.paymentStatus}. You can download it once payment is finalized.`);
+      return;
+    }
     const html = buildSlipHtml(slip);
     const blob = new Blob([html], { type: "application/octet-stream" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
-    a.download = `Salary_Slip_${slip.period.replace(/\s+/g, "_")}.html`;
+    a.download = `Payslip_${slip.period.replace(/\s+/g, "_")}.html`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -375,20 +384,20 @@ export default function CompensationPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Compensation</h1>
-        <p className="text-gray-500 text-sm mt-1">View your salary, payslips and payment details.</p>
+        <h1 className="text-2xl font-bold text-gray-900">Payroll</h1>
+        <p className="text-gray-500 text-sm mt-1">View your payroll, payslips and payment details.</p>
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-5 gap-4">
         {[
           {
-            label: "Current Salary", icon: <DollarSign size={15} className="text-[#4F3CC9]" />, bg: "bg-purple-50",
+            label: "Current Payroll", icon: <DollarSign size={15} className="text-[#4F3CC9]" />, bg: "bg-purple-50",
             value: loading ? "—" : currentSalary > 0 ? fmt(currentSalary) : "—",
             sub: "Per month",
           },
           {
-            label: "Last Net Pay", icon: <CheckCircle size={15} className="text-green-600" />, bg: "bg-green-50",
+            label: "Last Net Payroll", icon: <CheckCircle size={15} className="text-green-600" />, bg: "bg-green-50",
             value: loading ? "—" : lastNetPay > 0 ? (masked ? "••••••" : fmt(lastNetPay)) : "—",
             sub: latestSlip?.period ?? "No payslips yet",
           },
@@ -403,7 +412,7 @@ export default function CompensationPage() {
             sub: pendingPay > 0 ? "Awaiting payment" : "No pending",
           },
           {
-            label: "Total Pay (YTD)", icon: <CreditCard size={15} className="text-blue-500" />, bg: "bg-blue-50",
+            label: "Total Payroll (YTD)", icon: <CreditCard size={15} className="text-blue-500" />, bg: "bg-blue-50",
             value: loading ? "—" : ytdNetPay > 0 ? (masked ? "••••••" : fmt(ytdNetPay)) : "—",
             sub: fyRange,
           },
@@ -443,7 +452,7 @@ export default function CompensationPage() {
               {masked ? "Show" : "Hide"}
             </button>
             <button
-              onClick={() => slips.forEach(downloadSlip)}
+              onClick={() => slips.filter(s => s.paymentStatus?.toLowerCase() === "paid").forEach(downloadSlip)}
               disabled={slips.length === 0}
               className="flex items-center gap-1.5 bg-[#4F3CC9] text-white rounded-xl px-4 py-1.5 text-sm font-medium hover:bg-[#3d2fa3] disabled:opacity-50"
             >
@@ -465,18 +474,14 @@ export default function CompensationPage() {
               <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">
                 <span className="flex items-center gap-1 leading-tight">Off-Cycle<br/>Non-Taxable <Info size={11} className="text-gray-400 shrink-0" /></span>
               </th>
-              <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Total Pay</th>
+              <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Total Payroll</th>
               <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Status</th>
               <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {loading ? (
-              <tr>
-                <td colSpan={11} className="px-4 py-12 text-center text-gray-400 text-sm">
-                  <Loader2 size={20} className="inline animate-spin mr-2" />Loading payslips…
-                </td>
-              </tr>
+              <SkeletonTableRows rows={5} cols={11} />
             ) : slips.length === 0 ? (
               <tr>
                 <td colSpan={11} className="px-4 py-12 text-center text-gray-400 text-sm">
@@ -550,7 +555,7 @@ export default function CompensationPage() {
                       <span className="text-3xl font-black text-[#0B1929] tracking-tight">WO</span>
                       <span className="text-3xl font-black text-[#14B8A6] tracking-tight">WAYS</span>
                     </div>
-                    <p className="text-xs text-gray-400">Salary Slip for {slip.period}</p>
+                    <p className="text-xs text-gray-400">Payslip for {slip.period}</p>
                   </div>
                   <div className="px-8 py-5 bg-gray-50/60 border-b border-gray-100">
                     <div className="grid grid-cols-2 gap-x-10 gap-y-4">
@@ -610,7 +615,7 @@ export default function CompensationPage() {
                   </div>
                   <div className="px-8 py-5 bg-[#EDE9FF]/50 border-t border-[#4F3CC9]/10 flex items-center justify-between">
                     <div>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Net Pay</p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Net Payroll</p>
                       <p className="text-2xl font-black text-[#4F3CC9]">{fmt(slip.totalPay)}</p>
                     </div>
                     <button

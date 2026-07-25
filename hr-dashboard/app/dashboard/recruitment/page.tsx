@@ -1,10 +1,13 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { Plus, Search, X, Star, Download, Eye, Pencil, Upload, FileText, Loader2 } from "lucide-react";
-import { collection, addDoc, getDocs } from "firebase/firestore";
+import { collection, addDoc, getDocs, doc, setDoc } from "firebase/firestore";
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { DEPARTMENTS } from "@/lib/constants";
+import { useDepartments } from "@/lib/useDepartments";
+import { EmptyState } from "@/components/EmptyState";
+import { readCache, writeCache } from "@/lib/cache";
 
 type CandidateStatus = "Applied" | "Screening" | "Shortlisted" | "Interview Scheduled" | "Interview Completed" | "Selected" | "Rejected" | "Offer Released" | "Joined";
 type InterviewStatus = "Scheduled" | "Completed" | "Cancelled" | "Rescheduled";
@@ -52,6 +55,8 @@ interface Offer {
   offerDate: string;
   status: OfferStatus;
   offerLetterUploaded: boolean;
+  offerLetterUrl?: string;
+  offerLetterName?: string;
 }
 
 interface OnboardingDoc { name: string; submitted: boolean; }
@@ -59,6 +64,7 @@ interface Onboarding {
   id: string;
   name: string;
   email: string;
+  mobile: string;
   role: string;
   empId: string;
   doj: string;
@@ -120,10 +126,52 @@ const statusPipeline: CandidateStatus[] = ["Applied","Screening","Shortlisted","
 function candidateInitials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
 }
+
+// Today's date as a local YYYY-MM-DD string — used to block past interview dates.
+function todayLocalStr(): string {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().split("T")[0];
+}
+
+// Accepts http(s) URLs (with or without protocol). Empty is allowed (optional field).
+function isValidMeetingLink(link: string): boolean {
+  const v = link.trim();
+  if (!v) return true;
+  return /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/\S*)?$/i.test(v);
+}
+
+// Strict email format (NEW-003): local part and every domain label must start/end
+// alphanumeric, the domain needs at least one dot, and the TLD must be 2+ letters.
+const EMAIL_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+
+// Verify an email's domain can actually receive mail (has a real MX record), so
+// structurally-valid but bogus domains like "hh@hghgh.com" are rejected. Fails
+// OPEN on any network/DNS error so a transient issue never blocks a real candidate.
+async function emailDomainAcceptsMail(email: string): Promise<boolean> {
+  const domain = email.split("@")[1]?.trim().toLowerCase();
+  if (!domain) return false;
+  try {
+    const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=MX`);
+    if (!res.ok) return true; // network hiccup → don't block
+    const data = await res.json();
+    if (data.Status !== 0) return false; // NXDOMAIN etc. → domain doesn't exist
+    const answers: { data?: string }[] = Array.isArray(data.Answer) ? data.Answer : [];
+    if (answers.length === 0) return false; // no MX at all
+    // Reject "null MX" (RFC 7505): an MX target of "." means the domain refuses mail.
+    return answers.some((a) => {
+      const target = String(a.data ?? "").trim().split(/\s+/).pop() ?? "";
+      return target !== "." && target !== "";
+    });
+  } catch {
+    return true; // DNS unreachable → don't block
+  }
+}
 const blankInterview = { candidateName: "", round: "Round 1", date: "", time: "", interviewer: "", meetingLink: "", feedback: "", rating: 0, finalDecision: "" as const, reminderSent: false };
-const blankOffer = { candidateName: "", role: "", salary: "", type: "Full-Time", offerDate: "", status: "Pending" as OfferStatus, offerLetterUploaded: false };
+const blankOffer = { candidateName: "", role: "", salary: "", type: "Full-Time", offerDate: "", status: "Pending" as OfferStatus, offerLetterUploaded: false, offerLetterUrl: "", offerLetterName: "" };
 
 export default function RecruitmentPage() {
+  const departments = useDepartments();
   const [activeTab, setActiveTab] = useState<"candidates" | "interviews" | "offers" | "onboarding">("candidates");
   const [candidates, setCandidates] = useState<Candidate[]>(initCandidates);
   const [interviews, setInterviews] = useState<Interview[]>(initInterviews);
@@ -137,7 +185,7 @@ export default function RecruitmentPage() {
   const [showAddOffer, setShowAddOffer] = useState(false);
   const [showDocModal, setShowDocModal] = useState<Onboarding | null>(null);
   const [showAddOnboarding, setShowAddOnboarding] = useState(false);
-  const [onboardingForm, setOnboardingForm] = useState({ name: "", email: "", role: "", empId: "", doj: "", department: DEPARTMENTS[0], manager: "", workMode: "Remote" });
+  const [onboardingForm, setOnboardingForm] = useState({ name: "", email: "", mobile: "", role: "", empId: "", doj: "", department: DEPARTMENTS[0], manager: "", workMode: "Remote" });
   const [onboardingToast, setOnboardingToast] = useState("");
   const [viewCandidate, setViewCandidate] = useState<Candidate | null>(null);
   const [editCandidate, setEditCandidate] = useState<Candidate | null>(null);
@@ -150,6 +198,11 @@ export default function RecruitmentPage() {
   const [addingCandidate, setAddingCandidate] = useState(false);
   const [candidateToast, setCandidateToast] = useState<string | null>(null);
   const resumeInputRef = useRef<HTMLInputElement>(null);
+  // Offer-letter upload (OFFER-002): file input + which offer row is uploading.
+  const offerLetterInputRef = useRef<HTMLInputElement>(null);
+  const pendingOfferIdRef = useRef<string | null>(null);
+  const [offerLetterUploadingId, setOfferLetterUploadingId] = useState<string | null>(null);
+  const [offerModalLetterUploading, setOfferModalLetterUploading] = useState(false);
 
   function showCandidateToast(msg: string) { setCandidateToast(msg); setTimeout(() => setCandidateToast(null), 3500); }
   const [rescheduleInterview, setRescheduleInterview] = useState<Interview | null>(null);
@@ -157,15 +210,44 @@ export default function RecruitmentPage() {
   const [notePanel, setNotePanel] = useState<Candidate | null>(null);
   const [newNote, setNewNote] = useState("");
 
-  // Load candidates from Firestore on mount
+  // Load candidates: session cache first for instant render, then refresh
   useEffect(() => {
+    const CACHE = "hr_candidates_v1";
+    const cached = readCache<Candidate[]>(CACHE);
+    if (cached && cached.length) setCandidates(cached);
     getDocs(collection(db, "candidates")).then((snap) => {
-      if (!snap.empty) {
-        const loaded = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Candidate));
-        setCandidates(loaded);
-      }
+      const loaded = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Candidate));
+      setCandidates(loaded);
+      writeCache(CACHE, loaded);
     }).catch(() => {});
   }, []);
+
+  // Load Interview / Offer / Onboarding records from Firestore so data entered
+  // in these three sub-modules survives a page refresh (NEW-002). The seed
+  // arrays act only as placeholders until real records exist in Firestore.
+  useEffect(() => {
+    getDocs(collection(db, "interviews")).then((snap) => {
+      if (!snap.empty) setInterviews(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Interview)));
+    }).catch(() => {});
+    getDocs(collection(db, "offers")).then((snap) => {
+      if (snap.empty) return;
+      // Skip legacy/junk offers with no recipient or terms (OFFER-001) so meaningless
+      // rows created before validation existed never render as real offers.
+      const loaded = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as Offer))
+        .filter((o) => o.candidateName?.trim() && o.role?.trim() && o.salary?.trim());
+      setOffers(loaded);
+    }).catch(() => {});
+    getDocs(collection(db, "onboarding")).then((snap) => {
+      if (!snap.empty) setOnboarding(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Onboarding)));
+    }).catch(() => {});
+  }, []);
+
+  // Persist helpers (merge writes keyed by the record id). Fire-and-forget:
+  // the UI updates optimistically; a failed write is silently retried on next edit.
+  const saveInterview = (id: string, data: Partial<Interview>) => { setDoc(doc(db, "interviews", id), data, { merge: true }).catch(() => {}); };
+  const saveOffer = (id: string, data: Partial<Offer>) => { setDoc(doc(db, "offers", id), data, { merge: true }).catch(() => {}); };
+  const saveOnboarding = (id: string, data: Partial<Onboarding>) => { setDoc(doc(db, "onboarding", id), data, { merge: true }).catch(() => {}); };
 
   const tabs = [
     { id: "candidates", label: "Candidate Database" },
@@ -182,6 +264,27 @@ export default function RecruitmentPage() {
 
   async function handleAddCandidate() {
     if (!candidateForm.name.trim()) { showCandidateToast("Candidate name is required."); return; }
+    const email = candidateForm.email.trim();
+    if (!email || !EMAIL_RE.test(email)) {
+      showCandidateToast("Please enter a valid email address.");
+      return;
+    }
+    if (!(await emailDomainAcceptsMail(email))) {
+      showCandidateToast("That email domain doesn't accept mail — please check the address.");
+      return;
+    }
+    const mobileDigits = candidateForm.mobile.replace(/\D/g, "");
+    if (mobileDigits.length !== 10 || /^[0-5]/.test(mobileDigits)) {
+      showCandidateToast("Please enter a valid 10-digit phone number starting with 6, 7, 8 or 9.");
+      return;
+    }
+    if (!candidateForm.role.trim()) { showCandidateToast("Role applied is required."); return; }
+    if (!candidateForm.department.trim()) { showCandidateToast("Department is required."); return; }
+    const linkedin = candidateForm.linkedin.trim();
+    if (linkedin && !/^(https?:\/\/)?([\w-]+\.)*linkedin\.com\/.+/i.test(linkedin)) {
+      showCandidateToast("LinkedIn must be a valid URL (e.g. https://linkedin.com/in/username).");
+      return;
+    }
     setAddingCandidate(true);
     try {
       let resumeUrl = "";
@@ -195,8 +298,14 @@ export default function RecruitmentPage() {
         for (const f of resumeFiles) {
           const path = `resumes/${Date.now()}_${f.name.replace(/\s+/g, "_")}`;
           const sRef = storageRef(storage, path);
+          // Store with an "attachment" disposition so the Download link saves the
+          // file to disk (instead of opening it) even when bucket CORS isn't set.
+          const metadata = {
+            contentType: f.type || "application/octet-stream",
+            contentDisposition: `attachment; filename="${f.name.replace(/[\r\n"]/g, "")}"`,
+          };
           await new Promise<void>((resolve, reject) => {
-            const task = uploadBytesResumable(sRef, f);
+            const task = uploadBytesResumable(sRef, f, metadata);
             task.on("state_changed", undefined, reject, () => resolve());
           });
           const url = await getDownloadURL(sRef);
@@ -234,77 +343,220 @@ export default function RecruitmentPage() {
     }
   }
 
-  function handleEditCandidateSave() {
+  // Force a real file download. The HTML `download` attribute is ignored for
+  // cross-origin URLs (Firebase Storage), so fetch the file as a blob and save
+  // it; fall back to opening in a new tab if the fetch is blocked.
+  async function downloadResume(url: string, name?: string) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("fetch failed");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = name || "resume";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch {
+      // No CORS: link straight to the file. Resumes are stored with an
+      // "attachment" content-disposition, so the browser downloads it.
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name || "";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  }
+
+  // Preview a resume inline. Tries an in-browser blob view (needs CORS); if that
+  // fails, falls back to Google's document viewer (works without CORS).
+  async function viewResume(url: string) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("fetch failed");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch {
+      window.open(`https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=false`, "_blank", "noopener");
+    }
+  }
+
+  async function handleEditCandidateSave() {
     if (!editCandidateForm) return;
-    setCandidates(candidates.map((c) => c.id === editCandidateForm.id ? editCandidateForm : c));
+    // Re-validate on edit so a candidate can't be saved with an invalid email/mobile.
+    if (!editCandidateForm.name.trim()) { showCandidateToast("Candidate name is required."); return; }
+    if (!EMAIL_RE.test(editCandidateForm.email.trim())) { showCandidateToast("Please enter a valid email address."); return; }
+    if (!(await emailDomainAcceptsMail(editCandidateForm.email.trim()))) { showCandidateToast("That email domain doesn't accept mail — please check the address."); return; }
+    const mobileDigits = editCandidateForm.mobile.replace(/\D/g, "");
+    if (mobileDigits.length !== 10 || /^[0-5]/.test(mobileDigits)) { showCandidateToast("Please enter a valid 10-digit phone number starting with 6, 7, 8 or 9."); return; }
+    const saved = editCandidateForm;
+    const { id, ...rest } = saved;
+    // Optimistic UI update
+    setCandidates(candidates.map((c) => c.id === id ? saved : c));
     setEditCandidate(null);
     setEditCandidateForm(null);
+    // Persist to Firestore so the change survives navigating away and back.
+    try {
+      await setDoc(doc(db, "candidates", id), { ...rest, updatedAt: new Date().toISOString() }, { merge: true });
+    } catch {
+      showCandidateToast("Failed to save changes. Please try again.");
+    }
   }
 
   function handleAddInterview() {
-    const newId = `INT00${interviews.length + 1}`;
-    setInterviews([...interviews, { id: newId, status: "Scheduled", ...interviewForm }]);
+    // Require the core fields needed to actually run the interview (NEW-001).
+    if (!interviewForm.candidateName.trim()) { showCandidateToast("Please enter the candidate name."); return; }
+    if (!interviewForm.round?.trim()) { showCandidateToast("Please select the interview round."); return; }
+    if (!interviewForm.date) { showCandidateToast("Please select an interview date."); return; }
+    if (interviewForm.date < todayLocalStr()) { showCandidateToast("Interview date cannot be in the past."); return; }
+    if (!interviewForm.time) { showCandidateToast("Please select an interview time."); return; }
+    if (!interviewForm.interviewer.trim()) { showCandidateToast("Please assign an interviewer."); return; }
+    if (!interviewForm.meetingLink.trim()) { showCandidateToast("Please provide a meeting link or location for the interview."); return; }
+    if (!isValidMeetingLink(interviewForm.meetingLink)) { showCandidateToast("Please enter a valid meeting link URL (e.g. https://meet.google.com/...)."); return; }
+    const newId = `INT${Date.now()}`;
+    const newInterview: Interview = { id: newId, status: "Scheduled", ...interviewForm };
+    setInterviews([...interviews, newInterview]);
+    saveInterview(newId, newInterview);
     setInterviewForm({ ...blankInterview });
     setShowAddInterview(false);
   }
 
   function handleEditInterviewSave() {
     if (!editInterview) return;
+    if (editInterview.date && editInterview.date < todayLocalStr()) { showCandidateToast("Interview date cannot be in the past."); return; }
+    if (!isValidMeetingLink(editInterview.meetingLink)) { showCandidateToast("Please enter a valid meeting link URL (e.g. https://meet.google.com/...)."); return; }
     setInterviews(interviews.map((i) => i.id === editInterview.id ? editInterview : i));
+    saveInterview(editInterview.id, editInterview);
     setEditInterview(null);
   }
 
   function setRating(id: string, rating: number) {
     setInterviews(interviews.map((i) => i.id === id ? { ...i, rating } : i));
+    saveInterview(id, { rating });
   }
 
   function sendReminder(id: string, name: string) {
     setInterviews(interviews.map((i) => i.id === id ? { ...i, reminderSent: true } : i));
+    saveInterview(id, { reminderSent: true });
     setReminderToast(`Reminder sent to ${name}`);
     setTimeout(() => setReminderToast(""), 3000);
   }
 
   function setFinalDecision(id: string, decision: "Select" | "Reject") {
     setInterviews(interviews.map((i) => i.id === id ? { ...i, finalDecision: decision, status: "Completed" } : i));
+    saveInterview(id, { finalDecision: decision, status: "Completed" });
   }
 
   function updateOfferStatus(id: string, status: OfferStatus) {
     setOffers(offers.map((o) => o.id === id ? { ...o, status } : o));
+    saveOffer(id, { status });
   }
 
-  function markOfferLetterUploaded(id: string) {
-    setOffers(offers.map((o) => o.id === id ? { ...o, offerLetterUploaded: true } : o));
+  // Upload an offer-letter file to Storage and return its download URL + name.
+  async function uploadOfferLetter(file: File): Promise<{ url: string; name: string }> {
+    const path = `offerLetters/${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
+    const sRef = storageRef(storage, path);
+    const metadata = {
+      contentType: file.type || "application/octet-stream",
+      contentDisposition: `attachment; filename="${file.name.replace(/[\r\n"]/g, "")}"`,
+    };
+    await new Promise<void>((resolve, reject) => {
+      const task = uploadBytesResumable(sRef, file, metadata);
+      task.on("state_changed", undefined, reject, () => resolve());
+    });
+    const url = await getDownloadURL(sRef);
+    return { url, name: file.name };
+  }
+
+  // Open the file picker for a specific offer row (OFFER-002).
+  function pickOfferLetter(offerId: string) {
+    pendingOfferIdRef.current = offerId;
+    offerLetterInputRef.current?.click();
+  }
+
+  // Handle the chosen offer-letter file: upload it, then persist the URL on the offer.
+  async function handleOfferLetterSelected(file: File) {
+    const offerId = pendingOfferIdRef.current;
+    pendingOfferIdRef.current = null;
+    if (!offerId) return;
+    setOfferLetterUploadingId(offerId);
+    try {
+      const { url, name } = await uploadOfferLetter(file);
+      setOffers((prev) => prev.map((o) => o.id === offerId ? { ...o, offerLetterUploaded: true, offerLetterUrl: url, offerLetterName: name } : o));
+      saveOffer(offerId, { offerLetterUploaded: true, offerLetterUrl: url, offerLetterName: name });
+    } catch {
+      showCandidateToast("Failed to upload the offer letter. Please try again.");
+    } finally {
+      setOfferLetterUploadingId(null);
+    }
+  }
+
+  // Download a previously-uploaded offer letter (reuses the blob-download helper).
+  function downloadOfferLetter(o: Offer) {
+    if (!o.offerLetterUrl) { showCandidateToast("No offer letter file is available to download."); return; }
+    downloadResume(o.offerLetterUrl, o.offerLetterName || `${o.candidateName}-offer-letter`);
   }
 
   function handleAddOffer() {
-    const newId = `OFF00${offers.length + 1}`;
-    setOffers([...offers, { id: newId, ...offerForm }]);
+    // Require a real recipient and terms — a blank offer is meaningless (OFFER-001).
+    if (!offerForm.candidateName.trim()) { showCandidateToast("Please enter the candidate name."); return; }
+    if (!offerForm.role.trim()) { showCandidateToast("Please enter the role for this offer."); return; }
+    const salaryDigits = offerForm.salary.replace(/[^\d.]/g, "");
+    if (!offerForm.salary.trim() || !(parseFloat(salaryDigits) > 0)) { showCandidateToast("Please enter a valid payroll/stipend amount."); return; }
+    if (!offerForm.offerDate) { showCandidateToast("Please select an offer date."); return; }
+    const newId = `OFF${Date.now()}`;
+    const newOffer: Offer = { id: newId, ...offerForm };
+    setOffers([...offers, newOffer]);
+    saveOffer(newId, newOffer);
     setOfferForm({ ...blankOffer });
     setShowAddOffer(false);
   }
 
   function sendWelcomeEmail(id: string, name: string) {
     setOnboarding(onboarding.map((o) => o.id === id ? { ...o, welcomeEmailSent: true } : o));
+    saveOnboarding(id, { welcomeEmailSent: true });
     setOnboardingToast(`Welcome email sent to ${name}`);
     setTimeout(() => setOnboardingToast(""), 3000);
   }
 
   function toggleDoc(onboardingId: string, docName: string) {
+    const updatedDocs = onboarding.find((o) => o.id === onboardingId)?.docs.map((d) => d.name === docName ? { ...d, submitted: !d.submitted } : d);
     setOnboarding(onboarding.map((o) => o.id === onboardingId
       ? { ...o, docs: o.docs.map((d) => d.name === docName ? { ...d, submitted: !d.submitted } : d) }
       : o
     ));
+    if (updatedDocs) saveOnboarding(onboardingId, { docs: updatedDocs });
     setShowDocModal((prev) => prev ? { ...prev, docs: prev.docs.map((d) => d.name === docName ? { ...d, submitted: !d.submitted } : d) } : null);
   }
 
   function markEmployeeCreated(id: string) {
     setOnboarding(onboarding.map((o) => o.id === id ? { ...o, employeeCreated: true } : o));
+    saveOnboarding(id, { employeeCreated: true });
   }
 
-  function handleAddOnboarding() {
-    const newId = String(onboarding.length + 1);
-    setOnboarding([...onboarding, { id: newId, ...onboardingForm, docs: defaultDocs(), welcomeEmailSent: false, employeeCreated: false }]);
-    setOnboardingForm({ name: "", email: "", role: "", empId: "", doj: "", department: DEPARTMENTS[0], manager: "", workMode: "Remote" });
+  async function handleAddOnboarding() {
+    const show = (m: string) => { setOnboardingToast(m); setTimeout(() => setOnboardingToast(""), 3500); };
+    if (!onboardingForm.name.trim()) { show("Candidate name is required."); return; }
+    const email = onboardingForm.email.trim();
+    if (!email || !EMAIL_RE.test(email)) { show("A valid email address is required."); return; }
+    if (!(await emailDomainAcceptsMail(email))) { show("That email domain doesn't accept mail — please check the address."); return; }
+    const mobileDigits = onboardingForm.mobile.replace(/\D/g, "");
+    if (mobileDigits.length !== 10 || /^[0-5]/.test(mobileDigits)) { show("A valid 10-digit contact number (starting 6-9) is required."); return; }
+    if (!onboardingForm.role.trim()) { show("Role is required."); return; }
+    if (!onboardingForm.empId.trim()) { show("Employee ID is required."); return; }
+    if (!onboardingForm.doj) { show("Date of joining is required."); return; }
+    if (!onboardingForm.department.trim()) { show("Department is required."); return; }
+    const newId = `ONB${Date.now()}`;
+    const newOnboarding: Onboarding = { id: newId, ...onboardingForm, docs: defaultDocs(), welcomeEmailSent: false, employeeCreated: false };
+    setOnboarding([...onboarding, newOnboarding]);
+    saveOnboarding(newId, newOnboarding);
+    setOnboardingForm({ name: "", email: "", mobile: "", role: "", empId: "", doj: "", department: DEPARTMENTS[0], manager: "", workMode: "Remote" });
     setShowAddOnboarding(false);
   }
 
@@ -389,6 +641,9 @@ export default function RecruitmentPage() {
                       </td>
                     </tr>
                   ))}
+                  {filteredCandidates.length === 0 && (
+                    <tr><td colSpan={10}><EmptyState title="No candidates found" subtitle={candidates.length === 0 ? "Add your first candidate to get started." : "No candidates match the current search or filter."} /></td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -472,6 +727,9 @@ export default function RecruitmentPage() {
                       </td>
                     </tr>
                   ))}
+                  {interviews.length === 0 && (
+                    <tr><td colSpan={9}><EmptyState title="No interviews scheduled" subtitle="Schedule an interview to see it listed here." /></td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -482,6 +740,14 @@ export default function RecruitmentPage() {
       {/* Tab C: Offer Management */}
       {activeTab === "offers" && (
         <div className="space-y-4">
+          {/* Hidden input used by every offer row's Upload/Replace button (OFFER-002). */}
+          <input
+            ref={offerLetterInputRef}
+            type="file"
+            accept=".pdf,.doc,.docx"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleOfferLetterSelected(f); e.target.value = ""; }}
+          />
           {/* Summary cards */}
           <div className="grid grid-cols-4 gap-4">
             {[
@@ -509,7 +775,7 @@ export default function RecruitmentPage() {
                   <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
                     <th className="px-4 py-3 text-left">Candidate</th>
                     <th className="px-4 py-3 text-left">Role</th>
-                    <th className="px-4 py-3 text-left">Salary/Stipend</th>
+                    <th className="px-4 py-3 text-left">Payroll/Stipend</th>
                     <th className="px-4 py-3 text-left">Type</th>
                     <th className="px-4 py-3 text-left">Offer Date</th>
                     <th className="px-4 py-3 text-left">Offer Letter</th>
@@ -529,12 +795,17 @@ export default function RecruitmentPage() {
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-xs">{o.offerDate}</td>
                       <td className="px-4 py-3">
-                        {o.offerLetterUploaded ? (
-                          <button onClick={() => {}} className="flex items-center gap-1 text-xs text-[#4F3CC9] hover:underline font-medium">
-                            <Download size={12} /> Download
-                          </button>
+                        {offerLetterUploadingId === o.id ? (
+                          <span className="flex items-center gap-1 text-xs text-gray-500"><Loader2 size={12} className="animate-spin" /> Uploading…</span>
+                        ) : o.offerLetterUploaded && o.offerLetterUrl ? (
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => downloadOfferLetter(o)} className="flex items-center gap-1 text-xs text-[#4F3CC9] hover:underline font-medium">
+                              <Download size={12} /> Download
+                            </button>
+                            <button onClick={() => pickOfferLetter(o.id)} title="Replace offer letter" className="text-xs text-gray-400 hover:text-[#4F3CC9]">Replace</button>
+                          </div>
                         ) : (
-                          <button onClick={() => markOfferLetterUploaded(o.id)} className="flex items-center gap-1 text-xs text-gray-500 border border-dashed border-gray-300 px-2 py-0.5 rounded-lg hover:border-[#4F3CC9] hover:text-[#4F3CC9]">
+                          <button onClick={() => pickOfferLetter(o.id)} className="flex items-center gap-1 text-xs text-gray-500 border border-dashed border-gray-300 px-2 py-0.5 rounded-lg hover:border-[#4F3CC9] hover:text-[#4F3CC9]">
                             ↑ Upload
                           </button>
                         )}
@@ -560,6 +831,9 @@ export default function RecruitmentPage() {
                       </td>
                     </tr>
                   ))}
+                  {offers.length === 0 && (
+                    <tr><td colSpan={9}><EmptyState title="No offers released" subtitle="Release an offer to track its status here." /></td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -659,6 +933,9 @@ export default function RecruitmentPage() {
                       </tr>
                     );
                   })}
+                  {onboarding.length === 0 && (
+                    <tr><td colSpan={11}><EmptyState title="No onboarding in progress" subtitle="Start onboarding a candidate to see them here." /></td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -675,10 +952,12 @@ export default function RecruitmentPage() {
               <button onClick={() => setShowAddCandidate(false)}><X size={20} /></button>
             </div>
             <div className="p-6 grid grid-cols-2 gap-4">
-              {[["Candidate Name","name","text"],["Mobile","mobile","text"],["Email","email","email"],["Role Applied","role","text"],["College Name","college","text"],["LinkedIn URL","","text"]].map(([label, field]) => (
+              {[["Candidate Name *","name","text"],["Mobile *","mobile","text"],["Email *","email","email"],["Role Applied *","role","text"],["College Name","college","text"],["LinkedIn URL","linkedin","text"]].map(([label, field, type]) => (
                 <div key={label}>
                   <label className="text-xs font-medium text-gray-600 block mb-1">{label}</label>
                   <input
+                    type={type}
+                    placeholder={field === "linkedin" ? "https://linkedin.com/in/username" : ""}
                     value={field ? (candidateForm as Record<string, string>)[field] || "" : ""}
                     onChange={(e) => field && setCandidateForm({ ...candidateForm, [field]: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
@@ -686,9 +965,9 @@ export default function RecruitmentPage() {
                 </div>
               ))}
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Department *</label>
                 <select value={candidateForm.department} onChange={(e) => setCandidateForm({ ...candidateForm, department: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm">
-                  {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
+                  {departments.map((d) => <option key={d}>{d}</option>)}
                 </select>
               </div>
               <div>
@@ -699,15 +978,26 @@ export default function RecruitmentPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Source</label>
-                <select value={candidateForm.source} onChange={(e) => setCandidateForm({ ...candidateForm, source: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm">
-                  {["LinkedIn","Indeed","Referral","Direct","Campus"].map((s) => <option key={s}>{s}</option>)}
+                <select
+                  value={["LinkedIn","Indeed","Referral","Direct","Campus"].includes(candidateForm.source) ? candidateForm.source : "Other"}
+                  onChange={(e) => setCandidateForm({ ...candidateForm, source: e.target.value === "Other" ? "" : e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-[#4F3CC9]"
+                >
+                  {["LinkedIn","Indeed","Referral","Direct","Campus","Other"].map((s) => <option key={s}>{s}</option>)}
                 </select>
+                {!["LinkedIn","Indeed","Referral","Direct","Campus"].includes(candidateForm.source) && (
+                  <input
+                    value={candidateForm.source}
+                    onChange={(e) => setCandidateForm({ ...candidateForm, source: e.target.value })}
+                    placeholder="Enter source name"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-[#4F3CC9] mt-2"
+                    autoFocus
+                  />
+                )}
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Recruiter Assigned</label>
-                <select value={candidateForm.recruiter} onChange={(e) => setCandidateForm({ ...candidateForm, recruiter: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm">
-                  <option value="">—</option>
-                </select>
+                <input value={candidateForm.recruiter} onChange={(e) => setCandidateForm({ ...candidateForm, recruiter: e.target.value })} placeholder="Recruiter name" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-[#4F3CC9]" />
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-medium text-gray-600 block mb-1">
@@ -718,11 +1008,20 @@ export default function RecruitmentPage() {
                   ref={resumeInputRef}
                   type="file"
                   multiple
-                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                  accept=".pdf,.doc,.docx"
                   className="hidden"
                   onChange={(e) => {
-                    const newFiles = Array.from(e.target.files ?? []);
-                    if (newFiles.length > 0) setResumeFiles(prev => [...prev, ...newFiles]);
+                    const picked = Array.from(e.target.files ?? []);
+                    const allowedExt = ["pdf", "doc", "docx"];
+                    const valid: File[] = [];
+                    const rejected: string[] = [];
+                    for (const f of picked) {
+                      const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+                      if (allowedExt.includes(ext)) valid.push(f);
+                      else rejected.push(f.name);
+                    }
+                    if (rejected.length > 0) showCandidateToast(`Only PDF, DOC or DOCX files are allowed. Rejected: ${rejected.join(", ")}`);
+                    if (valid.length > 0) setResumeFiles(prev => [...prev, ...valid]);
                     if (resumeInputRef.current) resumeInputRef.current.value = "";
                   }}
                 />
@@ -743,7 +1042,7 @@ export default function RecruitmentPage() {
                 )}
                 <button onClick={() => resumeInputRef.current?.click()}
                   className="w-full border-2 border-dashed border-gray-200 rounded-xl p-4 text-center text-sm text-gray-400 hover:border-[#4F3CC9] hover:text-[#4F3CC9] transition-colors flex items-center justify-center gap-2">
-                  <Upload size={16} /> {resumeFiles.length > 0 ? "Add More Documents" : "Click to upload resume / documents (PDF, DOC, JPG)"}
+                  <Upload size={16} /> {resumeFiles.length > 0 ? "Add More Documents" : "Click to upload resume (PDF, DOC, DOCX)"}
                 </button>
               </div>
             </div>
@@ -773,7 +1072,7 @@ export default function RecruitmentPage() {
             </div>
             <div className="p-6 grid grid-cols-2 gap-4">
               <div className="col-span-2">
-                <label className="text-xs font-medium text-gray-600 block mb-1">Candidate Name</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Candidate Name *</label>
                 <input
                   value={interviewForm.candidateName}
                   onChange={(e) => setInterviewForm({ ...interviewForm, candidateName: e.target.value })}
@@ -782,7 +1081,7 @@ export default function RecruitmentPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Interview Round</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Interview Round *</label>
                 <select value={interviewForm.round} onChange={(e) => setInterviewForm({ ...interviewForm, round: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
                   {["Round 1","Round 2","HR Round","Final"].map((r) => <option key={r}>{r}</option>)}
                 </select>
@@ -798,19 +1097,19 @@ export default function RecruitmentPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Date</label>
-                <input type="date" value={interviewForm.date} onChange={(e) => setInterviewForm({ ...interviewForm, date: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none" />
+                <label className="text-xs font-medium text-gray-600 block mb-1">Date *</label>
+                <input type="date" min={todayLocalStr()} value={interviewForm.date} onChange={(e) => setInterviewForm({ ...interviewForm, date: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Time</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Time *</label>
                 <input type="time" value={interviewForm.time} onChange={(e) => setInterviewForm({ ...interviewForm, time: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Interviewer Name</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Interviewer Name *</label>
                 <input value={interviewForm.interviewer} onChange={(e) => setInterviewForm({ ...interviewForm, interviewer: e.target.value })} placeholder="Interviewer Name" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Meeting Link</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Meeting Link *</label>
                 <input value={interviewForm.meetingLink} onChange={(e) => setInterviewForm({ ...interviewForm, meetingLink: e.target.value })} placeholder="https://meet.google.com/..." className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
             </div>
@@ -836,7 +1135,7 @@ export default function RecruitmentPage() {
             <div className="p-6 grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">New Date</label>
-                <input type="date" value={rescheduleInterview.date} onChange={(e) => setRescheduleInterview({ ...rescheduleInterview, date: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
+                <input type="date" min={todayLocalStr()} value={rescheduleInterview.date} onChange={(e) => setRescheduleInterview({ ...rescheduleInterview, date: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">New Time</label>
@@ -849,7 +1148,7 @@ export default function RecruitmentPage() {
             </div>
             <div className="px-6 pb-6 flex gap-3">
               <button onClick={() => setRescheduleInterview(null)} className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50">Cancel</button>
-              <button onClick={() => { setInterviews(interviews.map((i) => i.id === rescheduleInterview.id ? rescheduleInterview : i)); setRescheduleInterview(null); }} className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8]">Confirm Reschedule</button>
+              <button onClick={() => { if (rescheduleInterview.date && rescheduleInterview.date < todayLocalStr()) { showCandidateToast("Interview date cannot be in the past."); return; } if (!isValidMeetingLink(rescheduleInterview.meetingLink)) { showCandidateToast("Please enter a valid meeting link URL (e.g. https://meet.google.com/...)."); return; } setInterviews(interviews.map((i) => i.id === rescheduleInterview.id ? rescheduleInterview : i)); setRescheduleInterview(null); }} className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8]">Confirm Reschedule</button>
             </div>
           </div>
         </div>
@@ -865,15 +1164,15 @@ export default function RecruitmentPage() {
             </div>
             <div className="p-6 grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Candidate Name</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Candidate Name *</label>
                 <input value={offerForm.candidateName} onChange={(e) => setOfferForm({ ...offerForm, candidateName: e.target.value })} placeholder="Enter candidate name" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Role</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Role *</label>
                 <input value={offerForm.role} onChange={(e) => setOfferForm({ ...offerForm, role: e.target.value })} placeholder="e.g. Backend Engineer" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Salary / Stipend (₹)</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Payroll / Stipend (₹) *</label>
                 <input value={offerForm.salary} onChange={(e) => setOfferForm({ ...offerForm, salary: e.target.value })} placeholder="e.g. ₹75,000/mo" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
@@ -883,7 +1182,7 @@ export default function RecruitmentPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Offer Date</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Offer Date *</label>
                 <input type="date" value={offerForm.offerDate} onChange={(e) => setOfferForm({ ...offerForm, offerDate: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none" />
               </div>
               <div>
@@ -894,12 +1193,35 @@ export default function RecruitmentPage() {
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-medium text-gray-600 block mb-1">Upload Offer Letter</label>
-                <div
-                  onClick={() => setOfferForm({ ...offerForm, offerLetterUploaded: true })}
-                  className={`border-2 border-dashed rounded-xl p-4 text-center text-sm cursor-pointer transition ${offerForm.offerLetterUploaded ? "border-green-400 bg-green-50 text-green-700" : "border-gray-200 text-gray-400 hover:border-[#4F3CC9]"}`}
+                <label
+                  className={`border-2 border-dashed rounded-xl p-4 text-center text-sm cursor-pointer transition block ${offerForm.offerLetterUploaded ? "border-green-400 bg-green-50 text-green-700" : "border-gray-200 text-gray-400 hover:border-[#4F3CC9]"}`}
                 >
-                  {offerForm.offerLetterUploaded ? "✓ Offer Letter Uploaded" : "Click to upload Offer Letter (PDF)"}
-                </div>
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx"
+                    className="hidden"
+                    disabled={offerModalLetterUploading}
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!f) return;
+                      setOfferModalLetterUploading(true);
+                      try {
+                        const { url, name } = await uploadOfferLetter(f);
+                        setOfferForm((prev) => ({ ...prev, offerLetterUploaded: true, offerLetterUrl: url, offerLetterName: name }));
+                      } catch {
+                        showCandidateToast("Failed to upload the offer letter. Please try again.");
+                      } finally {
+                        setOfferModalLetterUploading(false);
+                      }
+                    }}
+                  />
+                  {offerModalLetterUploading
+                    ? "Uploading…"
+                    : offerForm.offerLetterUploaded
+                      ? `✓ ${offerForm.offerLetterName || "Offer Letter Uploaded"}`
+                      : "Click to upload Offer Letter (PDF, DOC, DOCX)"}
+                </label>
               </div>
             </div>
             <div className="px-6 pb-6 flex gap-3">
@@ -945,7 +1267,7 @@ export default function RecruitmentPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Date</label>
-                <input type="date" value={editInterview.date} onChange={(e) => setEditInterview({ ...editInterview, date: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none" />
+                <input type="date" min={todayLocalStr()} value={editInterview.date} onChange={(e) => setEditInterview({ ...editInterview, date: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Time</label>
@@ -1060,6 +1382,10 @@ export default function RecruitmentPage() {
                 <input type="email" value={onboardingForm.email} onChange={(e) => setOnboardingForm({ ...onboardingForm, email: e.target.value })} placeholder="name@woways.in" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Contact Number *</label>
+                <input value={onboardingForm.mobile} onChange={(e) => setOnboardingForm({ ...onboardingForm, mobile: e.target.value })} placeholder="10-digit mobile number" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
+              </div>
+              <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Role / Designation *</label>
                 <input value={onboardingForm.role} onChange={(e) => setOnboardingForm({ ...onboardingForm, role: e.target.value })} placeholder="e.g. Software Engineer" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
@@ -1074,7 +1400,7 @@ export default function RecruitmentPage() {
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
                 <select value={onboardingForm.department} onChange={(e) => setOnboardingForm({ ...onboardingForm, department: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-                  {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
+                  {departments.map((d) => <option key={d}>{d}</option>)}
                 </select>
               </div>
               <div>
@@ -1188,15 +1514,21 @@ export default function RecruitmentPage() {
               {/* Resume */}
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Resume</p>
-                <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 rounded-xl">
-                  <div className="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center text-xs font-bold text-red-600">PDF</div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-800">{viewCandidate.name.replace(" ", "_")}_Resume.pdf</p>
-                    <p className="text-xs text-gray-400">Uploaded during application</p>
+                {viewCandidate.resumeUrl ? (
+                  <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 rounded-xl">
+                    <div className="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center text-xs font-bold text-red-600">
+                      {(viewCandidate.resumeName?.split(".").pop() || "PDF").slice(0, 4).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{viewCandidate.resumeName || "Resume"}</p>
+                      <p className="text-xs text-gray-400">Uploaded during application</p>
+                    </div>
+                    <button onClick={() => viewResume(viewCandidate.resumeUrl!)} className="flex items-center gap-1 text-xs text-[#4F3CC9] font-medium hover:underline"><Eye size={12} /> View</button>
+                    <button onClick={() => downloadResume(viewCandidate.resumeUrl!, viewCandidate.resumeName)} className="flex items-center gap-1 text-xs text-gray-500 hover:underline"><Download size={12} /> Download</button>
                   </div>
-                  <button className="flex items-center gap-1 text-xs text-[#4F3CC9] font-medium hover:underline"><Eye size={12} /> View</button>
-                  <button className="flex items-center gap-1 text-xs text-gray-500 hover:underline"><Download size={12} /> Download</button>
-                </div>
+                ) : (
+                  <div className="px-4 py-3 bg-gray-50 rounded-xl text-sm text-gray-400">No resume uploaded.</div>
+                )}
               </div>
 
               {/* Interview Feedback */}
@@ -1275,7 +1607,7 @@ export default function RecruitmentPage() {
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Department</label>
                 <select value={editCandidateForm.department} onChange={(e) => setEditCandidateForm({ ...editCandidateForm, department: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-                  {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
+                  {departments.map((d) => <option key={d}>{d}</option>)}
                 </select>
               </div>
               <div>
@@ -1294,15 +1626,25 @@ export default function RecruitmentPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Source of Hiring</label>
-                <select value={editCandidateForm.source} onChange={(e) => setEditCandidateForm({ ...editCandidateForm, source: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-                  {["LinkedIn","Indeed","Referral","Direct","Campus"].map((s) => <option key={s}>{s}</option>)}
+                <select
+                  value={["LinkedIn","Indeed","Referral","Direct","Campus"].includes(editCandidateForm.source) ? editCandidateForm.source : "Other"}
+                  onChange={(e) => setEditCandidateForm({ ...editCandidateForm, source: e.target.value === "Other" ? "" : e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-[#4F3CC9]"
+                >
+                  {["LinkedIn","Indeed","Referral","Direct","Campus","Other"].map((s) => <option key={s}>{s}</option>)}
                 </select>
+                {!["LinkedIn","Indeed","Referral","Direct","Campus"].includes(editCandidateForm.source) && (
+                  <input
+                    value={editCandidateForm.source}
+                    onChange={(e) => setEditCandidateForm({ ...editCandidateForm, source: e.target.value })}
+                    placeholder="Enter source name"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-[#4F3CC9] mt-2"
+                  />
+                )}
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Recruiter Assigned</label>
-                <select value={editCandidateForm.recruiter} onChange={(e) => setEditCandidateForm({ ...editCandidateForm, recruiter: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-                  <option value="">—</option>
-                </select>
+                <input value={editCandidateForm.recruiter} onChange={(e) => setEditCandidateForm({ ...editCandidateForm, recruiter: e.target.value })} placeholder="Recruiter name" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-[#4F3CC9]" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>

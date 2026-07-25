@@ -7,6 +7,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { markEmpNotifRead } from "@/lib/firebaseService";
+import { SkeletonHeader, SkeletonStatGrid, SkeletonCard } from "@/components/Skeleton";
 
 type GoalStatus = "In Progress" | "Completed" | "Not Started";
 type GoalCategory = "Daily" | "Weekly" | "Monthly";
@@ -207,8 +208,12 @@ export default function GoalsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 size={28} className="animate-spin text-[#4F3CC9]" />
+      <div className="space-y-6">
+        <SkeletonHeader />
+        <SkeletonStatGrid count={4} cols="grid-cols-2 md:grid-cols-4" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {Array.from({ length: 4 }, (_, i) => <SkeletonCard key={i} lines={3} />)}
+        </div>
       </div>
     );
   }

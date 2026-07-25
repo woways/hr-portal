@@ -4,7 +4,9 @@ import { onAuthStateChanged } from "firebase/auth";
 import { getDocs, collection, doc, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { IndianRupee, Users, TrendingDown, Banknote, Eye, Loader2 } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { PayrollRecord } from "@/lib/types";
+import { SkeletonStatGrid, SkeletonTableRows } from "@/components/Skeleton";
 
 function getInitials(name: string) {
   const parts = name.trim().split(" ");
@@ -50,7 +52,11 @@ export default function PayrollPage() {
           const deductions = Number(data.deductions ?? 0);
           const basic    = salary;
           const allowances = incentive + bonus;
-          const netSalary  = Number(data.netPay ?? data.net ?? (salary + incentive + bonus - deductions));
+          // Always derive net from the same components shown per row, so the
+          // dashboard aggregate reconciles exactly with the employee table sum.
+          // (A stored netPay could diverge from basic+allowances-deductions or be
+          // a non-numeric string → NaN, breaking the totals.)
+          const netSalary  = basic + allowances - deductions;
           return {
             id:            d.id,
             employeeId:    String(data.empId      ?? data.employeeId ?? ""),
@@ -97,8 +103,18 @@ export default function PayrollPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <Loader2 size={32} className="animate-spin text-[#4F3CC9]" />
+      <div className="space-y-6">
+        <SkeletonStatGrid count={4} cols="grid-cols-2 md:grid-cols-4" />
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-gray-100">
+            <div className="h-4 w-40 bg-gray-200/70 animate-pulse rounded" />
+          </div>
+          <table className="w-full">
+            <tbody>
+              <SkeletonTableRows rows={6} cols={6} />
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
@@ -188,7 +204,7 @@ export default function PayrollPage() {
                 bg: "bg-red-100",
               },
               {
-                label: "Net Salary Paid",
+                label: "Net Payroll Paid",
                 value: formatCurrency(netSalaryPaid),
                 icon: Banknote,
                 color: "text-blue-600",
@@ -213,21 +229,12 @@ export default function PayrollPage() {
           {/* Salary Table */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-gray-900">Employee Salary Table</h2>
+              <h2 className="text-base font-semibold text-gray-900">Employee Payroll Table</h2>
               <span className="text-xs text-gray-400">Period: {selectedMonth}</span>
             </div>
 
             {filtered.length === 0 ? (
-              <div className="p-16 flex flex-col items-center justify-center text-center">
-                <div className="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
-                  <Banknote size={26} className="text-gray-400" />
-                </div>
-                <p className="text-sm font-medium text-gray-700 mb-1">No records found</p>
-                <p className="text-xs text-gray-400 max-w-sm">
-                  No compensation records found for this month. Add compensation records in the
-                  Compensation module first.
-                </p>
-              </div>
+              <EmptyState icon={Banknote} title="No records found" subtitle="No payroll records for this month. Add payroll records in the Payroll module first." />
             ) : (
               <table className="w-full">
                 <thead>
@@ -251,7 +258,7 @@ export default function PayrollPage() {
                       Deductions
                     </th>
                     <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
-                      Net Salary
+                      Net Payroll
                     </th>
                     <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3">
                       Actions
@@ -291,9 +298,13 @@ export default function PayrollPage() {
                         {formatCurrency(rec.netSalary)}
                       </td>
                       <td className="px-5 py-3">
-                        <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#4F3CC9] bg-[#EDE9FF] rounded-lg hover:bg-[#DDD6FE] transition-colors">
+                        <button
+                          disabled={rec.paymentStatus !== "Paid"}
+                          title={rec.paymentStatus !== "Paid" ? "Payslip available once payroll is finalized (Paid)" : "View payslip"}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#4F3CC9] bg-[#EDE9FF] rounded-lg hover:bg-[#DDD6FE] transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#EDE9FF]"
+                        >
                           <Eye size={13} />
-                          View
+                          {rec.paymentStatus === "Paid" ? "View" : "Pending"}
                         </button>
                       </td>
                     </tr>

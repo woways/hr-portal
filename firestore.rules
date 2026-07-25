@@ -25,7 +25,8 @@ service cloud.firestore {
       // HR admin check: custom claim OR role field in users doc
       function isHRAdmin() {
         return request.auth.token.role == "hr_admin" ||
-               (userProfileExists() && userProfile().role == "hr_admin");
+               request.auth.token.role == "admin" ||
+               (userProfileExists() && (userProfile().role == "hr_admin" || userProfile().role == "admin"));
       }
       // Employee can only access leave requests where empId matches their own employeeId
       function isOwnLeave(empIdField) {
@@ -43,6 +44,17 @@ service cloud.firestore {
 
     // Candidates — any authenticated user (HR portal is authenticated-only)
     match /candidates/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Recruitment — Interview scheduling, Offer management, Onboarding records
+    match /interviews/{docId} {
+      allow read, write: if request.auth != null;
+    }
+    match /offers/{docId} {
+      allow read, write: if request.auth != null;
+    }
+    match /onboarding/{docId} {
       allow read, write: if request.auth != null;
     }
 
@@ -117,6 +129,11 @@ service cloud.firestore {
 
     // Settings — any authenticated user can read; any authenticated user can write
     match /settings/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Leave balances — HR-managed employee leave allocations/entitlements
+    match /leaveBalances/{docId} {
       allow read, write: if request.auth != null;
     }
   }

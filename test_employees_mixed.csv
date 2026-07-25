@@ -1,0 +1,9 @@
+Full Name,Work Email,Phone Number,Designation,Department,Salary,Status,PIN Code
+Deepa Joshi,deepa.joshi@woways.in,9345678901,QA Engineer,Engineering,700000,Active,560003
+Kiran Rao,kiran.rao@woways.in,12345,Designer,Design,650000,Active,560004
+Meena Das,meena.das@woways.in,3210987654,Analyst,Finance,600000,Active,560005
+Vikas Gupta,vikas.gupta@woways.in,9123456780,Accountant,Finance,abc,Active,560006
+Sunil Kumar,sunil.kumar@invalid,9234567801,Support Lead,Support,550000,Active,560007
+Anita Roy,anita.roy@woways.in,9456789012,Recruiter,HR,500000,Active,12AB
+Ravi Duplicate,deepa.joshi@woways.in,9345678901,QA Engineer,Engineering,700000,Active,560003
+,noname@woways.in,9567890123,Clerk,Admin,400000,Active,560008

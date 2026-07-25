@@ -5,6 +5,7 @@ import {
   GraduationCap, Download, CheckCircle, Loader2, X, FileSpreadsheet,
   TrendingUp, BarChart2,
 } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import * as XLSX from "xlsx";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -30,6 +31,12 @@ function fmtINR(n: number | string) {
   const num = typeof n === "string" ? parseFloat(n) : n;
   return isNaN(num) ? "—" : `₹${num.toLocaleString("en-IN")}`;
 }
+// Show an email only if it's validly formatted; otherwise blank it out so reports
+// never surface malformed/legacy email values.
+function fmtEmail(e: unknown): string {
+  const v = String(e ?? "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v : "—";
+}
 
 // ── Firebase fetchers per report ───────────────────────────────────────────────
 async function fetchReportData(id: ReportId): Promise<ReportData> {
@@ -42,14 +49,14 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
         return [
           (r.name as string) ?? "—",
           (r.employeeId ?? r.id) as string,
-          (r.department as string) ?? "—",
-          (r.email as string) ?? "—",
-          (r.phone as string) ?? "—",
-          (r.designation as string) ?? "—",
-          (r.employmentType as string) ?? "—",
+          (r.department as string) || "—",
+          fmtEmail(r.email),
+          (r.phone as string) || "—",
+          (r.designation as string) || (r.role as string) || "—",
+          (r.employmentType as string) || "—",
           (r.workMode as string) ?? "—",
           (r.status as string) ?? "Active",
-          fmtDate((r.joiningDate as string) ?? ""),
+          fmtDate((r.doj as string) ?? (r.joiningDate as string) ?? ""),
         ];
       });
       return {
@@ -75,7 +82,7 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
           String(r.stage ?? r.status ?? "—"),
           fmtDate(String(r.appliedDate ?? r.createdAt ?? "")),
           (r.status as string) ?? "—",
-          (r.email as string) ?? "—",
+          fmtEmail(r.email),
         ] as (string | number)[];
       });
       return {
@@ -178,7 +185,7 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
           fmtDate(String(d.paymentDate ?? "")),
         ] as (string | number)[]);
         return {
-          headers: ["Employee", "Emp ID", "Pay Month", "Basic Salary", "Incentive", "Deductions", "Net Pay", "Status", "Payment Date"],
+          headers: ["Employee", "Emp ID", "Pay Month", "Basic Payroll", "Incentive", "Deductions", "Net Payroll", "Status", "Payment Date"],
           rows,
           summary: [
             { label: "Records", value: rows.length },
@@ -202,7 +209,7 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
         (d.status as string) ?? "—",
       ] as (string | number)[]);
       return {
-        headers: ["Employee", "Emp ID", "Pay Month", "CTC", "HRA", "Deductions", "Net Pay", "Status"],
+        headers: ["Employee", "Emp ID", "Pay Month", "CTC", "HRA", "Deductions", "Net Payroll", "Status"],
         rows,
         summary: [
           { label: "Records", value: rows.length },
@@ -251,7 +258,7 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
         (d.employeeId ?? d.id) as string,
         (d.department as string) ?? "—",
         (d.designation as string) ?? "—",
-        fmtDate((d.joiningDate as string) ?? ""),
+        fmtDate((d.doj as string) ?? (d.joiningDate as string) ?? ""),
         (d.status as string) ?? "Active",
         (d.convertedTo as string) ?? "—",
         (d.convertedDate as string) ? fmtDate(d.convertedDate as string) : "—",
@@ -347,13 +354,7 @@ function ReportModal({
       {/* Table */}
       <div className="flex-1 overflow-auto">
         {data.rows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-3 py-20">
-            <div className="w-14 h-14 rounded-2xl bg-[#F5F3FF] flex items-center justify-center">
-              <FileSpreadsheet size={28} className="text-[#4F3CC9]" />
-            </div>
-            <p className="text-gray-500 text-sm">No data found for this report.</p>
-            <p className="text-gray-400 text-xs">Records will appear here once data is added to the system.</p>
-          </div>
+          <EmptyState icon={FileSpreadsheet} title="No data found for this report" subtitle="Records will appear here once data is added to the system." />
         ) : (
           <table className="w-full text-sm border-separate border-spacing-0">
             <thead className="sticky top-0 z-10">
@@ -426,6 +427,20 @@ export default function ReportsPage() {
   const [lastGenDates, setLastGenDates] = useState<Record<string, string>>(
     Object.fromEntries(reportCards.map((r) => [r.id, ""]))
   );
+  // Restore "Last generated" dates so they survive navigating away and back.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("hr_report_lastgen");
+      if (raw) setLastGenDates((prev) => ({ ...prev, ...JSON.parse(raw) }));
+    } catch { /* ignore */ }
+  }, []);
+  const recordGenerated = useCallback((id: string) => {
+    setLastGenDates((prev) => {
+      const next = { ...prev, [id]: getToday() };
+      try { localStorage.setItem("hr_report_lastgen", JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   const [generating, setGenerating] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<{ id: ReportId; name: string; data: ReportData } | null>(null);
@@ -500,7 +515,7 @@ export default function ReportsPage() {
     setGenerating(id);
     try {
       const data = await fetchReportData(id);
-      setLastGenDates((prev) => ({ ...prev, [id]: getToday() }));
+      recordGenerated(id);
       setActiveModal({ id, name, data });
       showToast(`${name} generated — ${data.rows.length} records`);
     } catch {
@@ -514,7 +529,7 @@ export default function ReportsPage() {
     setDownloading(id);
     try {
       const data = await fetchReportData(id);
-      setLastGenDates((prev) => ({ ...prev, [id]: getToday() }));
+      recordGenerated(id);
       const ws = XLSX.utils.aoa_to_sheet([data.headers, ...data.rows.map(r => r.map(String))]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 30));

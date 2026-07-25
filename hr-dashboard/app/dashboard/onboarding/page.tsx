@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { Plus, ClipboardList, TrendingUp, CheckCircle2, X } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { onAuthStateChanged } from "firebase/auth";
 import { getDocs, addDoc, updateDoc, collection, doc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
@@ -397,8 +398,8 @@ export default function OnboardingPage() {
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">
-                  No onboarding records found.
+                <td colSpan={5}>
+                  <EmptyState title="No onboarding records found" subtitle="New hires being onboarded will appear here." />
                 </td>
               </tr>
             ) : (

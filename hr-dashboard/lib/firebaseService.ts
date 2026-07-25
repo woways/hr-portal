@@ -38,12 +38,21 @@ export async function addEmployee(data: Record<string, unknown>) {
   return ref.id;
 }
 
+// Firestore rejects any field whose value is `undefined`. Strip those out so a
+// record missing an optional field (e.g. photoURL) doesn't crash the write.
+function stripUndefined(data: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
+}
+
 export async function upsertEmployee(employeeId: string, data: Record<string, unknown>) {
-  await setDoc(doc(db, "employees", employeeId), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+  await setDoc(doc(db, "employees", employeeId), { ...stripUndefined(data), updatedAt: new Date().toISOString() }, { merge: true });
 }
 
 export async function updateEmployee(docId: string, data: Record<string, unknown>) {
-  await updateDoc(doc(db, "employees", docId), { ...data, updatedAt: new Date().toISOString() });
+  // Use setDoc+merge (not updateDoc) so an edit never fails with "No document to
+  // update" when the doc id differs from the employeeId field. Merge keeps all
+  // existing fields and only overwrites the ones provided.
+  await setDoc(doc(db, "employees", docId), { ...stripUndefined(data), updatedAt: new Date().toISOString() }, { merge: true });
 }
 
 async function deleteStorageFolder(path: string) {

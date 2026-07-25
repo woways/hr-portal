@@ -5,8 +5,12 @@ import * as XLSX from "xlsx";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, PieChart, Pie, Cell,
 } from "recharts";
-import { getAttendance, updateAttendance, upsertAttendance, getAllClockRecords, updateRegularizationStatus, markHRNotifRead, getEmployees } from "@/lib/firebaseService";
-import { collection, onSnapshot, query, where, getDocs } from "firebase/firestore";
+import { getAttendance, updateAttendance, upsertAttendance, updateRegularizationStatus, markHRNotifRead } from "@/lib/firebaseService";
+import { invalidateAttendance } from "@/lib/cachedService";
+import { readCache, writeCache } from "@/lib/cache";
+import { SkeletonTableRows } from "@/components/Skeleton";
+import { EmptyState } from "@/components/EmptyState";
+import { collection, onSnapshot, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { backfillAllEmployees, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 
@@ -64,9 +68,37 @@ const TODAY = new Date().toISOString().slice(0, 10);
 export default function AttendancePage() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loadingRecords, setLoadingRecords] = useState(true);
+  // Configured Late Login Threshold (HH:MM, 24h) from Settings → Work Timings.
+  const [lateThreshold, setLateThreshold] = useState("09:30");
+  // Min full-day hours and half-day threshold from Settings → Attendance Rules.
+  const [minHours, setMinHours] = useState(7);
+  const [halfDayThreshold, setHalfDayThreshold] = useState(4);
+  // Standard hours beyond which extra time counts as Overtime (ATT-009). Default 9.
+  const [overtimeThreshold, setOvertimeThreshold] = useState(9);
+
+  useEffect(() => {
+    getDoc(doc(db, "settings", "workTimings"))
+      .then((snap) => { if (snap.exists()) { const t = snap.data().lateThreshold as string; if (t) setLateThreshold(t); } })
+      .catch(() => { /* keep default */ });
+    getDoc(doc(db, "settings", "attendanceRules"))
+      .then((snap) => {
+        if (!snap.exists()) return;
+        const mh = parseFloat(snap.data().minHours as string);
+        const hd = parseFloat(snap.data().halfDayThreshold as string);
+        const ot = parseFloat((snap.data().overtimeThreshold ?? snap.data().standardHours) as string);
+        if (!isNaN(mh)) setMinHours(mh);
+        if (!isNaN(hd)) setHalfDayThreshold(hd);
+        if (!isNaN(ot)) setOvertimeThreshold(ot);
+      })
+      .catch(() => { /* keep defaults */ });
+  }, []);
   // Keyed by empId → WorkLocation derived from employee's workMode
   const empWorkLocRef = useRef<Map<string, WorkLocation>>(new Map());
   const backfillDoneRef = useRef(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [highlightedEmpId, setHighlightedEmpId] = useState<string | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
   const [search, setSearch] = useState("");
   const [managerFilter, setManagerFilter] = useState("All");
   const [locationFilter, setLocationFilter] = useState("All");
@@ -90,6 +122,17 @@ export default function AttendancePage() {
   // Auto-mark all unread attendance notifications as read when HR opens this page
   useEffect(() => { const t = setTimeout(() => markHRNotifRead("attendance"), 10000); return () => clearTimeout(t); }, []);
 
+  // Close autocomplete dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   // ── Load ALL employees + today's attendance and merge ─────────────────────
   function defaultLocation(workMode: string): WorkLocation {
     if (workMode === "Remote" || workMode === "WFH") return "WFH";
@@ -99,12 +142,15 @@ export default function AttendancePage() {
 
   const loadAttendance = useCallback(async () => {
     try {
-      // ── Step 1: Load employees from primary `employees` collection ──
-      let empDocs: Record<string, unknown>[] = [];
-      try {
-        const snap = await getDocs(collection(db, "employees"));
-        empDocs = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
-      } catch { /* ignore */ }
+      // ── Load employees + today's attendance IN PARALLEL ──
+      const [empSnap, rawAtt] = await Promise.all([
+        getDocs(collection(db, "employees")).catch(() => null),
+        getAttendance(TODAY).catch(() => []),
+      ]);
+
+      const empDocs: Record<string, unknown>[] = empSnap
+        ? empSnap.docs.map((d) => ({ ...d.data(), id: d.id }))
+        : [];
 
       const empList = empDocs.map((d) => ({
         id:               String(d.employeeId ?? d.id ?? ""),
@@ -116,13 +162,15 @@ export default function AttendancePage() {
         doj:              String(d.doj ?? ""),
       })).filter((e) => e.id && (!e.doj || e.doj <= TODAY)); // only employees who have joined by today
 
+      // Compute dept headcount from already-loaded employees — no extra Firestore call
+      const deptMap: Record<string, number> = {};
+      empDocs.forEach((e) => {
+        const d = String(e.department ?? "Other");
+        deptMap[d] = (deptMap[d] ?? 0) + 1;
+      });
+      setDeptCount(Object.entries(deptMap).map(([dept, count]) => ({ dept, count })).sort((a, b) => b.count - a.count));
 
-      // ── Step 3: Load today's attendance records ──
-      let attList: Record<string, unknown>[] = [];
-      try {
-        const raw = await getAttendance(TODAY);
-        attList = raw as Record<string, unknown>[];
-      } catch { /* ignore */ }
+      const attList: Record<string, unknown>[] = (rawAtt ?? []) as Record<string, unknown>[];
 
       // Populate work-location ref for syncClockData
       const locMap = new Map<string, WorkLocation>();
@@ -166,6 +214,7 @@ export default function AttendancePage() {
       });
 
       setRecords(merged);
+      writeCache(`hr_att_records_${TODAY}`, merged);
       setLoadingRecords(false);
 
       if (!backfillDoneRef.current && empList.length > 0) {
@@ -182,6 +231,12 @@ export default function AttendancePage() {
   }, []);
 
   useEffect(() => {
+    // Seed from cache so the attendance table renders instantly, then refresh
+    const cached = readCache<AttendanceRecord[]>(`hr_att_records_${TODAY}`);
+    if (cached && cached.length) {
+      setRecords(cached);
+      setLoadingRecords(false);
+    }
     loadAttendance(); // single initial load — real-time clock updates handled by onSnapshot below
   }, [loadAttendance]);
 
@@ -194,75 +249,105 @@ export default function AttendancePage() {
     return `${h}h ${String(m).padStart(2, "0")}m`;
   }
 
-  const syncClockData = useCallback(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    getAllClockRecords(today)
-      .then((rawClocks) => {
-        const clockData = rawClocks as unknown as ClockRecord[];
-        const todayClocks = clockData.filter((c) => c.date === today);
-        if (todayClocks.length === 0) return;
+  // Compute "Xh Ym" from two clock strings (accepts both "hh:mm AM/PM" and 24h "HH:MM").
+  function computeHours(clockIn: string, clockOut: string): string {
+    const toMins = (t: string): number | null => {
+      if (!t) return null;
+      const m12 = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (m12) {
+        let h = parseInt(m12[1], 10); const min = parseInt(m12[2], 10);
+        if (/PM/i.test(m12[3]) && h !== 12) h += 12;
+        if (/AM/i.test(m12[3]) && h === 12) h = 0;
+        return h * 60 + min;
+      }
+      const m24 = t.match(/^(\d{1,2}):(\d{2})$/);
+      if (m24) return parseInt(m24[1], 10) * 60 + parseInt(m24[2], 10);
+      return null;
+    };
+    const a = toMins(clockIn), b = toMins(clockOut);
+    if (a == null || b == null) return "";
+    let diff = b - a;
+    if (diff < 0) diff += 24 * 60; // handle overnight
+    return `${Math.floor(diff / 60)}h ${String(diff % 60).padStart(2, "0")}m`;
+  }
 
-        // Tick live seconds for any clocked-in employee
-        const clocked = todayClocks.find((c) => c.status === "clocked-in");
-        if (clocked) setLiveSeconds(Math.floor((Date.now() - clocked.clockInTs) / 1000));
+  // Re-derive "late" from the record's clock-in vs the CURRENT configured threshold,
+  // so changing the Late Login Threshold in Settings immediately affects the status
+  // (the stored `late` flag was frozen at clock-in time).
+  function lateByThreshold(r: AttendanceRecord): boolean {
+    const ci = r.clockIn;
+    if (!ci || ci === "—" || ci === "" || ci === "Ongoing") return false; // no clock-in → not late
+    if (r.date) { const dow = new Date(r.date + "T00:00:00").getDay(); if (dow === 0 || dow === 6) return false; }
+    const m = ci.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+    if (!m) return false;
+    let h = parseInt(m[1], 10); const min = parseInt(m[2], 10);
+    if (m[3]) { if (/PM/i.test(m[3]) && h !== 12) h += 12; if (/AM/i.test(m[3]) && h === 12) h = 0; }
+    const [thH, thM] = lateThreshold.split(":").map(Number);
+    return (h * 60 + min) > ((thH || 0) * 60 + (thM || 0));
+  }
 
-        setRecords((prev) => {
-          // Update records that already exist in the list
-          const updated = prev.map((rec) => {
-            const clock = todayClocks.find((c) => c.empId === rec.empId);
-            if (!clock) return rec;
-            const secs = clock.status === "clocked-in"
-              ? Math.floor((Date.now() - clock.clockInTs) / 1000)
-              : (clock.totalSeconds ?? 0);
-            return {
-              ...rec,
-              clockIn:      clock.clockInStr,
-              clockOut:     clock.clockOutStr ?? (clock.status === "clocked-in" ? "Ongoing" : "—"),
-              workingHours: fmtHours(secs),
-              status:       "Present" as const,
-              late:         clock.isLate,
-            };
-          });
+  function applyClockRecords(todayClocks: ClockRecord[]) {
+    if (todayClocks.length === 0) return;
 
-          // Add records for employees who clocked in but aren't in the list yet
-          const existingIds = new Set(prev.map((r) => r.empId));
-          const newRecs: AttendanceRecord[] = todayClocks
-            .filter((c) => !existingIds.has(c.empId))
-            .map((c) => {
-              const secs = c.status === "clocked-in"
-                ? Math.floor((Date.now() - c.clockInTs) / 1000)
-                : (c.totalSeconds ?? 0);
-              return {
-                id:            `${today}-${c.empId}`,
-                empId:         c.empId,
-                name:          c.empName,
-                dept:          c.department ?? "",
-                manager:       "",
-                location:      (empWorkLocRef.current.get(c.empId) ?? "Office") as WorkLocation,
-                shift:         "9AM-6PM",
-                date:          today,
-                clockIn:       c.clockInStr,
-                clockOut:      c.clockOutStr ?? (c.status === "clocked-in" ? "Ongoing" : "—"),
-                workingHours:  fmtHours(secs),
-                overtimeHours: "-",
-                status:        "Present" as const,
-                late:          c.isLate,
-              };
-            });
+    const clocked = todayClocks.find((c) => c.status === "clocked-in");
+    if (clocked) setLiveSeconds(Math.floor((Date.now() - clocked.clockInTs) / 1000));
 
-          return [...updated, ...newRecs];
+    setRecords((prev) => {
+      const updated = prev.map((rec) => {
+        const clock = todayClocks.find((c) => c.empId === rec.empId);
+        if (!clock) return rec;
+        const secs = clock.status === "clocked-in"
+          ? Math.floor((Date.now() - clock.clockInTs) / 1000)
+          : (clock.totalSeconds ?? 0);
+        return {
+          ...rec,
+          clockIn:      clock.clockInStr,
+          clockOut:     clock.clockOutStr ?? (clock.status === "clocked-in" ? "Ongoing" : "—"),
+          workingHours: fmtHours(secs),
+          status:       "Present" as const,
+          late:         clock.isLate,
+        };
+      });
+
+      const existingIds = new Set(prev.map((r) => r.empId));
+      const newRecs: AttendanceRecord[] = todayClocks
+        .filter((c) => !existingIds.has(c.empId))
+        .map((c) => {
+          const secs = c.status === "clocked-in"
+            ? Math.floor((Date.now() - c.clockInTs) / 1000)
+            : (c.totalSeconds ?? 0);
+          return {
+            id:            `${TODAY}-${c.empId}`,
+            empId:         c.empId,
+            name:          c.empName,
+            dept:          c.department ?? "",
+            manager:       "",
+            location:      (empWorkLocRef.current.get(c.empId) ?? "Office") as WorkLocation,
+            shift:         "9AM-6PM",
+            date:          TODAY,
+            clockIn:       c.clockInStr,
+            clockOut:      c.clockOutStr ?? (c.status === "clocked-in" ? "Ongoing" : "—"),
+            workingHours:  fmtHours(secs),
+            overtimeHours: "-",
+            status:        "Present" as const,
+            late:          c.isLate,
+          };
         });
-      })
-      .catch(() => {});
-  }, []);
+
+      return [...updated, ...newRecs];
+    });
+  }
 
   useEffect(() => {
-    syncClockData(); // initial population
-    // Real-time listener — fires instantly when any employee clocks in or out
+    // onSnapshot fires immediately on mount with current data, then again on every change —
+    // processes snapshot docs directly, no extra getAllClockRecords Firestore read needed
     const q = query(collection(db, "clockRecords"), where("date", "==", TODAY));
-    const unsub = onSnapshot(q, () => syncClockData(), () => {});
+    const unsub = onSnapshot(q, (snap) => {
+      applyClockRecords(snap.docs.map(d => d.data() as ClockRecord));
+    }, () => {});
     return unsub;
-  }, [syncClockData]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Also tick live working hours every second for clocked-in employees
   useEffect(() => {
@@ -270,18 +355,8 @@ export default function AttendancePage() {
     return () => clearInterval(t);
   }, []);
 
-  // ── Department Headcount ─────────────────────────────────────────────────
+  // ── Department Headcount — populated inside loadAttendance from already-loaded employees ──
   const [deptCount, setDeptCount] = useState<{ dept: string; count: number }[]>([]);
-  useEffect(() => {
-    getEmployees().then((docs) => {
-      const map: Record<string, number> = {};
-      (docs as Record<string, unknown>[]).forEach((e) => {
-        const d = String(e.department ?? "Other");
-        map[d] = (map[d] ?? 0) + 1;
-      });
-      setDeptCount(Object.entries(map).map(([dept, count]) => ({ dept, count })).sort((a, b) => b.count - a.count));
-    }).catch(() => {});
-  }, []);
 
   // ── 6-month attendance history for Absenteeism Trends ────────────────────
   const [historyRecords, setHistoryRecords] = useState<(AttendanceRecord & { _month: string })[]>([]);
@@ -370,15 +445,6 @@ export default function AttendancePage() {
     const num = parseFloat(s);
     return isNaN(num) ? 0 : num;
   }
-  const totalOTHours = records.reduce((sum, r) => sum + parseOTHours(r.overtimeHours), 0);
-  const totalOTDisplay = totalOTHours > 0 ? `${totalOTHours.toFixed(1)}h` : "0h";
-
-  // Compute per-employee OT for bar chart
-  const computedOvertimeData = records
-    .map((r) => ({ name: r.name, hours: parseOTHours(r.overtimeHours) }))
-    .filter((r) => r.hours > 0)
-    .sort((a, b) => b.hours - a.hours)
-    .slice(0, 8);
 
   // Compute Monthly Report from real Firestore data (monthlyAttendance)
   const computedMonthlyReport = (() => {
@@ -462,7 +528,7 @@ export default function AttendancePage() {
       const dept = r.dept || "Unknown";
       if (!byDept[dept]) byDept[dept] = { onTime: 0, total: 0 };
       byDept[dept].total++;
-      if ((r.status === "Present" || r.status === "Half Day") && !r.late) byDept[dept].onTime++;
+      if ((r.status === "Present" || r.status === "Half Day") && !lateByThreshold(r)) byDept[dept].onTime++;
     }
     return Object.entries(byDept)
       .map(([dept, { onTime, total }]) => ({ dept, compliance: total > 0 ? Math.round((onTime / total) * 100) : 0 }))
@@ -532,7 +598,61 @@ export default function AttendancePage() {
     setTimeout(() => setRegToast(null), 3500);
   }
 
-  const filtered = records.filter((r) => {
+  // Worked hours (as a decimal) from stored workingHours, or computed from clock times.
+  function workedHrs(r: AttendanceRecord): number {
+    const wh = r.workingHours || computeHours(r.clockIn, r.clockOut);
+    const m = wh.match(/(\d+)\s*h\s*(\d+)?\s*m?/i);
+    return m ? Number(m[1]) + Number(m[2] || 0) / 60 : 0;
+  }
+
+  // Overtime = worked hours beyond the standard threshold (ATT-009). Returns a
+  // "Xh YYm" string, or "-" when there's no overtime. Rounds to whole minutes.
+  function overtimeFor(r: AttendanceRecord): string {
+    const otMins = Math.round((workedHrs(r) - overtimeThreshold) * 60);
+    if (otMins <= 0) return "-";
+    return `${Math.floor(otMins / 60)}h ${String(otMins % 60).padStart(2, "0")}m`;
+  }
+
+  // Re-derive the displayed status from hours worked vs the configured thresholds so
+  // it's always consistent with the half-day rule (not a stale/default/manually-set
+  // value). A record with a real clock-in is never "Absent" (ATT-008); Leave / Week
+  // Off are left untouched.
+  const normalizedRecords = records.map((r) => {
+    const hasClockIn = !!r.clockIn && r.clockIn !== "—" && r.clockIn !== "";
+    if (!hasClockIn) return r;
+    if (r.status === "Leave" || r.status === "Week Off") return r;
+    const clockedOut = !!r.clockOut && r.clockOut !== "Ongoing" && r.clockOut !== "—" && r.clockOut !== "";
+    if (!clockedOut) {
+      return r.status === "Absent" ? { ...r, status: "Present" as AttendanceStatus } : r;
+    }
+    const hrs = workedHrs(r);
+    // Same three-way rule the employee dashboard uses (ATT-003): a clocked-out day
+    // is Present at/above the full-day minimum, Half Day at/above the half-day
+    // threshold, otherwise Absent — so both dashboards agree on the same record.
+    // (An OPEN/ongoing shift is handled above and stays Present per ATT-008.)
+    let derived: AttendanceStatus;
+    if (hrs >= minHours) derived = "Present";
+    else if (hrs >= halfDayThreshold) derived = "Half Day";
+    else derived = "Absent";
+    // Derive overtime from hours worked beyond the standard threshold (ATT-009).
+    const overtimeHours = overtimeFor(r);
+    if (derived === r.status && overtimeHours === r.overtimeHours) return r;
+    return { ...r, status: derived, overtimeHours };
+  });
+
+  // OT aggregates run off the normalized records so they reflect the computed
+  // overtime (ATT-009), not the raw "-" placeholders on the stored records.
+  const totalOTHours = normalizedRecords.reduce((sum, r) => sum + parseOTHours(r.overtimeHours), 0);
+  const totalOTDisplay = totalOTHours > 0 ? `${totalOTHours.toFixed(1)}h` : "0h";
+
+  // Per-employee OT for the bar chart.
+  const computedOvertimeData = normalizedRecords
+    .map((r) => ({ name: r.name, hours: parseOTHours(r.overtimeHours) }))
+    .filter((r) => r.hours > 0)
+    .sort((a, b) => b.hours - a.hours)
+    .slice(0, 8);
+
+  const filtered = normalizedRecords.filter((r) => {
     const matchSearch = r.name.toLowerCase().includes(search.toLowerCase()) || r.empId.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === "All" || r.status === statusFilter;
     const matchManager = managerFilter === "All" || r.manager === managerFilter;
@@ -540,15 +660,24 @@ export default function AttendancePage() {
     return matchSearch && matchStatus && matchManager && matchLocation;
   });
 
-  const presentCount = filtered.filter(r => r.status === "Present").length;
-  const absentCount = filtered.filter(r => r.status === "Absent").length;
-  const lateCount = filtered.filter(r => r.late).length;
-  const halfDayCount = filtered.filter(r => r.status === "Half Day").length;
-  const wfhCount = filtered.filter(r => r.location === "WFH" && r.status === "Present").length;
-  const overtimeCount = filtered.filter(r => r.overtimeHours !== "-").length;
+  // Overview summary must reflect the full day's records — NOT the search/status/
+  // manager/location filters that only apply to the Daily Attendance log. Scoping to
+  // today (and ignoring UI filters) keeps these counts reconciled with the records.
+  // "Actually worked from home" = clocked in at a WFH location, regardless of whether
+  // the day ended up Present/Half Day/Late. Used by the WFH tile and the charts so
+  // they all reconcile against the same underlying records (ATT-010).
+  const clocedIn = (r: AttendanceRecord) => !!(r.clockIn && r.clockIn !== "" && r.clockIn !== "—");
+  const summaryRecords = normalizedRecords.filter(r => r.date === TODAY);
+  const presentCount = summaryRecords.filter(r => r.status === "Present").length;
+  const absentCount = summaryRecords.filter(r => r.status === "Absent").length;
+  const lateCount = summaryRecords.filter(r => lateByThreshold(r)).length;
+  const halfDayCount = summaryRecords.filter(r => r.status === "Half Day").length;
+  // Count every WFH employee who clocked in today — not just those whose status is
+  // Present — so the tile doesn't undercount Half Day / Late remote workers (ATT-010).
+  const wfhCount = summaryRecords.filter(r => r.location === "WFH" && clocedIn(r)).length;
+  const overtimeCount = summaryRecords.filter(r => r.overtimeHours !== "-").length;
 
   // WFH distribution — count only employees who actually clocked in, by their location
-  const clocedIn = (r: AttendanceRecord) => !!(r.clockIn && r.clockIn !== "" && r.clockIn !== "—");
   const wfhPieData = [
     { name: "Office",      value: records.filter(r => clocedIn(r) && r.location === "Office").length },
     { name: "WFH",         value: records.filter(r => clocedIn(r) && r.location === "WFH").length },
@@ -588,13 +717,22 @@ export default function AttendancePage() {
     const ciStr = correction.clockIn  || editRecord.clockIn  || "";
     const coStr = correction.clockOut || editRecord.clockOut || "";
     const isLate = (() => {
+      if (editRecord.date) {
+        const dayOfWeek = new Date(editRecord.date + "T00:00:00").getDay();
+        if (dayOfWeek === 0 || dayOfWeek === 6) return false; // no late on weekends
+      }
       const t = ciStr.replace(/\s*(AM|PM)/i, "");
       const [h, m] = t.split(":").map(Number);
       if (isNaN(h)) return false;
       const hr24 = /PM/i.test(ciStr) && h !== 12 ? h + 12 : (/AM/i.test(ciStr) && h === 12 ? 0 : h);
-      return hr24 > 9 || (hr24 === 9 && (m ?? 0) > 30);
+      // Compare against the configured Late Login Threshold (e.g. "09:30").
+      const [thH, thM] = lateThreshold.split(":").map(Number);
+      const clockMins = hr24 * 60 + (m ?? 0);
+      const thresholdMins = (thH || 0) * 60 + (thM || 0);
+      return clockMins > thresholdMins;
     })();
-    const updated = { ...editRecord, clockIn: ciStr, clockOut: coStr, status: correction.status, late: isLate };
+    const computedHours = computeHours(ciStr, coStr);
+    const updated = { ...editRecord, clockIn: ciStr, clockOut: coStr, status: correction.status, late: isLate, workingHours: computedHours || editRecord.workingHours };
     setRecords(records.map((r) => r.id === editRecord.id ? updated : r));
     setEditRecord(null);
     try {
@@ -602,6 +740,7 @@ export default function AttendancePage() {
       // upsertAttendance (setDoc merge:true) creates the doc if it doesn't exist yet,
       // which happens when HR marks a default in-memory "Absent" record as Present.
       await upsertAttendance(attId, rest as Record<string, unknown>);
+      invalidateAttendance();
     } catch {}
   }
 
@@ -616,13 +755,13 @@ export default function AttendancePage() {
       "Manager":         r.manager,
       "Date":            r.date,
       "Shift":           r.shift,
-      "Location":        r.location,
+      "Work Mode":       r.location,
       "Clock In":        r.clockIn  || "-",
       "Clock Out":       r.clockOut || "-",
       "Working Hours":   r.workingHours,
       "Overtime Hours":  r.overtimeHours,
       "Status":          r.status,
-      "Late":            r.late ? "Yes" : "No",
+      "Late":            lateByThreshold(r) ? "Yes" : "No",
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     ws["!cols"] = [
@@ -639,6 +778,20 @@ export default function AttendancePage() {
   type Tab = typeof TABS[number];
   const [activeTab, setActiveTab] = useState<Tab>("Overview");
 
+  function selectEmployee(empId: string, name: string) {
+    setSearch(name);
+    setShowSuggestions(false);
+    setActiveTab("Daily Attendance");
+    setHighlightedEmpId(empId);
+    // Scroll to the row after the tab renders
+    setTimeout(() => {
+      const row = rowRefs.current.get(empId);
+      if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+    // Clear highlight after 3 seconds
+    setTimeout(() => setHighlightedEmpId(null), 3200);
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -646,6 +799,11 @@ export default function AttendancePage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Attendance & Workforce Analytics</h1>
           <p className="text-gray-500 text-sm mt-1">Operational visibility across teams, locations and shifts</p>
+          {/* Make the active status rule explicit so the cutoff in force is never
+              ambiguous (ATT-003) — values come live from Settings → Attendance Rules. */}
+          <p className="text-xs text-gray-400 mt-1">
+            Status rule: Present ≥ {minHours}h worked · Half Day {halfDayThreshold}–{minHours}h · Absent &lt; {halfDayThreshold}h · configurable in Settings → Attendance Rules
+          </p>
         </div>
         <div className="flex gap-3">
           <button
@@ -676,7 +834,7 @@ export default function AttendancePage() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-400">Location</label>
+            <label className="text-xs text-gray-400">Work Mode</label>
             <select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)} className={inputCls}>
               {["All","Office","WFH","Client Site"].map(l => <option key={l}>{l}</option>)}
             </select>
@@ -693,11 +851,63 @@ export default function AttendancePage() {
               {["All","Present","Absent","Half Day","Leave","Week Off"].map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1" ref={searchContainerRef}>
             <label className="text-xs text-gray-400">Search</label>
             <div className="relative">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input placeholder="Employee / ID" value={search} onChange={(e) => setSearch(e.target.value)} className={`${inputCls} pl-8 w-44`} />
+              <input
+                placeholder="Employee / ID"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setShowSuggestions(true); }}
+                onFocus={() => setShowSuggestions(true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const q = search.toLowerCase();
+                    const match = records.find(r => r.name.toLowerCase().includes(q) || r.empId.toLowerCase().includes(q));
+                    if (match) selectEmployee(match.empId, match.name);
+                    else setShowSuggestions(false);
+                  }
+                  if (e.key === "Escape") setShowSuggestions(false);
+                }}
+                className={`${inputCls} pl-8 w-52`}
+              />
+              {search && (
+                <button onClick={() => { setSearch(""); setShowSuggestions(false); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                  <X size={12} />
+                </button>
+              )}
+              {showSuggestions && search.trim().length > 0 && (() => {
+                const q = search.toLowerCase();
+                const suggestions = records.filter(r =>
+                  r.name.toLowerCase().includes(q) || r.empId.toLowerCase().includes(q)
+                ).slice(0, 8);
+                if (suggestions.length === 0) return null;
+                return (
+                  <div className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+                    {suggestions.map(r => (
+                      <button
+                        key={r.empId}
+                        onMouseDown={(e) => { e.preventDefault(); selectEmployee(r.empId, r.name); }}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-[#F5F3FF] text-left transition-colors"
+                      >
+                        <div className="w-7 h-7 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center text-xs font-bold shrink-0">
+                          {r.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{r.name}</p>
+                          <p className="text-xs text-gray-400">{r.empId} · {r.dept}</p>
+                        </div>
+                        <span className={`ml-auto text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
+                          r.status === "Present" ? "bg-green-100 text-green-700" :
+                          r.status === "Absent"  ? "bg-red-100 text-red-600"   :
+                          "bg-gray-100 text-gray-500"
+                        }`}>{r.status}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -916,7 +1126,7 @@ export default function AttendancePage() {
           <div className="mt-5">
             <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3">Today&apos;s Late Arrivals</h3>
             <div className="space-y-1">
-              {filtered.filter(r => r.late).map(r => (
+              {filtered.filter(r => lateByThreshold(r)).map(r => (
                 <div key={r.id} className="flex items-center justify-between px-3 py-2 bg-red-50 rounded-xl">
                   <span className="text-sm text-gray-700">{r.name}</span>
                   <div className="flex items-center gap-2">
@@ -1109,7 +1319,7 @@ export default function AttendancePage() {
               <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
                 <th className="px-4 py-3 text-left">Employee</th>
                 <th className="px-4 py-3 text-left">Dept</th>
-                <th className="px-4 py-3 text-left">Location</th>
+                <th className="px-4 py-3 text-left">Work Mode</th>
                 <th className="px-4 py-3 text-left">Clock In</th>
                 <th className="px-4 py-3 text-left">Clock Out</th>
                 <th className="px-4 py-3 text-left">Hours</th>
@@ -1120,8 +1330,16 @@ export default function AttendancePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
+              {loadingRecords && filtered.length === 0 && <SkeletonTableRows rows={8} cols={13} />}
+              {!loadingRecords && filtered.length === 0 && (
+                <tr><td colSpan={13}><EmptyState title="No attendance records" subtitle="No records match the current search or filters." /></td></tr>
+              )}
               {filtered.map((r) => (
-                <tr key={r.id} className="hover:bg-gray-50">
+                <tr
+                  key={r.id}
+                  ref={(el) => { if (el) rowRefs.current.set(r.empId, el); else rowRefs.current.delete(r.empId); }}
+                  className={`hover:bg-gray-50 transition-colors ${highlightedEmpId === r.empId ? "ring-2 ring-inset ring-[#4F3CC9] bg-[#F5F3FF]" : ""}`}
+                >
                   <td className="px-4 py-3">
                     <p className="font-medium text-gray-900">{r.name}</p>
                     <p className="text-xs text-gray-400">{r.empId}</p>
@@ -1137,7 +1355,7 @@ export default function AttendancePage() {
                       : (r.clockOut || "—")}
                   </td>
                   <td className="px-4 py-3 text-gray-700 font-medium tabular-nums">
-                    {r.clockOut === "Ongoing" ? fmtHours(liveSeconds) : r.workingHours}
+                    {r.clockOut === "Ongoing" ? fmtHours(liveSeconds) : (r.workingHours || computeHours(r.clockIn, r.clockOut) || "—")}
                   </td>
                   <td className="px-4 py-3">
                     {r.overtimeHours !== "-"
@@ -1148,14 +1366,14 @@ export default function AttendancePage() {
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[r.status]}`}>{r.status}</span>
                   </td>
                   <td className="px-4 py-3">
-                    {r.late
+                    {lateByThreshold(r)
                       ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">Late</span>
                       : r.clockIn
                         ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-600">On Time</span>
                         : null}
                   </td>
                   <td className="px-4 py-3">
-                    <button onClick={() => openEdit(r)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500"><Pencil size={14} /></button>
+                    <button onClick={() => openEdit(r)} title="Edit attendance record" aria-label="Edit attendance record" className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500"><Pencil size={14} /></button>
                   </td>
                 </tr>
               ))}
@@ -1217,7 +1435,7 @@ export default function AttendancePage() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {computedMonthlyReport.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400 text-sm">No attendance data for this month yet.</td></tr>
+                <tr><td colSpan={8}><EmptyState title="No attendance data yet" subtitle="No attendance records for this month." /></td></tr>
               )}
               {computedMonthlyReport.map((r) => (
                 <tr key={r.empId} className="hover:bg-gray-50">

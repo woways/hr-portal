@@ -2,12 +2,15 @@
 import { useState, useEffect, useRef } from "react";
 import { loadAllDocuments, DocRecord, uploadDocFile, saveDocMeta } from "@/lib/documentService";
 import { getEmployees } from "@/lib/firebaseService";
+import { cachedEmployees } from "@/lib/cachedService";
+import { SkeletonTableRows } from "@/components/Skeleton";
 import { ref as storageRef, getBlob } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 import {
   FileText, Download, Eye, Search, Filter,
   CheckCircle, Clock, User, Building2, X, Upload, Plus, Loader2, ChevronRight,
 } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 
 const CATEGORIES    = ["All", "Identity", "Employment", "Education", "Finance", "Other"];
 const UPLOADERS     = ["All", "employee", "hr"];
@@ -110,8 +113,9 @@ export default function DocumentsPage() {
   }, []);
 
   useEffect(() => {
-    getEmployees().then((docs) => {
-      setEmpList((docs as Record<string, unknown>[]).map((d) => ({
+    // Cache-first: employee dropdown shows instantly, refreshes on network
+    cachedEmployees((docs) => {
+      setEmpList(docs.map((d) => ({
         id:          String(d.id ?? d.employeeId ?? ""),
         empId:       String(d.employeeId ?? d.id ?? ""),
         name:        String(d.name ?? ""),
@@ -270,16 +274,13 @@ export default function DocumentsPage() {
       {/* Grouped Employee Table */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         {loading ? (
-          <div className="flex items-center justify-center py-16 text-gray-400">
-            <span className="w-6 h-6 border-2 border-[#4F3CC9]/30 border-t-[#4F3CC9] rounded-full animate-spin mr-3" />
-            Loading documents…
-          </div>
+          <table className="w-full">
+            <tbody>
+              <SkeletonTableRows rows={6} cols={5} />
+            </tbody>
+          </table>
         ) : empGroups.length === 0 ? (
-          <div className="text-center py-16 text-gray-400">
-            <FileText size={40} className="mx-auto mb-3 opacity-20" />
-            <p className="text-sm font-medium">No documents found</p>
-            <p className="text-xs mt-1">Upload a document using the button above</p>
-          </div>
+          <EmptyState icon={FileText} title="No documents found" subtitle="Upload a document using the button above." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

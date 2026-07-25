@@ -26,17 +26,19 @@ const navItems = [
   { label: "Profile",       href: "/dashboard/profile",       icon: User,            notifType: null         },
   { label: "Calendar",      href: "/dashboard/calendar",      icon: CalendarDays,    notifType: null         },
   { label: "Notifications", href: "/dashboard/notifications", icon: Bell,            notifType: "_total"     },
-  { label: "Compensation",  href: "/dashboard/compensation",  icon: DollarSign,      notifType: "payroll"    },
+  { label: "Payroll",       href: "/dashboard/compensation",  icon: DollarSign,      notifType: "payroll"    },
   { label: "Help & Support",href: "/dashboard/help",          icon: HelpCircle,      notifType: null         },
 ];
 
-interface EmpInfo { name: string; id: string; department: string; role: string; }
+interface EmpInfo { name: string; id: string; department: string; role: string; photoURL?: string; }
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router   = useRouter();
-  const [emp,        setEmp]        = useState<EmpInfo | null>(null);
-  const [notifEmpId, setNotifEmpId] = useState<string>("");
+  const [emp,           setEmp]           = useState<EmpInfo | null>(null);
+  const [photoURL,      setPhotoURL]      = useState<string>("");
+  const [photoError,    setPhotoError]    = useState<string>("");
+  const [notifEmpId,    setNotifEmpId]    = useState<string>("");
   const [loading,    setLoading]    = useState(true);
   const [counts,     setCounts]     = useState<Record<string, number>>({});
 
@@ -49,13 +51,13 @@ export default function Sidebar() {
 
       const CACHE = "emp_sidebar_v2";
 
-      // Show cached data immediately for fast initial render
       try {
         const raw = sessionStorage.getItem(CACHE);
         if (raw) {
-          const cached = JSON.parse(raw) as { name: string; id: string; department?: string; role?: string; notifId?: string; uid: string };
+          const cached = JSON.parse(raw) as { name: string; id: string; department?: string; role?: string; photoURL?: string; notifId?: string; uid: string };
           if (cached.uid === user.uid) {
-            setEmp({ name: cached.name, id: cached.id, department: cached.department ?? "", role: cached.role ?? "" });
+            setEmp({ name: cached.name, id: cached.id, department: cached.department ?? "", role: cached.role ?? "", photoURL: cached.photoURL });
+            if (cached.photoURL) { setPhotoURL(cached.photoURL); setPhotoError(""); }
             setNotifEmpId(cached.notifId || cached.id);
             setLoading(false);
           }
@@ -63,7 +65,6 @@ export default function Sidebar() {
       } catch { /* ignore */ }
 
       try {
-        // Step 0: email lookup — gets empId as fallback if users/{uid} is missing
         let notifId = "";
         let emailEmpId = "";
         if (user.email) {
@@ -74,17 +75,17 @@ export default function Sidebar() {
           }
         }
 
-        // Step 1: get employeeId from users/{uid} (primary) or email lookup (fallback)
         const userSnap = await getDoc(doc(db, "users", user.uid));
-        let eid = "";
+        let eidFromUsers = "";
         if (userSnap.exists()) {
-          eid = (userSnap.data().employeeId as string) ?? "";
+          eidFromUsers = (userSnap.data().employeeId as string) ?? "";
         }
-        // Fallback: if users/{uid} missing or has no empId, use the email-lookup result
-        if (!eid) eid = emailEmpId;
+
+        // Prefer emailEmpId (found by email query = actual Firestore doc ID).
+        // Fall back to eidFromUsers (from users/{uid}.employeeId).
+        const eid = emailEmpId || eidFromUsers;
 
         if (!eid) {
-          // No employee record found at all — account was deleted
           await signOut(auth);
           router.replace("/login?reason=account-removed");
           setLoading(false);
@@ -93,7 +94,6 @@ export default function Sidebar() {
         if (!notifId) notifId = eid;
         setNotifEmpId(notifId);
 
-        // Step 2: live listener — sidebar updates whenever HR edits the employee record
         empUnsub = onSnapshot(doc(db, "employees", eid), (snap) => {
           if (!snap.exists()) {
             signOut(auth);
@@ -104,8 +104,11 @@ export default function Sidebar() {
           const name = (data.name as string) ?? "";
           const department = (data.department as string) ?? "";
           const role = (data.role as string) ?? "";
-          setEmp({ name, id: eid, department, role });
-          sessionStorage.setItem(CACHE, JSON.stringify({ name, id: eid, department, role, notifId, uid: user.uid }));
+          const photo = (data.photoURL as string) ?? "";
+          // Set photoURL directly — don't rely on useEffect intermediary
+          if (photo) { setPhotoURL(photo); setPhotoError(""); }
+          setEmp({ name, id: eid, department, role, photoURL: photo });
+          sessionStorage.setItem(CACHE, JSON.stringify({ name, id: eid, department, role, photoURL: photo, notifId, uid: user.uid }));
           setLoading(false);
         }, () => { setLoading(false); });
       } catch {
@@ -114,6 +117,27 @@ export default function Sidebar() {
     });
 
     return () => { authUnsub(); if (empUnsub) empUnsub(); };
+  }, []);
+
+  useEffect(() => {
+    // Seed from Firebase Auth on first mount (fastest — no Firestore round-trip)
+    if (auth.currentUser?.photoURL) setPhotoURL(auth.currentUser.photoURL);
+
+    function onPhotoEvent(e: Event) {
+      const url = (e as CustomEvent<{ url: string }>).detail?.url ?? "";
+      setPhotoURL(url);
+      setPhotoError("");
+      // Also update session cache so next load shows the photo immediately
+      try {
+        const raw = sessionStorage.getItem("emp_sidebar_v2");
+        if (raw) {
+          const cached = JSON.parse(raw);
+          sessionStorage.setItem("emp_sidebar_v2", JSON.stringify({ ...cached, photoURL: url }));
+        }
+      } catch { /* ignore */ }
+    }
+    window.addEventListener("employeePhotoUpdated", onPhotoEvent);
+    return () => window.removeEventListener("employeePhotoUpdated", onPhotoEvent);
   }, []);
 
   useEffect(() => {
@@ -139,8 +163,9 @@ export default function Sidebar() {
 
   async function handleLogout() {
     sessionStorage.removeItem("emp_sidebar_v1");
-    await signOut(auth);
-    router.push("/login");
+    try { await signOut(auth); } catch { /* ignore */ }
+    // Replace (not push) so the dashboard can't be returned to via Back.
+    window.location.replace("/login");
   }
 
   const initials = emp?.name
@@ -148,13 +173,13 @@ export default function Sidebar() {
     : "?";
 
   return (
-    <aside className="w-[260px] min-h-screen bg-white dark:bg-[#13132a] border-r border-gray-100 dark:border-[#252545] flex flex-col py-6 px-4">
-      <div className="mb-6 flex items-center justify-center">
-        <span className="text-4xl font-black text-[#0B1929] dark:text-white tracking-tight leading-none">WO</span>
-        <span className="text-4xl font-black text-[#14B8A6] tracking-tight leading-none">WAYS</span>
+    <aside className="w-[260px] min-h-screen bg-[#0B1929] flex flex-col pt-8 pb-6 px-4">
+      <div className="mb-6 mt-1 flex items-center justify-center">
+        <span className="text-4xl font-black text-white leading-none" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px" }}>WO</span>
+        <span className="text-4xl font-black leading-none" style={{ fontFamily: "var(--font-inter), 'Inter', sans-serif", letterSpacing: "-0.6px", color: "#00C2A8" }}>WAYS</span>
       </div>
 
-      <nav className="flex-1 space-y-1">
+      <nav className="flex-1 space-y-1 mt-2">
         {navItems.map(({ label, href, icon: Icon, notifType }) => {
           const isActive =
             pathname === href ||
@@ -166,8 +191,8 @@ export default function Sidebar() {
               href={href}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all ${
                 isActive
-                  ? "bg-[#EDE9FF] dark:bg-[#2a2050] text-[#4F3CC9] dark:text-purple-300 font-semibold"
-                  : "text-[#4A4A6A] dark:text-gray-400 hover:bg-[#F5F3FF] dark:hover:bg-[#1e1e38]"
+                  ? "bg-white/15 text-white font-semibold"
+                  : "text-gray-400 hover:bg-white/10 hover:text-white"
               }`}
             >
               <Icon size={18} />
@@ -182,27 +207,39 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-gray-100 dark:border-[#252545] pt-4 mt-4">
+      <div className="border-t border-white/10 pt-4 mt-4">
         <div className="flex items-center gap-3 px-3 py-2">
-          <div className="w-9 h-9 rounded-full bg-[#4F3CC9] flex items-center justify-center text-white font-bold text-xs shrink-0">
-            {loading ? "…" : initials}
+          <div className="w-9 h-9 rounded-full overflow-hidden shrink-0">
+            {photoURL && !photoError ? (
+              <img
+                key={photoURL}
+                src={photoURL}
+                alt={emp?.name ?? ""}
+                className="w-full h-full object-cover"
+                onError={() => setPhotoError(photoURL)}
+              />
+            ) : (
+              <div className="w-full h-full bg-white/20 flex items-center justify-center text-white font-bold text-xs">
+                {loading ? "…" : initials}
+              </div>
+            )}
           </div>
           <div className="flex-1 min-w-0">
             {loading ? (
               <>
-                <div className="h-3.5 w-24 bg-gray-100 dark:bg-[#252545] rounded animate-pulse mb-1.5" />
-                <div className="h-3 w-16 bg-gray-100 dark:bg-[#252545] rounded animate-pulse" />
+                <div className="h-3.5 w-24 bg-white/10 rounded animate-pulse mb-1.5" />
+                <div className="h-3 w-16 bg-white/10 rounded animate-pulse" />
               </>
             ) : emp ? (
               <>
-                <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{emp.name}</p>
-                {emp.role && <p className="text-xs text-gray-600 dark:text-gray-300 truncate">{emp.role}</p>}
-                {emp.department && <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{emp.department}</p>}
-                {!emp.role && !emp.department && <p className="text-xs text-gray-600 dark:text-gray-300">Employee</p>}
+                <p className="text-sm font-semibold text-white truncate">{emp.name}</p>
+                {emp.department && <p className="text-xs text-gray-400 truncate">{emp.department}</p>}
+                {emp.role && <p className="text-xs text-gray-400 truncate">{emp.role}</p>}
+                {!emp.role && !emp.department && <p className="text-xs text-gray-400">Employee</p>}
               </>
             ) : (
               <>
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Employee</p>
+                <p className="text-sm font-medium text-white">Employee</p>
                 <p className="text-xs text-gray-400">—</p>
               </>
             )}
@@ -210,7 +247,7 @@ export default function Sidebar() {
           <button
             onClick={handleLogout}
             title="Logout"
-            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors shrink-0"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-red-400 transition-colors shrink-0"
           >
             <LogOut size={16} />
           </button>

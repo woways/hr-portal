@@ -324,7 +324,17 @@ export default function HelpPage() {
           <button onClick={() => setOpenModal("query")} className="text-sm text-[#4F3CC9] font-medium hover:underline">+ New Query</button>
         </div>
         {resolving || !liveReady ? (
-          <div className="flex items-center justify-center py-14"><Loader2 size={22} className="animate-spin text-[#4F3CC9]"/></div>
+          <div className="space-y-3">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="flex items-start gap-3 p-4 border border-gray-100 rounded-xl">
+                <div className="w-10 h-10 rounded-lg bg-gray-200/70 animate-pulse" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3.5 w-40 bg-gray-200/70 animate-pulse rounded" />
+                  <div className="h-3 w-64 bg-gray-200/70 animate-pulse rounded" />
+                </div>
+              </div>
+            ))}
+          </div>
         ) : queries.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-14 text-center">
             <MessageSquare size={32} className="text-gray-200 mb-3"/>
