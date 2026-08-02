@@ -957,7 +957,7 @@ export default function RecruitmentPage() {
           </div>
 
           <div className="flex justify-end">
-            <button onClick={() => setShowAddOnboarding(true)} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium">
+            <button onClick={async () => { setShowAddOnboarding(true); const id = await suggestNextEmpId(); setOnboardingForm((f) => (f.empId.trim() ? f : { ...f, empId: id })); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium">
               <Plus size={16} /> Start Onboarding
             </button>
           </div>
@@ -1494,9 +1494,9 @@ export default function RecruitmentPage() {
                 <input value={onboardingForm.role} onChange={(e) => setOnboardingForm({ ...onboardingForm, role: e.target.value })} placeholder="e.g. Software Engineer" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Employee ID *</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Employee ID * <span className="text-gray-400 font-normal">(auto-generated)</span></label>
                 <div className="flex gap-2">
-                  <input value={onboardingForm.empId} onChange={(e) => setOnboardingForm({ ...onboardingForm, empId: e.target.value })} placeholder="e.g. EMP014" className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
+                  <input value={onboardingForm.empId} onChange={(e) => setOnboardingForm({ ...onboardingForm, empId: e.target.value })} placeholder="e.g. EMP058" className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
                   <button type="button" onClick={async () => { const id = await suggestNextEmpId(); setOnboardingForm((f) => ({ ...f, empId: id })); }} title="Fill next available ID" className="shrink-0 px-3 rounded-xl border border-gray-200 text-xs font-medium text-[#4F3CC9] hover:bg-[#F5F3FF]">Auto</button>
                 </div>
               </div>
