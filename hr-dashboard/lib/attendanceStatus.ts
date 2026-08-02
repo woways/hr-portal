@@ -3,8 +3,8 @@
 // dashboard and the Reports module so they can never disagree (BUG-06).
 
 export interface AttThresholds {
-  minHours: number;        // full-day minimum (>= this → Present)
-  halfDayThreshold: number; // half-day minimum (>= this, < minHours → Half Day)
+  minHours: number;         // full-day minimum (>= this → Present)
+  halfDayThreshold?: number; // retained for compatibility; not used by the current rule
 }
 
 export interface AttStatusRecord {
@@ -14,7 +14,7 @@ export interface AttStatusRecord {
   workingHours?: string;
 }
 
-export const DEFAULT_ATT_THRESHOLDS: AttThresholds = { minHours: 7, halfDayThreshold: 4 };
+export const DEFAULT_ATT_THRESHOLDS: AttThresholds = { minHours: 8, halfDayThreshold: 0 };
 
 // "Xh Ym" from two clock strings (accepts "hh:mm AM/PM" and 24h "HH:MM").
 export function computeHoursStr(clockIn = "", clockOut = ""): string {
@@ -45,11 +45,12 @@ export function parseWorkedHours(rec: AttStatusRecord): number {
   return m ? Number(m[1]) + Number(m[2] || 0) / 60 : 0;
 }
 
-// Derive the effective attendance status. Mirrors the Attendance dashboard exactly:
-//  • No clock-in            → keep the stored status (Absent / Leave / Week Off).
-//  • Leave / Week Off       → unchanged.
-//  • Clocked in, not out yet → Present (an open shift is never Absent).
-//  • Clocked out            → Present ≥ minHours, Half Day ≥ halfDayThreshold, else Absent.
+// Derive the effective attendance status. Single rule shared by dashboard + reports:
+//  • No clock-in / 0 hours   → Absent (or the stored Leave / Week Off).
+//  • Leave / Week Off        → unchanged.
+//  • Clocked in, not out yet  → Present (an open shift is treated as working).
+//  • Clocked out, ≥ full day  → Present.
+//  • Clocked out, any work    → Half Day (any positive time under a full day counts).
 export function deriveAttendanceStatus(rec: AttStatusRecord, t: AttThresholds): string {
   const clockIn = rec.clockIn ?? "";
   const status = rec.status ?? "";
@@ -60,7 +61,7 @@ export function deriveAttendanceStatus(rec: AttStatusRecord, t: AttThresholds): 
   const clockedOut = !!clockOut && clockOut !== "Ongoing" && clockOut !== "—" && clockOut !== "";
   if (!clockedOut) return status && status !== "Absent" ? status : "Present";
   const hrs = parseWorkedHours(rec);
-  if (hrs >= t.minHours) return "Present";
-  if (hrs >= t.halfDayThreshold) return "Half Day";
-  return "Absent";
+  if (hrs >= t.minHours) return "Present"; // full day or more
+  if (hrs > 0) return "Half Day";          // any work under a full day
+  return "Absent";                          // clocked in and out with no measurable time
 }

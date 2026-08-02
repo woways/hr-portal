@@ -36,7 +36,7 @@ const DEFAULT_HOLIDAYS = [
 ];
 
 const DEFAULT_WORK_TIMINGS = { start: "09:00", end: "18:00", lateThreshold: "09:30", weekOff: "Saturday & Sunday" };
-const DEFAULT_ATT_RULES    = { minHours: "7", halfDayThreshold: "4", gracePeriod: "15", autoAbsentAfter: "30", autoMarkEnabled: false, lateNotif: true, absentNotif: true };
+const DEFAULT_ATT_RULES    = { minHours: "8", halfDayThreshold: "0", gracePeriod: "15", autoAbsentAfter: "30", autoMarkEnabled: false, lateNotif: true, absentNotif: true };
 const DEFAULT_COMPANY      = { name: "", industry: "", website: "", address: "" };
 
 const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];

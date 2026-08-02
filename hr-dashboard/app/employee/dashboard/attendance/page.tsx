@@ -108,18 +108,18 @@ export default function AttendancePage() {
   const [currentTime, setCurrentTime] = useState("");
   const [currentDate, setCurrentDate] = useState("");
   const [isLate, setIsLate] = useState(false);
-  const [minHours, setMinHours] = useState(7);
+  const [minHours, setMinHours] = useState(8);
   const [halfDayThreshold, setHalfDayThreshold] = useState(4);
   const [lateHour, setLateHour] = useState(9);
   const [lateMinute, setLateMinute] = useState(30);
   const [selectedMonth, setSelectedMonth] = useState(getTodayMonthLabel);
 
-  // Derive Present / Half Day / Absent from hours worked per configured thresholds.
+  // Present ≥ full day · Half Day = any work under a full day · Absent = no work.
   function statusFromHours(totalSeconds: number, isWeekend: boolean): AttStatus {
     if (isWeekend) return "Week Off";
     const hrs = totalSeconds / 3600;
     if (hrs >= minHours) return "Present";
-    if (hrs >= halfDayThreshold) return "Half Day";
+    if (hrs > 0) return "Half Day";
     return "Absent";
   }
 
@@ -630,7 +630,7 @@ export default function AttendancePage() {
           <p className="text-gray-500 text-sm mt-1">Track your daily attendance and working hours.</p>
           {/* Same rule line the HR view shows, so both sides read the same cutoff (ATT-003). */}
           <p className="text-xs text-gray-400 mt-1">
-            Status rule: Present ≥ {minHours}h worked · Half Day {halfDayThreshold}–{minHours}h · Absent &lt; {halfDayThreshold}h
+            Status rule: Present ≥ {minHours}h worked · Half Day = any work under {minHours}h · Absent = no clock-in
           </p>
         </div>
         {empId && (

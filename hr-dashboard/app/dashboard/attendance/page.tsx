@@ -72,7 +72,7 @@ export default function AttendancePage() {
   // Configured Late Login Threshold (HH:MM, 24h) from Settings → Work Timings.
   const [lateThreshold, setLateThreshold] = useState("09:30");
   // Min full-day hours and half-day threshold from Settings → Attendance Rules.
-  const [minHours, setMinHours] = useState(7);
+  const [minHours, setMinHours] = useState(8);
   const [halfDayThreshold, setHalfDayThreshold] = useState(4);
   // Standard hours beyond which extra time counts as Overtime (ATT-009). Default 9.
   const [overtimeThreshold, setOvertimeThreshold] = useState(9);
@@ -790,7 +790,7 @@ export default function AttendancePage() {
           {/* Make the active status rule explicit so the cutoff in force is never
               ambiguous (ATT-003) — values come live from Settings → Attendance Rules. */}
           <p className="text-xs text-gray-400 mt-1">
-            Status rule: Present ≥ {minHours}h worked · Half Day {halfDayThreshold}–{minHours}h · Absent &lt; {halfDayThreshold}h · configurable in Settings → Attendance Rules
+            Status rule: Present ≥ {minHours}h worked · Half Day = any work under {minHours}h · Absent = no clock-in · full-day hours configurable in Settings → Attendance Rules
           </p>
         </div>
         <div className="flex gap-3">
