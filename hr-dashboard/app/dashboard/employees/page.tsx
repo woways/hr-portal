@@ -205,18 +205,27 @@ const EMPLOYEE_STATUSES: EmployeeStatus[] = ["Active", "On Leave", "Probation", 
 function normalizeEmployeeStatus(raw: unknown): EmployeeStatus {
   const v = String(raw ?? "").trim().toLowerCase().replace(/[_\s-]+/g, " ");
   const map: Record<string, EmployeeStatus> = {
-    "active": "Active",
-    "on leave": "On Leave",
-    "onleave": "On Leave",
-    "leave": "On Leave",
-    "probation": "Probation",
-    "probationary": "Probation",
-    "exited": "Exited",
-    "exit": "Exited",
-    "inactive": "Exited",
-    "terminated": "Exited",
-    "resigned": "Exited",
-    "left": "Exited",
+    // Active / working
+    "active": "Active", "working": "Active", "employed": "Active",
+    "confirmed": "Active", "permanent": "Active", "regular": "Active",
+    "full time": "Active", "part time": "Active", "on notice": "Active",
+    "notice period": "Active", "serving notice": "Active", "notice": "Active",
+    // On leave (any kind of leave)
+    "on leave": "On Leave", "onleave": "On Leave", "leave": "On Leave",
+    "sabbatical": "On Leave", "maternity": "On Leave", "maternity leave": "On Leave",
+    "paternity": "On Leave", "paternity leave": "On Leave",
+    "medical leave": "On Leave", "sick leave": "On Leave", "on break": "On Leave",
+    "suspended": "On Leave",
+    // Probation / trainee
+    "probation": "Probation", "probationary": "Probation",
+    "probation period": "Probation", "trainee": "Probation",
+    "intern": "Probation", "internship": "Probation", "apprentice": "Probation",
+    // Exited / no longer employed
+    "exited": "Exited", "exit": "Exited", "inactive": "Exited",
+    "terminated": "Exited", "resigned": "Exited", "left": "Exited",
+    "separated": "Exited", "relieved": "Exited", "retired": "Exited",
+    "absconding": "Exited", "absconded": "Exited", "ex employee": "Exited",
+    "former": "Exited", "dismissed": "Exited",
   };
   return map[v] ?? "Active";
 }
