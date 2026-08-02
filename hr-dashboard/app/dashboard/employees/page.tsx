@@ -498,7 +498,7 @@ function FormModal({
                 <input type="date" value={form.probationEndDate} onChange={(e) => f("probationEndDate", e.target.value)} className={inputCls} />
               </div>
               <div>
-                <label className={labelCls}>CTC (Annual)</label>
+                <label className={labelCls}>Annual Payroll</label>
                 <input value={form.ctc} onChange={(e) => f("ctc", e.target.value)} placeholder="e.g. ₹12,00,000" className={inputCls} />
               </div>
               <div>
@@ -721,7 +721,7 @@ function validateBulkRow(row: BulkRow): string | null {
     const cleaned = raw.replace(/[^\d.]/g, "");
     const n = parseFloat(cleaned);
     // Reject negatives too — stripping non-digits would otherwise turn "-5000" into 5000.
-    if (raw.includes("-") || !cleaned || isNaN(n) || n <= 0) return "Salary/CTC must be a valid positive number";
+    if (raw.includes("-") || !cleaned || isNaN(n) || n <= 0) return "Payroll amount must be a valid positive number";
   }
   if (row.pinCode?.trim() && !/^\d{6}$/.test(row.pinCode.trim())) return "PIN code must be 6 digits";
   return null;

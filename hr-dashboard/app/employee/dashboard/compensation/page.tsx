@@ -424,7 +424,7 @@ export default function CompensationPage() {
     <!-- Net Pay Banner -->
     <div class="net-pay">
       <div>
-        <div class="label">Total Take-Home Pay</div>
+        <div class="label">Total Net Payroll</div>
         <div class="words">${numberToWords(slip.totalPay)}</div>
       </div>
       <div class="amount">₹ ${slip.totalPay.toLocaleString("en-IN")}</div>
@@ -506,7 +506,7 @@ export default function CompensationPage() {
           { label: "Last Net Payroll",     val: latestSlip ? val(latestSlip.net)   : "—",      sub: latestSlip?.period ?? "No payslips",  icon: <CheckCircle size={15} className="text-green-600" />, bg: "bg-green-50"  },
           { label: "Total TDS (YTD)",  val: totalTds > 0 ? val(totalTds) : "—",            sub: fy,                                   icon: <TrendingUp size={15} className="text-orange-500" />,  bg: "bg-orange-50" },
           { label: "Pending Payments", val: pendingAmt > 0 ? val(pendingAmt) : "₹0",       sub: pendingSlips.length > 0 ? `${pendingSlips.length} pending` : "All paid", icon: <Clock size={15} className="text-yellow-500" />, bg: "bg-yellow-50" },
-          { label: "Total Pay (YTD)",  val: totalPay  > 0 ? val(totalPay)  : "—",          sub: fy,                                   icon: <CreditCard size={15} className="text-blue-500" />,   bg: "bg-blue-50"   },
+          { label: "Total Payroll (YTD)",  val: totalPay  > 0 ? val(totalPay)  : "—",          sub: fy,                                   icon: <CreditCard size={15} className="text-blue-500" />,   bg: "bg-blue-50"   },
         ].map(({ label, val: v, sub, icon, bg }) => (
           <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-center justify-between mb-3">
@@ -564,7 +564,7 @@ export default function CompensationPage() {
                   <span className="flex items-center gap-1">Bonus <Info size={11} className="text-gray-400" /></span>
                 </th>
               )}
-              <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Total Pay</th>
+              <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Total Payroll</th>
               <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
               <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
             </tr>

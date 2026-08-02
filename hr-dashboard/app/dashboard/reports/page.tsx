@@ -236,7 +236,7 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
         (d.status as string) ?? "—",
       ] as (string | number)[]);
       return {
-        headers: ["Employee", "Emp ID", "Pay Month", "CTC", "HRA", "Deductions", "Net Payroll", "Status"],
+        headers: ["Employee", "Emp ID", "Pay Month", "Payroll", "HRA", "Deductions", "Net Payroll", "Status"],
         rows,
         summary: [
           { label: "Records", value: rows.length },

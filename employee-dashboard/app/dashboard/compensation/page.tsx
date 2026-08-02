@@ -346,7 +346,7 @@ export default function CompensationPage() {
     </div>
     <div class="net-pay">
       <div>
-        <div class="label">Total Take-Home Pay</div>
+        <div class="label">Total Net Payroll</div>
         <div class="words">${numberToWords(slip.totalPay)}</div>
       </div>
       <div class="amount">₹ ${slip.totalPay.toLocaleString("en-IN")}</div>

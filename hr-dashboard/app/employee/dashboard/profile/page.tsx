@@ -1657,7 +1657,7 @@ export default function ProfilePage() {
                 { label: "Reporting Manager",value: empData?.reportingManager },
                 { label: "Location",         value: empData?.branch },
                 { label: "Shift",            value: empData?.shift },
-                { label: "CTC (Annual)",     value: empData?.ctc },
+                { label: "Annual Payroll",     value: empData?.ctc },
                 { label: "Notice Period",    value: empData?.noticePeriod },
                 { label: "Status",           value: empData?.status },
               ].map(({ label, value }) => (
