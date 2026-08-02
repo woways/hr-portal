@@ -794,14 +794,17 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
     const invalid = annotated.filter((r) => !isEmptyBulkRow(r) && r._err).length;
     // Surface the errors on the preview rows so it's clear why a row was rejected.
     if (mode === "multi") setRows(annotated); else setCsvRows(annotated);
-    if (valid.length === 0) {
-      setToast(invalid > 0 ? "No valid rows — fix the highlighted errors first." : "No valid rows to import.");
-      setTimeout(() => setToast(""), 3500);
+    // Block the entire import until every row passes number-format/required checks —
+    // don't silently skip bad rows (EMP-001 retest: "validate numeric fields prior to import").
+    if (invalid > 0) {
+      setToast(`${invalid} row${invalid !== 1 ? "s" : ""} have invalid data (phone/salary/email/PIN). Fix the highlighted rows before importing.`);
+      setTimeout(() => setToast(""), 5000);
       return;
     }
-    if (invalid > 0) {
-      setToast(`${invalid} row${invalid !== 1 ? "s" : ""} with invalid data (phone/salary/email) skipped — see highlighted rows.`);
-      setTimeout(() => setToast(""), 4500);
+    if (valid.length === 0) {
+      setToast("No valid rows to import.");
+      setTimeout(() => setToast(""), 3500);
+      return;
     }
     const emps = valid.map((r, i) =>
       rowToEmployee(r, `EMP${String(nextIdStart + i).padStart(3, "0")}`)
@@ -811,6 +814,7 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
 
   const previewRows = mode === "multi" ? rows : csvRows;
   const validCount = previewRows.filter((r) => !isEmptyBulkRow(r) && !validateBulkRow(r)).length;
+  const invalidCount = previewRows.filter((r) => !isEmptyBulkRow(r) && !!validateBulkRow(r)).length;
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -955,20 +959,23 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                           <th className="px-3 py-2 text-left">#</th>
                           <th className="px-3 py-2 text-left">Name</th>
                           <th className="px-3 py-2 text-left">Email</th>
-                          <th className="px-3 py-2 text-left">Designation</th>
-                          <th className="px-3 py-2 text-left">Department</th>
+                          <th className="px-3 py-2 text-left">Phone</th>
+                          <th className="px-3 py-2 text-left">Payroll (₹)</th>
                           <th className="px-3 py-2 text-left">DOJ</th>
                           <th className="px-3 py-2 text-left">Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {csvRows.map((r, i) => (
+                        {csvRows.map((r, i) => {
+                          const badPhone = !!r.phone?.trim() && !!validatePhone(r.phone);
+                          const badSalary = !!r.ctc?.trim() && isNaN(parseFloat(r.ctc.replace(/[^\d.]/g, "")));
+                          return (
                           <tr key={i} className={r._err ? "bg-red-50" : ""}>
                             <td className="px-3 py-2 text-gray-400">{i + 1}</td>
                             <td className="px-3 py-2 font-medium">{r.name || <span className="text-red-400">—</span>}</td>
                             <td className="px-3 py-2 text-gray-600">{r.email || <span className="text-red-400">—</span>}</td>
-                            <td className="px-3 py-2 text-gray-600">{r.designation || "—"}</td>
-                            <td className="px-3 py-2 text-gray-600">{r.department || "—"}</td>
+                            <td className={`px-3 py-2 ${badPhone ? "text-red-500 font-medium" : "text-gray-600"}`}>{r.phone || "—"}</td>
+                            <td className={`px-3 py-2 ${badSalary ? "text-red-500 font-medium" : "text-gray-600"}`}>{r.ctc || "—"}</td>
                             <td className="px-3 py-2 text-gray-600">{r.doj || "—"}</td>
                             <td className="px-3 py-2">
                               {r._err
@@ -977,7 +984,8 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                               }
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -990,11 +998,13 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
         {/* Footer */}
         <div className="px-6 pb-5 pt-4 border-t shrink-0 flex items-center gap-3">
           {toast && <span className="text-xs text-red-500 mr-auto">{toast}</span>}
-          {!toast && <span className="text-xs text-gray-400 mr-auto">{validCount} valid employee{validCount !== 1 ? "s" : ""} ready to import</span>}
+          {!toast && invalidCount > 0 && <span className="text-xs text-red-500 mr-auto font-medium">⚠ {invalidCount} row{invalidCount !== 1 ? "s" : ""} with invalid phone/salary/email — fix before importing</span>}
+          {!toast && invalidCount === 0 && <span className="text-xs text-gray-400 mr-auto">{validCount} valid employee{validCount !== 1 ? "s" : ""} ready to import</span>}
           <button onClick={onClose} className="px-5 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-50 transition">Cancel</button>
           <button
             onClick={handleImport}
-            disabled={validCount === 0}
+            disabled={validCount === 0 || invalidCount > 0}
+            title={invalidCount > 0 ? "Fix the highlighted invalid rows first" : undefined}
             className="px-6 py-2.5 bg-[#4F3CC9] text-white rounded-xl text-sm font-semibold hover:bg-[#3d2fa8] transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Import {validCount > 0 ? `${validCount} Employee${validCount !== 1 ? "s" : ""}` : ""}
