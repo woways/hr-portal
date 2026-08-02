@@ -13,8 +13,9 @@ import {
 } from "recharts";
 import {
   getEmployees, getCandidates, getAttendance, getLeaveRequests,
-  getPayroll, getGoals, getCompensation,
+  getPayroll, getGoals, getCompensation, getSettingsDoc,
 } from "@/lib/firebaseService";
+import { deriveAttendanceStatus, DEFAULT_ATT_THRESHOLDS, type AttThresholds } from "@/lib/attendanceStatus";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ReportId = "employee" | "hiring" | "attendance" | "leave" | "payroll" | "goal" | "internship";
@@ -112,7 +113,13 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
     // ── Attendance ─────────────────────────────────────────────────────────────
     case "attendance": {
       const today = getToday();
-      const [empDocs, attDocs] = await Promise.all([getEmployees(), getAttendance()]);
+      const [empDocs, attDocs, rulesDoc] = await Promise.all([getEmployees(), getAttendance(), getSettingsDoc("attendanceRules")]);
+      // Use the SAME configured thresholds + derivation as the Attendance dashboard
+      // so Present/Absent counts match instead of reading the raw stored status (BUG-06).
+      const thresholds: AttThresholds = {
+        minHours: parseFloat((rulesDoc?.minHours as string) ?? "") || DEFAULT_ATT_THRESHOLDS.minHours,
+        halfDayThreshold: parseFloat((rulesDoc?.halfDayThreshold as string) ?? "") || DEFAULT_ATT_THRESHOLDS.halfDayThreshold,
+      };
       const empMap = new Map<string, string>();
       (empDocs as Record<string, unknown>[]).forEach(d => {
         const id = (d.empId ?? d.employeeId) as string;
@@ -124,6 +131,12 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
       });
       const rows = todayDocs.map((d) => {
         const r = d as Record<string, unknown>;
+        const status = deriveAttendanceStatus({
+          clockIn: (r.clockIn as string) ?? "",
+          clockOut: (r.clockOut as string) ?? "",
+          status: (r.status as string) ?? "",
+          workingHours: (r.workingHours as string) ?? "",
+        }, thresholds);
         return [
           (r.name as string) ?? empMap.get(r.empId as string) ?? "—",
           (r.empId as string) ?? "—",
@@ -132,19 +145,21 @@ async function fetchReportData(id: ReportId): Promise<ReportData> {
           (r.clockIn as string) || "—",
           (r.clockOut as string) || "—",
           (r.workingHours as string) || "—",
-          (r.status as string) ?? "—",
+          status,
           (r.location as string) ?? "—",
           r.late ? "Yes" : "No",
         ];
       });
-      const present = rows.filter(r => r[7] === "Present").length;
-      const absent  = rows.filter(r => r[7] === "Absent").length;
+      const present  = rows.filter(r => r[7] === "Present").length;
+      const halfDay  = rows.filter(r => r[7] === "Half Day").length;
+      const absent   = rows.filter(r => r[7] === "Absent").length;
       return {
         headers: ["Name", "Emp ID", "Dept", "Date", "Clock In", "Clock Out", "Hours", "Status", "Location", "Late"],
         rows,
         summary: [
           { label: "Today's Date", value: today },
           { label: "Present", value: present },
+          { label: "Half Day", value: halfDay },
           { label: "Absent", value: absent },
           { label: "Present %", value: rows.length ? `${Math.round(present / rows.length * 100)}%` : "0%" },
         ],

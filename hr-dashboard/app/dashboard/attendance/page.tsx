@@ -7,6 +7,7 @@ import {
 } from "recharts";
 import { getAttendance, updateAttendance, upsertAttendance, updateRegularizationStatus, markHRNotifRead } from "@/lib/firebaseService";
 import { invalidateAttendance } from "@/lib/cachedService";
+import { deriveAttendanceStatus } from "@/lib/attendanceStatus";
 import { readCache, writeCache } from "@/lib/cache";
 import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -618,22 +619,9 @@ export default function AttendancePage() {
   // value). A record with a real clock-in is never "Absent" (ATT-008); Leave / Week
   // Off are left untouched.
   const normalizedRecords = records.map((r) => {
-    const hasClockIn = !!r.clockIn && r.clockIn !== "—" && r.clockIn !== "";
-    if (!hasClockIn) return r;
-    if (r.status === "Leave" || r.status === "Week Off") return r;
-    const clockedOut = !!r.clockOut && r.clockOut !== "Ongoing" && r.clockOut !== "—" && r.clockOut !== "";
-    if (!clockedOut) {
-      return r.status === "Absent" ? { ...r, status: "Present" as AttendanceStatus } : r;
-    }
-    const hrs = workedHrs(r);
-    // Same three-way rule the employee dashboard uses (ATT-003): a clocked-out day
-    // is Present at/above the full-day minimum, Half Day at/above the half-day
-    // threshold, otherwise Absent — so both dashboards agree on the same record.
-    // (An OPEN/ongoing shift is handled above and stays Present per ATT-008.)
-    let derived: AttendanceStatus;
-    if (hrs >= minHours) derived = "Present";
-    else if (hrs >= halfDayThreshold) derived = "Half Day";
-    else derived = "Absent";
+    // Derive status via the shared helper so the Attendance dashboard and the
+    // Reports module always agree on Present/Half Day/Absent (BUG-06 / ATT-003).
+    const derived = deriveAttendanceStatus(r, { minHours, halfDayThreshold }) as AttendanceStatus;
     // Derive overtime from hours worked beyond the standard threshold (ATT-009).
     const overtimeHours = overtimeFor(r);
     if (derived === r.status && overtimeHours === r.overtimeHours) return r;
