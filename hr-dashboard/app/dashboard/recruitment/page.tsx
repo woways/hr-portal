@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { Plus, Search, X, Star, Download, Eye, Pencil, Upload, FileText, Loader2 } from "lucide-react";
-import { collection, addDoc, getDocs, doc, setDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, doc, getDoc, setDoc, query, where } from "firebase/firestore";
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { DEPARTMENTS } from "@/lib/constants";
@@ -562,6 +562,39 @@ export default function RecruitmentPage() {
     saveOnboarding(id, { employeeCreated: true });
   }
 
+  // Is this Employee ID already taken — by a real employee OR another onboarding
+  // record? Checks the employees collection by both doc id and employeeId field,
+  // plus in-progress onboarding rows, so no two people can share an ID (BUG-02).
+  async function isEmployeeIdTaken(rawId: string): Promise<boolean> {
+    const id = rawId.trim();
+    if (!id) return false;
+    const clash = id.toUpperCase();
+    if (onboarding.some((o) => o.empId.trim().toUpperCase() === clash)) return true;
+    try {
+      const byDocId = await getDoc(doc(db, "employees", id));
+      if (byDocId.exists()) return true;
+      const byField = await getDocs(query(collection(db, "employees"), where("employeeId", "==", id)));
+      if (!byField.empty) return true;
+    } catch { /* network issue — fall through, don't block on read failure */ }
+    return false;
+  }
+
+  // Suggest the next free EMP0xx id (max existing across employees + onboarding + 1).
+  async function suggestNextEmpId(): Promise<string> {
+    const nums: number[] = [];
+    for (const o of onboarding) { const n = parseInt(o.empId.replace(/\D/g, ""), 10); if (!isNaN(n)) nums.push(n); }
+    try {
+      const snap = await getDocs(collection(db, "employees"));
+      snap.docs.forEach((d) => {
+        const eid = ((d.data() as Record<string, unknown>).employeeId as string) ?? d.id;
+        const n = parseInt(String(eid).replace(/\D/g, ""), 10);
+        if (!isNaN(n)) nums.push(n);
+      });
+    } catch { /* ignore */ }
+    const next = (nums.length ? Math.max(...nums) : 0) + 1;
+    return `EMP${String(next).padStart(3, "0")}`;
+  }
+
   async function handleAddOnboarding() {
     const show = (m: string) => { setOnboardingToast(m); setTimeout(() => setOnboardingToast(""), 3500); };
     if (!onboardingForm.name.trim()) { show("Candidate name is required."); return; }
@@ -572,6 +605,12 @@ export default function RecruitmentPage() {
     if (mobileDigits.length !== 10 || /^[0-5]/.test(mobileDigits)) { show("A valid 10-digit contact number (starting 6-9) is required."); return; }
     if (!onboardingForm.role.trim()) { show("Role is required."); return; }
     if (!onboardingForm.empId.trim()) { show("Employee ID is required."); return; }
+    // Enforce Employee ID uniqueness at assignment time (BUG-02).
+    if (await isEmployeeIdTaken(onboardingForm.empId)) {
+      const suggestion = await suggestNextEmpId();
+      show(`Employee ID "${onboardingForm.empId.trim()}" is already assigned. Try ${suggestion}.`);
+      return;
+    }
     if (!onboardingForm.doj) { show("Date of joining is required."); return; }
     if (!onboardingForm.department.trim()) { show("Department is required."); return; }
     const newId = `ONB${Date.now()}`;
@@ -1413,7 +1452,10 @@ export default function RecruitmentPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Employee ID *</label>
-                <input value={onboardingForm.empId} onChange={(e) => setOnboardingForm({ ...onboardingForm, empId: e.target.value })} placeholder="e.g. EMP014" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
+                <div className="flex gap-2">
+                  <input value={onboardingForm.empId} onChange={(e) => setOnboardingForm({ ...onboardingForm, empId: e.target.value })} placeholder="e.g. EMP014" className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
+                  <button type="button" onClick={async () => { const id = await suggestNextEmpId(); setOnboardingForm((f) => ({ ...f, empId: id })); }} title="Fill next available ID" className="shrink-0 px-3 rounded-xl border border-gray-200 text-xs font-medium text-[#4F3CC9] hover:bg-[#F5F3FF]">Auto</button>
+                </div>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Date of Joining *</label>
