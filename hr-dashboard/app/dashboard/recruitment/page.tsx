@@ -531,7 +531,7 @@ export default function RecruitmentPage() {
     if (!offerForm.candidateName.trim()) { showCandidateToast("Please enter the candidate name."); return; }
     if (!offerForm.role.trim()) { showCandidateToast("Please enter the role for this offer."); return; }
     const salaryDigits = offerForm.salary.replace(/[^\d.]/g, "");
-    if (!offerForm.salary.trim() || !(parseFloat(salaryDigits) > 0)) { showCandidateToast("Please enter a valid payroll/stipend amount."); return; }
+    if (!offerForm.salary.trim() || offerForm.salary.includes("-") || !(parseFloat(salaryDigits) > 0)) { showCandidateToast("Please enter a valid payroll/stipend amount."); return; }
     if (!offerForm.offerDate) { showCandidateToast("Please select an offer date."); return; }
     const newId = `OFF${Date.now()}`;
     const newOffer: Offer = { id: newId, ...offerForm };

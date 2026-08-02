@@ -160,8 +160,10 @@ function initials(name: string) {
 }
 
 function validatePhone(phone: string): string | null {
-  const digits = phone.replace(/\D/g, "");
-  if (digits.length === 0) return null; // optional field — skip if blank
+  let digits = phone.replace(/\D/g, "");
+  if (digits.length === 0) return null; // optional at this level — required check is separate
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2); // +91 country code
+  if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);   // leading 0
   if (digits.length !== 10) return "Phone number must be exactly 10 digits.";
   if (/^[0-5]/.test(digits)) return "Indian phone numbers must start with 6, 7, 8 or 9.";
   return null;
@@ -677,7 +679,9 @@ function parseCsv(text: string): BulkRow[] {
     "reporting manager": "reportingManager", "manager": "reportingManager",
     "notice period": "noticePeriod",
     "pin code": "pinCode", "pin": "pinCode", "zip": "pinCode", "postal code": "pinCode",
-    "salary": "ctc", "annual ctc": "ctc",
+    "salary": "ctc", "annual ctc": "ctc", "payroll": "ctc", "payroll (₹)": "ctc",
+    "salary (₹)": "ctc", "ctc (₹)": "ctc", "monthly salary": "ctc",
+    "mobile no": "phone", "mobile no.": "phone",
   };
   const headers = splitCsvLine(lines[0]).map((h) => {
     const key = h.toLowerCase().replace(/\*/g, "").trim();
@@ -705,13 +709,19 @@ function validateBulkRow(row: BulkRow): string | null {
   const email = row.email?.trim() ?? "";
   if (!email) return "Email is required";
   if (!EMAIL_RE.test(email)) return "Invalid email format";
-  if (row.phone?.trim()) {
-    const phoneErr = validatePhone(row.phone);
-    if (phoneErr) return `Phone: ${phoneErr}`;
-  }
+  // Phone is required and must be a valid 10-digit number (matches the single
+  // Add-Employee form). Rejects letters, wrong length and invalid prefixes.
+  if (!row.phone?.trim()) return "Phone number is required";
+  const phoneErr = validatePhone(row.phone);
+  if (phoneErr) return `Phone: ${phoneErr}`;
+  // Salary / CTC is optional, but if given it must be a positive number
+  // (accepts formatted values like "₹8,50,000"; rejects text, 0 and negatives).
   if (row.ctc?.trim()) {
-    const n = parseFloat(row.ctc.replace(/[^\d.]/g, ""));
-    if (isNaN(n) || n <= 0) return "Salary/CTC must be a valid number";
+    const raw = row.ctc.trim();
+    const cleaned = raw.replace(/[^\d.]/g, "");
+    const n = parseFloat(cleaned);
+    // Reject negatives too — stripping non-digits would otherwise turn "-5000" into 5000.
+    if (raw.includes("-") || !cleaned || isNaN(n) || n <= 0) return "Salary/CTC must be a valid positive number";
   }
   if (row.pinCode?.trim() && !/^\d{6}$/.test(row.pinCode.trim())) return "PIN code must be 6 digits";
   return null;
@@ -967,8 +977,8 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {csvRows.map((r, i) => {
-                          const badPhone = !!r.phone?.trim() && !!validatePhone(r.phone);
-                          const badSalary = !!r.ctc?.trim() && isNaN(parseFloat(r.ctc.replace(/[^\d.]/g, "")));
+                          const badPhone = !r.phone?.trim() || !!validatePhone(r.phone);
+                          const badSalary = !!r.ctc?.trim() && (r.ctc.includes("-") || !(parseFloat(r.ctc.replace(/[^\d.]/g, "")) > 0));
                           return (
                           <tr key={i} className={r._err ? "bg-red-50" : ""}>
                             <td className="px-3 py-2 text-gray-400">{i + 1}</td>
