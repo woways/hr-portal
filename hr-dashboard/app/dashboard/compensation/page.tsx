@@ -95,7 +95,13 @@ export default function CompensationPage() {
   function showMsg(msg: string) { setToast(msg); setTimeout(() => setToast(null), 3000); }
 
   async function handleAddComp() {
-    if (!addForm.name || !addForm.empId || saving) return;
+    if (saving) return;
+    // Required-field validation before a payroll record can be saved (BUG-04).
+    if (!addForm.empId || !addForm.name) { showMsg("Please select an employee."); return; }
+    if (!addForm.designation?.trim()) { showMsg("Designation is required."); return; }
+    if (!(addForm.salary > 0)) { showMsg("Payroll amount must be greater than ₹0."); return; }
+    if (addForm.incentive < 0 || addForm.bonus < 0 || addForm.deductions < 0) { showMsg("Incentive, bonus and deductions cannot be negative."); return; }
+    if (addForm.paymentStatus === "Paid" && !addForm.paymentDate) { showMsg("Payment date is required for a Paid record."); return; }
     setSaving(true);
     try {
       const netPay = addForm.netPay || (addForm.salary + addForm.incentive + addForm.bonus - addForm.deductions);
@@ -886,7 +892,7 @@ export default function CompensationPage() {
                 </div>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Designation</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Designation *</label>
                 <input value={addForm.designation} onChange={(e) => setAddForm({ ...addForm, designation: e.target.value })} placeholder="e.g. Software Engineer" className={inputCls} />
               </div>
               <div>
@@ -896,8 +902,8 @@ export default function CompensationPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Payroll (₹)</label>
-                <input type="number" value={addForm.salary || ""} onChange={(e) => setAddForm({ ...addForm, salary: Number(e.target.value) })} className={inputCls} />
+                <label className="text-xs font-medium text-gray-600 block mb-1">Payroll (₹) *</label>
+                <input type="number" min="0" value={addForm.salary || ""} onChange={(e) => setAddForm({ ...addForm, salary: Number(e.target.value) })} className={inputCls} />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Incentive (₹)</label>
