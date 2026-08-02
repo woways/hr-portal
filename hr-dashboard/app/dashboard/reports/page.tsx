@@ -25,6 +25,18 @@ interface ReportData {
   summary?: { label: string; value: string | number }[];
 }
 
+// Collapse work-mode values to one canonical, consistently-cased label so the
+// Work Mode Distribution chart shows a single entry per category (BUG-05) —
+// e.g. "Hybrid"/"hybrid" merge, and WFH/office variants map to the canonical set.
+function canonicalWorkMode(raw: unknown): string {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (!v) return "On-site";
+  if (["remote", "wfh", "work from home", "work-from-home"].includes(v)) return "Remote";
+  if (["on-site", "onsite", "on site", "office", "in-office", "in office"].includes(v)) return "On-site";
+  if (v === "hybrid") return "Hybrid";
+  return v.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function getToday() { return new Date().toISOString().split("T")[0]; }
 function fmtDate(d: string) { return d ? d.slice(0, 10) : "—"; }
 function fmtINR(n: number | string) {
@@ -473,7 +485,7 @@ export default function ReportsPage() {
 
       // Work mode
       const modeMap: Record<string, number> = {};
-      (emps as Record<string, unknown>[]).forEach(e => { const m = String(e.workMode ?? "Office"); modeMap[m] = (modeMap[m] ?? 0) + 1; });
+      (emps as Record<string, unknown>[]).forEach(e => { const m = canonicalWorkMode(e.workMode); modeMap[m] = (modeMap[m] ?? 0) + 1; });
       const workMode = Object.entries(modeMap).map(([mode, count]) => ({ mode, count }));
 
       // Hiring funnel
@@ -679,9 +691,9 @@ export default function ReportsPage() {
                     {analytics.workMode.length === 0 ? (
                       <p className="text-center text-xs text-gray-400 py-10">No employee data</p>
                     ) : (
-                      <ResponsiveContainer width="100%" height={220}>
-                        <PieChart>
-                          <Pie data={analytics.workMode} dataKey="count" nameKey="mode" cx="50%" cy="50%" outerRadius={80} label={(props) => { const p = props as unknown as { mode: string; percent?: number }; return `${p.mode} ${((p.percent ?? 0) * 100).toFixed(0)}%`; }} labelLine={false}>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <PieChart margin={{ top: 22, right: 16, bottom: 12, left: 16 }}>
+                          <Pie data={analytics.workMode} dataKey="count" nameKey="mode" cx="50%" cy="50%" outerRadius={62} label={(props) => { const p = props as unknown as { mode: string; percent?: number }; return `${p.mode} ${((p.percent ?? 0) * 100).toFixed(0)}%`; }} labelLine={false}>
                             {analytics.workMode.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                           </Pie>
                           <Tooltip contentStyle={{ borderRadius: "10px", border: "1px solid #e5e7eb", fontSize: "12px" }} />
