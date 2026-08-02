@@ -453,6 +453,28 @@ export default function RecruitmentPage() {
     saveInterview(id, { finalDecision: decision, status: "Completed" });
   }
 
+  // Rescheduling starts a fresh interview round, so the previous round's outcome
+  // must be cleared — status back to "Scheduled" and the final decision, rating,
+  // feedback and reminder reset (BUG-01). Also persists to Firestore (NEW-002).
+  function handleConfirmReschedule() {
+    if (!rescheduleInterview) return;
+    if (rescheduleInterview.date && rescheduleInterview.date < todayLocalStr()) { showCandidateToast("Interview date cannot be in the past."); return; }
+    if (!rescheduleInterview.time) { showCandidateToast("Please select a new interview time."); return; }
+    if (!isValidMeetingLink(rescheduleInterview.meetingLink)) { showCandidateToast("Please enter a valid meeting link URL (e.g. https://meet.google.com/...)."); return; }
+    const reset = {
+      status: "Scheduled" as InterviewStatus,
+      finalDecision: "" as const,
+      rating: 0,
+      feedback: "",
+      reminderSent: false,
+    };
+    const rescheduled: Interview = { ...rescheduleInterview, ...reset };
+    setInterviews(interviews.map((i) => i.id === rescheduled.id ? rescheduled : i));
+    saveInterview(rescheduled.id, rescheduled);
+    setRescheduleInterview(null);
+    showCandidateToast(`Interview with ${rescheduled.candidateName} rescheduled — status reset to Scheduled.`);
+  }
+
   function updateOfferStatus(id: string, status: OfferStatus) {
     setOffers(offers.map((o) => o.id === id ? { ...o, status } : o));
     saveOffer(id, { status });
@@ -1148,7 +1170,7 @@ export default function RecruitmentPage() {
             </div>
             <div className="px-6 pb-6 flex gap-3">
               <button onClick={() => setRescheduleInterview(null)} className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50">Cancel</button>
-              <button onClick={() => { if (rescheduleInterview.date && rescheduleInterview.date < todayLocalStr()) { showCandidateToast("Interview date cannot be in the past."); return; } if (!isValidMeetingLink(rescheduleInterview.meetingLink)) { showCandidateToast("Please enter a valid meeting link URL (e.g. https://meet.google.com/...)."); return; } setInterviews(interviews.map((i) => i.id === rescheduleInterview.id ? rescheduleInterview : i)); setRescheduleInterview(null); }} className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8]">Confirm Reschedule</button>
+              <button onClick={handleConfirmReschedule} className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8]">Confirm Reschedule</button>
             </div>
           </div>
         </div>
