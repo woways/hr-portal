@@ -4,6 +4,7 @@ import { Plus, Search, X, Star, Download, Eye, Pencil, Upload, FileText, Loader2
 import { collection, addDoc, getDocs, doc, getDoc, setDoc, query, where } from "firebase/firestore";
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
+import { invalidateEmployees } from "@/lib/cachedService";
 import { DEPARTMENTS } from "@/lib/constants";
 import { useDepartments } from "@/lib/useDepartments";
 import { EmptyState } from "@/components/EmptyState";
@@ -557,9 +558,40 @@ export default function RecruitmentPage() {
     setShowDocModal((prev) => prev ? { ...prev, docs: prev.docs.map((d) => d.name === docName ? { ...d, submitted: !d.submitted } : d) } : null);
   }
 
-  function markEmployeeCreated(id: string) {
-    setOnboarding(onboarding.map((o) => o.id === id ? { ...o, employeeCreated: true } : o));
-    saveOnboarding(id, { employeeCreated: true });
+  // Actually create the employee record in the Employees module from an onboarding
+  // row and mark it done — previously this only flipped a flag and never synced the
+  // person to Employees (BUG-03). The Employees list picks it up on its next load.
+  async function createEmployeeFromOnboarding(o: Onboarding) {
+    const show = (m: string) => { setOnboardingToast(m); setTimeout(() => setOnboardingToast(""), 3500); };
+    if (!o.empId?.trim()) { show("This candidate has no Employee ID assigned."); return; }
+    if (o.employeeCreated) { show(`${o.name} is already in Employees.`); return; }
+    try {
+      // Don't overwrite an existing employee that happens to share this ID.
+      const existing = await getDoc(doc(db, "employees", o.empId));
+      if (existing.exists()) { show(`An employee with ID ${o.empId} already exists — cannot create a duplicate.`); return; }
+      await setDoc(doc(db, "employees", o.empId), {
+        employeeId: o.empId,
+        name: o.name,
+        email: o.email,
+        phone: o.mobile.replace(/\D/g, ""),
+        designation: o.role,
+        role: "Employee",
+        department: o.department,
+        reportingManager: o.manager || "",
+        workMode: o.workMode || "Remote",
+        employmentType: "Full-Time",
+        doj: o.doj,
+        status: "Active",
+        source: "Onboarding",
+        createdAt: new Date().toISOString(),
+      }, { merge: true });
+      invalidateEmployees();
+      setOnboarding(onboarding.map((x) => x.id === o.id ? { ...x, employeeCreated: true } : x));
+      saveOnboarding(o.id, { employeeCreated: true });
+      show(`${o.name} added to the Employees module (${o.empId}).`);
+    } catch {
+      show("Failed to create the employee record. Please try again.");
+    }
   }
 
   // Is this Employee ID already taken — by a real employee OR another onboarding
@@ -985,7 +1017,11 @@ export default function RecruitmentPage() {
                         <td className="px-4 py-3">
                           {o.employeeCreated
                             ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">✓ Created</span>
-                            : <button onClick={() => markEmployeeCreated(o.id)} disabled={!allDone} title={!allDone ? "Submit all docs first" : "Create employee account"} className={`text-xs px-2 py-0.5 rounded-lg font-medium transition ${allDone ? "bg-[#4F3CC9] text-white hover:bg-[#3d2fa8]" : "bg-gray-100 text-gray-400 cursor-not-allowed"}`}>Create</button>
+                            : <button
+                                onClick={() => { if (allDone || window.confirm(`${submitted}/${total} documents submitted for ${o.name}. Create the employee record now anyway?`)) createEmployeeFromOnboarding(o); }}
+                                title={allDone ? "Create employee account in the Employees module" : "Documents still pending — you can still create the employee"}
+                                className="text-xs px-2 py-0.5 rounded-lg font-medium transition bg-[#4F3CC9] text-white hover:bg-[#3d2fa8]"
+                              >Create</button>
                           }
                         </td>
                         <td className="px-4 py-3">
@@ -1410,11 +1446,18 @@ export default function RecruitmentPage() {
                     style={{ width: `${Math.round((showDocModal.docs.filter(d => d.submitted).length / showDocModal.docs.length) * 100)}%` }} />
                 </div>
               </div>
-              {showDocModal.docs.every(d => d.submitted) && !showDocModal.employeeCreated && (
+              {!showDocModal.employeeCreated && (
                 <div className="mt-3 p-3 bg-[#EDE9FF] rounded-xl text-center">
-                  <p className="text-xs text-[#4F3CC9] font-medium mb-2">All documents submitted! Ready to create employee.</p>
-                  <button onClick={() => { markEmployeeCreated(showDocModal.id); setShowDocModal(null); }} className="bg-[#4F3CC9] text-white text-xs px-4 py-2 rounded-xl font-semibold hover:bg-[#3d2fa8]">Create Employee Account</button>
+                  <p className="text-xs text-[#4F3CC9] font-medium mb-2">
+                    {showDocModal.docs.every(d => d.submitted)
+                      ? "All documents submitted! Ready to create the employee record."
+                      : "You can create the employee record now, or after all documents are submitted."}
+                  </p>
+                  <button onClick={() => { const o = showDocModal; setShowDocModal(null); createEmployeeFromOnboarding(o); }} className="bg-[#4F3CC9] text-white text-xs px-4 py-2 rounded-xl font-semibold hover:bg-[#3d2fa8]">Create Employee Account</button>
                 </div>
+              )}
+              {showDocModal.employeeCreated && (
+                <p className="mt-3 p-3 bg-teal-50 rounded-xl text-center text-xs text-teal-700 font-medium">✓ Employee record created in the Employees module.</p>
               )}
             </div>
             <p className="px-6 pb-4 text-xs text-gray-400">Click any document to toggle submitted status</p>
