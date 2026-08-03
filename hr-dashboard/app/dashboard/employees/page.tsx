@@ -171,6 +171,31 @@ function validatePhone(phone: string): string | null {
   return null;
 }
 
+// Normalize any common date string to strict ISO YYYY-MM-DD (BUG-EMP-01), so the
+// Employees module never mixes formats (e.g. "01-27-2023" MM-DD-YYYY becomes
+// "2023-01-27"). Unparseable values are returned unchanged.
+function toISODate(raw: unknown): string {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  const pad = (n: number | string) => String(n).padStart(2, "0");
+  // Already year-first (YYYY-MM-DD / YYYY/MM/DD)
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (m) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  // Year-last (MM-DD-YYYY or DD-MM-YYYY, any of - / .)
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (m) {
+    const a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = m[3];
+    let month = a, day = b;
+    if (a > 12) { day = a; month = b; }          // clearly DD-MM-YYYY
+    else if (b > 12) { month = a; day = b; }     // clearly MM-DD-YYYY
+    // else both ≤ 12 → ambiguous; assume MM-DD-YYYY (matches the observed data)
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return `${y}-${pad(month)}-${pad(day)}`;
+  }
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return s; // unparseable — leave as-is
+}
+
 function validateDob(dob: string): string | null {
   if (!dob) return null; // optional field — skip if blank
   const d = new Date(dob);
@@ -748,7 +773,7 @@ function rowToEmployee(row: BulkRow, id: string): Employee {
     designation: row.designation, department: row.department || DEPARTMENTS[0], role: row.role || "",
     workMode: (row.workMode as WorkMode) || "Remote",
     employmentType: (row.employmentType as EmpType) || "Full-Time",
-    doj: row.doj, gender: row.gender || "Male", dob: row.dob,
+    doj: toISODate(row.doj), gender: row.gender || "Male", dob: toISODate(row.dob),
     reportingManager: row.reportingManager || "",
     branch: row.branch || "Bengaluru HQ", shift: row.shift || "9AM–6PM",
     ctc: row.ctc, noticePeriod: row.noticePeriod || "30 Days",
@@ -999,7 +1024,7 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                             <td className="px-3 py-2 text-gray-600">{r.email || <span className="text-red-400">—</span>}</td>
                             <td className={`px-3 py-2 ${badPhone ? "text-red-500 font-medium" : "text-gray-600"}`}>{r.phone || "—"}</td>
                             <td className={`px-3 py-2 ${badSalary ? "text-red-500 font-medium" : "text-gray-600"}`}>{r.ctc || "—"}</td>
-                            <td className="px-3 py-2 text-gray-600">{r.doj || "—"}</td>
+                            <td className="px-3 py-2 text-gray-600">{toISODate(r.doj) || "—"}</td>
                             <td className="px-3 py-2">
                               {r._err
                                 ? <span className="text-red-500">{r._err}</span>
@@ -1073,6 +1098,7 @@ export default function EmployeesPage() {
     try {
       const docs = await getEmployees();
       const statusFixes: { docId: string; status: EmployeeStatus }[] = [];
+      const dateFixes: { docId: string; data: Record<string, string> }[] = [];
       const data: Employee[] = docs.map((d) => {
         const r = d as Record<string, unknown>;
         const normStatus = normalizeEmployeeStatus(r.status);
@@ -1082,6 +1108,14 @@ export default function EmployeesPage() {
         if (typeof r.status === "string" && r.status.trim() && !EMPLOYEE_STATUSES.includes(r.status.trim() as EmployeeStatus)) {
           statusFixes.push({ docId: r.id as string, status: normStatus });
         }
+        // Normalize date fields to strict ISO (BUG-EMP-01) and persist the fix so the
+        // stored data — not just the display — is consistent and correctly sortable.
+        const isoDoj = toISODate(r.doj);
+        const isoDob = toISODate(r.dob);
+        const dfix: Record<string, string> = {};
+        if (typeof r.doj === "string" && r.doj.trim() && isoDoj !== r.doj) dfix.doj = isoDoj;
+        if (typeof r.dob === "string" && r.dob.trim() && isoDob !== r.dob) dfix.dob = isoDob;
+        if (Object.keys(dfix).length) dateFixes.push({ docId: r.id as string, data: dfix });
         return {
           id: (r.employeeId ?? r.id) as string,
           name: (r.name as string) ?? "",
@@ -1090,7 +1124,7 @@ export default function EmployeesPage() {
           role: (r.role as string) ?? "",
           workMode: ((r.workMode as WorkMode) ?? "Remote"),
           employmentType: ((r.employmentType as EmpType) ?? "Full-Time"),
-          doj: (r.doj as string) ?? "",
+          doj: toISODate(r.doj),
           status: normStatus,
           email: (r.email as string) ?? "",
           phone: (r.phone as string) ?? "",
@@ -1098,7 +1132,7 @@ export default function EmployeesPage() {
           emergencyName: (r.emergencyName as string) ?? "",
           reportingManager: (r.reportingManager as string) ?? "",
           gender: (r.gender as string) ?? "",
-          dob: (r.dob as string) ?? "",
+          dob: toISODate(r.dob),
           bloodGroup: (r.bloodGroup as string) ?? "",
           personalEmail: (r.personalEmail as string) ?? "",
           currentAddress: (r.currentAddress as string) ?? "",
@@ -1139,6 +1173,10 @@ export default function EmployeesPage() {
       // (from imports before EMP-009 was fixed) are cleaned up at the source.
       for (const fix of statusFixes) {
         updateEmployee(fix.docId, { status: fix.status }).catch(() => {});
+      }
+      // Persist normalized ISO dates so the stored data is consistent (BUG-EMP-01).
+      for (const fix of dateFixes) {
+        updateEmployee(fix.docId, fix.data).catch(() => {});
       }
     } catch (err) {
       setAddToast({ msg: "Failed to load employees. Please refresh and try again.", ok: false });
@@ -1507,7 +1545,7 @@ export default function EmployeesPage() {
       "Department": e.department,
       "Work Mode": e.workMode,
       "Employment Type": e.employmentType,
-      "Date of Joining": e.doj,
+      "Date of Joining": toISODate(e.doj),
       "Status": e.status,
       "Work Email": e.email,
       "Phone": e.phone,
@@ -1517,7 +1555,7 @@ export default function EmployeesPage() {
       "CTC": e.ctc,
       "Notice Period": e.noticePeriod,
       "Gender": e.gender,
-      "Date of Birth": e.dob,
+      "Date of Birth": toISODate(e.dob),
       "Blood Group": e.bloodGroup,
       "City": e.city,
       "State": e.state,
@@ -1621,7 +1659,7 @@ export default function EmployeesPage() {
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${workModeColor[emp.workMode]}`}>{emp.workMode}</span>
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs">{emp.employmentType}</td>
-                  <td className="px-4 py-3 text-gray-600 text-xs">{emp.doj}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">{toISODate(emp.doj) || "—"}</td>
                   <td className="px-4 py-3">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[emp.status]}`}>{emp.status}</span>
                   </td>
@@ -1838,7 +1876,7 @@ export default function EmployeesPage() {
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div><p className="text-xs text-gray-400">Full Name</p><p className="font-medium">{viewEmp.name || "—"}</p></div>
                     <div><p className="text-xs text-gray-400">Gender</p><p className="font-medium">{viewEmp.gender || "—"}</p></div>
-                    <div><p className="text-xs text-gray-400">Date of Birth</p><p className="font-medium">{viewEmp.dob || "—"}</p></div>
+                    <div><p className="text-xs text-gray-400">Date of Birth</p><p className="font-medium">{toISODate(viewEmp.dob) || "—"}</p></div>
                     <div><p className="text-xs text-gray-400">Blood Group</p><p className="font-medium">{viewEmp.bloodGroup || "—"}</p></div>
                     <div><p className="text-xs text-gray-400">Work Email</p><p className="font-medium text-xs break-all">{viewEmp.email || "—"}</p></div>
                     <div><p className="text-xs text-gray-400">Personal Email</p><p className="font-medium text-xs break-all">{viewEmp.personalEmail || "—"}</p></div>
@@ -1867,13 +1905,13 @@ export default function EmployeesPage() {
                   <div><p className="text-xs text-gray-400">Department</p><p className="font-medium">{viewEmp.department}</p></div>
                   <div><p className="text-xs text-gray-400">Employment Type</p><p className="font-medium">{viewEmp.employmentType}</p></div>
                   <div><p className="text-xs text-gray-400">Work Mode</p><p className="font-medium">{viewEmp.workMode}</p></div>
-                  <div><p className="text-xs text-gray-400">Date of Joining</p><p className="font-medium">{viewEmp.doj || "—"}</p></div>
+                  <div><p className="text-xs text-gray-400">Date of Joining</p><p className="font-medium">{toISODate(viewEmp.doj) || "—"}</p></div>
                   <div><p className="text-xs text-gray-400">Reporting Manager</p><p className="font-medium">{viewEmp.reportingManager || "—"}</p></div>
                   <div><p className="text-xs text-gray-400">Status</p>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[viewEmp.status]}`}>{viewEmp.status}</span>
                   </div>
                   <div className="col-span-2 mt-2">
-                    <p className="text-xs text-gray-500">• Joined as {viewEmp.designation || "employee"} on {viewEmp.doj || "N/A"}</p>
+                    <p className="text-xs text-gray-500">• Joined as {viewEmp.designation || "employee"} on {toISODate(viewEmp.doj) || "N/A"}</p>
                   </div>
                 </div>
               )}
