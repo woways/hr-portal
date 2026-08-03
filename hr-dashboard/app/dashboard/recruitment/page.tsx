@@ -18,6 +18,8 @@ type OfferStatus = "Pending" | "Accepted" | "Rejected" | "Expired";
 
 interface Candidate {
   id: string;
+  candidateId?: string;   // human-readable auto-incrementing ID (CAND-#####), not the doc key
+  createdAt?: string;
   name: string;
   mobile: string;
   email: string;
@@ -220,10 +222,24 @@ export default function RecruitmentPage() {
     if (cached && cached.length) setCandidates(cached);
     getDocs(collection(db, "candidates")).then((snap) => {
       const loaded = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Candidate));
+      // Assign a human-readable, auto-incrementing candidate ID (CAND-#####) to any
+      // record that lacks one, and persist it — so the ID column never shows the raw
+      // Firebase document key (BUG-REC-04). Numbering continues from the highest.
+      let maxNum = Math.max(0, ...loaded.map((c) => parseInt(String(c.candidateId ?? "").replace(/\D/g, ""), 10)).filter((n) => !isNaN(n)));
+      loaded
+        .filter((c) => !c.candidateId)
+        .sort((a, b) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")))
+        .forEach((c) => { maxNum += 1; c.candidateId = `CAND-${String(maxNum).padStart(5, "0")}`; setDoc(doc(db, "candidates", c.id), { candidateId: c.candidateId }, { merge: true }).catch(() => {}); });
       setCandidates(loaded);
       writeCache(CACHE, loaded);
     }).catch(() => {});
   }, []);
+
+  // Next human-readable candidate ID from the highest existing CAND number + 1.
+  function nextCandidateId(list: Candidate[]): string {
+    const max = Math.max(0, ...list.map((c) => parseInt(String(c.candidateId ?? "").replace(/\D/g, ""), 10)).filter((n) => !isNaN(n)));
+    return `CAND-${String(max + 1).padStart(5, "0")}`;
+  }
 
   // Load Interview / Offer / Onboarding records from Firestore so data entered
   // in these three sub-modules survives a page refresh (NEW-002). The seed
@@ -323,6 +339,7 @@ export default function RecruitmentPage() {
 
       const payload = {
         ...candidateForm,
+        candidateId: nextCandidateId(candidates),
         resumeUrl,
         resumeName,
         resumeUrls,
@@ -723,7 +740,7 @@ export default function RecruitmentPage() {
                 <tbody className="divide-y divide-gray-50">
                   {filteredCandidates.map((c) => (
                     <tr key={c.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-mono text-xs">{c.id}</td>
+                      <td className="px-4 py-3 font-mono text-xs">{c.candidateId || "…"}</td>
                       <td className="px-4 py-3 font-medium">{c.name}</td>
                       <td className="px-4 py-3 text-gray-600">{c.role}</td>
                       <td className="px-4 py-3 text-gray-600">{c.department}</td>
