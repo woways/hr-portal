@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { Plus, Search, X, Star, Download, Eye, Pencil, Upload, FileText, Loader2 } from "lucide-react";
-import { collection, addDoc, getDocs, doc, getDoc, setDoc, query, where } from "firebase/firestore";
+import { collection, addDoc, getDocs, doc, getDoc, setDoc } from "firebase/firestore";
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { invalidateEmployees } from "@/lib/cachedService";
@@ -595,18 +595,20 @@ export default function RecruitmentPage() {
   }
 
   // Is this Employee ID already taken — by a real employee OR another onboarding
-  // record? Checks the employees collection by both doc id and employeeId field,
-  // plus in-progress onboarding rows, so no two people can share an ID (BUG-02).
+  // record? The check is CASE-INSENSITIVE (emp013 == EMP013 == Emp013), so no two
+  // people can share an ID under any casing (BUG-02 / BUG-REC-01). Firestore queries
+  // are case-sensitive, so we load the employees and compare in code.
   async function isEmployeeIdTaken(rawId: string): Promise<boolean> {
-    const id = rawId.trim();
-    if (!id) return false;
-    const clash = id.toUpperCase();
+    const clash = rawId.trim().toUpperCase();
+    if (!clash) return false;
     if (onboarding.some((o) => o.empId.trim().toUpperCase() === clash)) return true;
     try {
-      const byDocId = await getDoc(doc(db, "employees", id));
-      if (byDocId.exists()) return true;
-      const byField = await getDocs(query(collection(db, "employees"), where("employeeId", "==", id)));
-      if (!byField.empty) return true;
+      const snap = await getDocs(collection(db, "employees"));
+      return snap.docs.some((d) => {
+        const data = d.data() as Record<string, unknown>;
+        const eid = String((data.employeeId as string) ?? d.id).trim().toUpperCase();
+        return eid === clash;
+      });
     } catch { /* network issue — fall through, don't block on read failure */ }
     return false;
   }
