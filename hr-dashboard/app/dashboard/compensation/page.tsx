@@ -385,10 +385,22 @@ export default function CompensationPage() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
-  const totalPayroll  = records.reduce((s, r) => s + r.netPay, 0);
-  const incentivesPaid = records.reduce((s, r) => s + r.incentive, 0);
-  const pendingPay    = records.filter((r) => r.paymentStatus !== "Paid").reduce((s, r) => s + r.netPay, 0);
-  const avgSalary     = records.length ? Math.round(records.reduce((s, r) => s + r.salary, 0) / records.length) : 0;
+  // Real-time payroll aggregation (BUG-PAY-03). Net pay is derived from its
+  // components so the KPI cards reconcile by construction, two ways:
+  //   • Base Salary + Incentives + Bonus − Deductions = Total Monthly Payroll
+  //   • Paid Payments + Pending Payments             = Total Monthly Payroll
+  // Summing the stored netPay (which can be edited independently of the
+  // components) is what let the totals drift apart. Incentives/Base are now shown
+  // as explicit COMPONENTS of the total, never a separate axis to add to Pending.
+  const trueNet = (r: CompRecord) => r.salary + r.incentive + r.bonus - r.deductions;
+  const baseSalaryTotal = records.reduce((s, r) => s + r.salary, 0);
+  const incentivesTotal = records.reduce((s, r) => s + r.incentive, 0);
+  const bonusTotal      = records.reduce((s, r) => s + r.bonus, 0);
+  const deductionsTotal = records.reduce((s, r) => s + r.deductions, 0);
+  const totalPayroll    = baseSalaryTotal + incentivesTotal + bonusTotal - deductionsTotal;
+  const paidPay         = records.filter((r) => r.paymentStatus === "Paid").reduce((s, r) => s + trueNet(r), 0);
+  const pendingPay      = records.filter((r) => r.paymentStatus !== "Paid").reduce((s, r) => s + trueNet(r), 0);
+  const avgPay          = records.length ? Math.round(totalPayroll / records.length) : 0;
 
   // Department-wise payroll — join compensation records with employee list to get department
   const deptPayroll = (() => {
@@ -396,14 +408,12 @@ export default function CompensationPage() {
     records.forEach((r) => {
       const emp = empList.find((e) => e.empId === r.empId);
       const dept = emp?.department || "Other";
-      map[dept] = (map[dept] || 0) + r.netPay;
+      map[dept] = (map[dept] || 0) + trueNet(r); // same basis as totalPayroll so dept shares sum to 100%
     });
     return Object.entries(map)
       .map(([dept, total]) => ({ dept, total }))
       .sort((a, b) => b.total - a.total);
   })();
-
-  const topDept = deptPayroll.length > 0 ? deptPayroll[0].dept : "—";
 
   const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]";
 
@@ -496,18 +506,23 @@ export default function CompensationPage() {
         </div>
       </div>
 
-      {/* Analytics Cards — always visible */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {/* Analytics Cards — always visible. Two decompositions of Total Monthly
+          Payroll that reconcile by construction (BUG-PAY-03):
+          • Base Salary + Incentives + Bonus − Deductions = Total (components)
+          • Paid + Pending = Total (payment status). */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {[
-          { label: "Total Monthly Payroll", value: fmt(totalPayroll),   color: "bg-purple-50 border-purple-100", text: "text-purple-700" },
-          { label: "Incentives Paid",        value: fmt(incentivesPaid), color: "bg-green-50 border-green-100",  text: "text-green-700"  },
-          { label: "Pending Payments",       value: fmt(pendingPay),     color: "bg-yellow-50 border-yellow-100",text: "text-yellow-700" },
-          { label: "Avg Payroll",             value: fmt(avgSalary),      color: "bg-blue-50 border-blue-100",    text: "text-blue-700"   },
-          { label: "Top Dept (Payroll)",     value: topDept,              color: "bg-orange-50 border-orange-100",text: "text-orange-700" },
+          { label: "Total Monthly Payroll", sub: "Base + Incentives + Bonus − Deductions", value: fmt(totalPayroll),    color: "bg-purple-50 border-purple-100", text: "text-purple-700" },
+          { label: "Base Salary",            sub: "component of Total",                     value: fmt(baseSalaryTotal), color: "bg-indigo-50 border-indigo-100", text: "text-indigo-700" },
+          { label: "Incentives",             sub: "component of Total",                     value: fmt(incentivesTotal), color: "bg-green-50 border-green-100",   text: "text-green-700"  },
+          { label: "Paid Payments",          sub: "Paid + Pending = Total",                 value: fmt(paidPay),         color: "bg-teal-50 border-teal-100",     text: "text-teal-700"   },
+          { label: "Pending Payments",       sub: "awaiting disbursement",                  value: fmt(pendingPay),      color: "bg-yellow-50 border-yellow-100", text: "text-yellow-700" },
+          { label: "Avg Payroll",            sub: "per employee",                           value: fmt(avgPay),          color: "bg-blue-50 border-blue-100",     text: "text-blue-700"   },
         ].map((c) => (
           <div key={c.label} className={`${c.color} border rounded-2xl p-5`}>
             <p className={`text-lg font-bold ${c.text}`}>{c.value}</p>
             <p className="text-xs text-gray-500 mt-1">{c.label}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">{c.sub}</p>
           </div>
         ))}
       </div>
