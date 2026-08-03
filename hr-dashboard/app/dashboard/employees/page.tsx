@@ -752,6 +752,11 @@ function validateBulkRow(row: BulkRow): string | null {
   if (!row.phone?.trim()) return "Phone number is required";
   const phoneErr = validatePhone(row.phone);
   if (phoneErr) return `Phone: ${phoneErr}`;
+  // Designation and Date of Joining are mandatory (BUG-EMP-02) — no Active
+  // employee record may be created with these blank.
+  if (!row.designation?.trim()) return "Designation is required";
+  if (!isValidJobTitle(row.designation)) return "Designation must be a valid job title";
+  if (!row.doj?.trim()) return "Date of Joining is required";
   // Salary / CTC is optional, but if given it must be a positive number
   // (accepts formatted values like "₹8,50,000"; rejects text, 0 and negatives).
   if (row.ctc?.trim()) {
@@ -1240,6 +1245,7 @@ export default function EmployeesPage() {
       ["emergencyContact", "Emergency contact number"],
       ["designation", "Designation"],
       ["department", "Department"],
+      ["doj", "Date of Joining"],
     ];
     for (const [key, label] of requiredFields) {
       if (!String(form[key] ?? "").trim()) {
@@ -1476,6 +1482,7 @@ export default function EmployeesPage() {
       ["emergencyContact", "Emergency contact number"],
       ["designation", "Designation"],
       ["department", "Department"],
+      ["doj", "Date of Joining"],
     ];
     for (const [key, label] of requiredFields) {
       if (!String(editForm[key] ?? "").trim()) {
@@ -1659,9 +1666,12 @@ export default function EmployeesPage() {
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${workModeColor[emp.workMode]}`}>{emp.workMode}</span>
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs">{emp.employmentType}</td>
-                  <td className="px-4 py-3 text-gray-600 text-xs">{toISODate(emp.doj) || "—"}</td>
+                  <td className={`px-4 py-3 text-xs ${!emp.doj?.trim() ? "text-red-500 font-medium" : "text-gray-600"}`}>{toISODate(emp.doj) || "⚠ missing"}</td>
                   <td className="px-4 py-3">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[emp.status]}`}>{emp.status}</span>
+                    {(!emp.designation?.trim() || !emp.doj?.trim()) && (
+                      <span title="Incomplete profile — Designation and/or Date of Joining is missing. Edit to complete." className="ml-1.5 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-600 align-middle">⚠ Incomplete</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
