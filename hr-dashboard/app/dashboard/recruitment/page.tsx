@@ -4,6 +4,7 @@ import { Plus, Search, X, Star, Download, Eye, Pencil, Upload, FileText, Loader2
 import { collection, addDoc, getDocs, doc, getDoc, setDoc } from "firebase/firestore";
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
+import { computeNextEmployeeId } from "@/lib/employeeId";
 import { invalidateEmployees } from "@/lib/cachedService";
 import { DEPARTMENTS } from "@/lib/constants";
 import { useDepartments } from "@/lib/useDepartments";
@@ -613,20 +614,10 @@ export default function RecruitmentPage() {
     return false;
   }
 
-  // Suggest the next free EMP0xx id (max existing across employees + onboarding + 1).
+  // Next free EMP0xx id — shared with the Add-Employee form so both always agree.
+  // Includes in-memory onboarding rows too (in case any aren't yet in Firestore).
   async function suggestNextEmpId(): Promise<string> {
-    const nums: number[] = [];
-    for (const o of onboarding) { const n = parseInt(o.empId.replace(/\D/g, ""), 10); if (!isNaN(n)) nums.push(n); }
-    try {
-      const snap = await getDocs(collection(db, "employees"));
-      snap.docs.forEach((d) => {
-        const eid = ((d.data() as Record<string, unknown>).employeeId as string) ?? d.id;
-        const n = parseInt(String(eid).replace(/\D/g, ""), 10);
-        if (!isNaN(n)) nums.push(n);
-      });
-    } catch { /* ignore */ }
-    const next = (nums.length ? Math.max(...nums) : 0) + 1;
-    return `EMP${String(next).padStart(3, "0")}`;
+    return computeNextEmployeeId(onboarding.map((o) => o.empId));
   }
 
   async function handleAddOnboarding() {

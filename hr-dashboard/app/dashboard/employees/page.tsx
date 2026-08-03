@@ -8,6 +8,7 @@ import { firebaseConfig, db, storage } from "@/lib/firebase";
 import { createUserProfile } from "@/lib/authService";
 import { getEmployees, upsertEmployee, updateEmployee, deleteEmployee } from "@/lib/firebaseService";
 import { invalidateEmployees } from "@/lib/cachedService";
+import { computeNextEmployeeId } from "@/lib/employeeId";
 import { readCache, writeCache } from "@/lib/cache";
 import { getDoc, doc as fsDoc } from "firebase/firestore";
 import { DEPARTMENTS } from "@/lib/constants";
@@ -1255,14 +1256,11 @@ export default function EmployeesPage() {
     }
     if (saving) return;
 
-    const nums = employees.map((e) => parseInt(String(e.id).replace(/\D/g, ""), 10)).filter((n) => !isNaN(n));
-    const next = Math.max(0, ...nums) + 1;
-    const autoId = `EMP${String(next).padStart(3, "0")}`;
-    // Employee ID is always the next sequential auto ID (BUG-REC-02). The field is
-    // read-only, and the saved value is recomputed here from the highest existing
-    // index — so no arbitrary / out-of-sequence value can ever be stored, even if
-    // the read-only input is bypassed.
-    const newId = autoId;
+    // Employee ID is always the next sequential auto ID, computed from the SAME
+    // source as the Onboarding form (employees + reserved onboarding IDs) so the
+    // two forms never disagree (BUG-REC-02 + cross-form consistency). Read-only +
+    // recomputed here, so no arbitrary / out-of-sequence value can be stored.
+    const newId = await computeNextEmployeeId();
 
     setSaving(true);
 
@@ -1549,7 +1547,7 @@ export default function EmployeesPage() {
           <button onClick={() => setShowBulk(true)} className="flex items-center gap-2 border border-[#4F3CC9] text-[#4F3CC9] rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#EDE9FF] transition">
             <Upload size={16} /> Bulk Import
           </button>
-          <button onClick={() => { setAddEmpId(nextAddId); setShowAdd(true); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
+          <button onClick={async () => { setAddEmpId(nextAddId); setShowAdd(true); const id = await computeNextEmployeeId(); setAddEmpId(id); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
             <Plus size={16} /> Add Employee
           </button>
         </div>
