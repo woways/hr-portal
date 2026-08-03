@@ -275,11 +275,19 @@ export default function RecruitmentPage() {
     { id: "onboarding", label: "Onboarding" },
   ] as const;
 
-  const filteredCandidates = candidates.filter((c) => {
-    const matchSearch = c.name.toLowerCase().includes(search.toLowerCase()) || c.role.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === "All" || c.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
+  // Sort candidates by their sequential candidate ID (CAND-#####) so the list is
+  // always shown in a consistent, ascending order.
+  const candidateNum = (c: Candidate) => {
+    const n = parseInt(String(c.candidateId ?? "").replace(/\D/g, ""), 10);
+    return isNaN(n) ? Number.MAX_SAFE_INTEGER : n;
+  };
+  const filteredCandidates = candidates
+    .filter((c) => {
+      const matchSearch = c.name.toLowerCase().includes(search.toLowerCase()) || c.role.toLowerCase().includes(search.toLowerCase());
+      const matchStatus = statusFilter === "All" || c.status === statusFilter;
+      return matchSearch && matchStatus;
+    })
+    .sort((a, b) => candidateNum(a) - candidateNum(b));
 
   async function handleAddCandidate() {
     if (!candidateForm.name.trim()) { showCandidateToast("Candidate name is required."); return; }
