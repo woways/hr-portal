@@ -487,9 +487,14 @@ export default function RecruitmentPage() {
   // feedback and reminder reset (BUG-01). Also persists to Firestore (NEW-002).
   function handleConfirmReschedule() {
     if (!rescheduleInterview) return;
-    if (rescheduleInterview.date && rescheduleInterview.date < todayLocalStr()) { showCandidateToast("Interview date cannot be in the past."); return; }
+    // New Time is the ONLY mandatory field on reschedule (BUG-REC-05).
     if (!rescheduleInterview.time) { showCandidateToast("Please select a new interview time."); return; }
     if (!isValidMeetingLink(rescheduleInterview.meetingLink)) { showCandidateToast("Please enter a valid meeting link URL (e.g. https://meet.google.com/...)."); return; }
+    // New Date is optional — if left blank it defaults to the existing scheduled
+    // date (or today if none). A NEW date the user picks still can't be in the past.
+    const originalDate = interviews.find((i) => i.id === rescheduleInterview.id)?.date ?? "";
+    const date = rescheduleInterview.date?.trim() || originalDate || todayLocalStr();
+    if (date !== originalDate && date < todayLocalStr()) { showCandidateToast("A new interview date cannot be in the past."); return; }
     const reset = {
       status: "Scheduled" as InterviewStatus,
       finalDecision: "" as const,
@@ -497,7 +502,7 @@ export default function RecruitmentPage() {
       feedback: "",
       reminderSent: false,
     };
-    const rescheduled: Interview = { ...rescheduleInterview, ...reset };
+    const rescheduled: Interview = { ...rescheduleInterview, date, ...reset };
     setInterviews(interviews.map((i) => i.id === rescheduled.id ? rescheduled : i));
     saveInterview(rescheduled.id, rescheduled);
     setRescheduleInterview(null);
@@ -1262,11 +1267,11 @@ export default function RecruitmentPage() {
             </div>
             <div className="p-6 grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">New Date</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">New Date <span className="text-gray-400 font-normal">(optional)</span></label>
                 <input type="date" min={todayLocalStr()} value={rescheduleInterview.date} onChange={(e) => setRescheduleInterview({ ...rescheduleInterview, date: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">New Time</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">New Time *</label>
                 <input type="time" value={rescheduleInterview.time} onChange={(e) => setRescheduleInterview({ ...rescheduleInterview, time: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div className="col-span-2">
