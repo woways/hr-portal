@@ -5,6 +5,7 @@ import { getCompensation, addCompensation, updateCompensation, getIncentives, ad
 import { cachedEmployees, cachedCompensation, cachedIncentives, invalidateCompensation, invalidateIncentives } from "@/lib/cachedService";
 import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
+import { INCENTIVE_TYPES, isValidIncentiveType, isValidPerformanceBasis } from "@/lib/incentive";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -131,7 +132,14 @@ export default function CompensationPage() {
   }
 
   async function handleAddIncentive() {
-    if (!incForm.type || !incForm.amount || saving) return;
+    if (saving) return;
+    // BUG-PAY-01: Incentive Type must be a standardized value (dropdown enum) —
+    // never a bare number ("899") or single char ("c"); Performance Basis must be
+    // meaningful validated content, not junk ("bb") or empty.
+    if (!isValidIncentiveType(incForm.type)) { showMsg("Please select a valid Incentive Type from the list."); return; }
+    if (!incForm.amount || incForm.amount <= 0) { showMsg("Please enter a valid incentive amount greater than 0."); return; }
+    if (!isValidPerformanceBasis(incForm.basis)) { showMsg("Performance Basis must be a meaningful justification (at least 5 characters, not just numbers)."); return; }
+    if (!incForm.employee) { showMsg("Please select an employee."); return; }
     setSaving(true);
     try {
       const data = { month: incForm.month, employee: incForm.employee, type: incForm.type, amount: incForm.amount, basis: incForm.basis, status: "Pending" as const };
@@ -656,9 +664,19 @@ export default function CompensationPage() {
                     <tr key={i.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-gray-600">{i.month}</td>
                       <td className="px-4 py-3 font-medium">{i.employee}</td>
-                      <td className="px-4 py-3 text-gray-600">{i.type}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {i.type || "—"}
+                        {!isValidIncentiveType(i.type) && (
+                          <span title="Non-standard Incentive Type — not one of the standardized values. Edit to select a valid type." className="ml-1.5 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 align-middle">⚠ non-standard</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-right font-semibold text-[#4F3CC9]">{fmt(i.amount)}</td>
-                      <td className="px-4 py-3 text-gray-600 text-xs">{i.basis}</td>
+                      <td className="px-4 py-3 text-gray-600 text-xs">
+                        {i.basis || <span className="text-red-400">—</span>}
+                        {!isValidPerformanceBasis(i.basis) && (
+                          <span title="Performance Basis is missing or not meaningful. Edit to add a proper justification." className="ml-1.5 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-600 align-middle">⚠</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.status === "Approved" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>{i.status}</span>
                       </td>
@@ -991,15 +1009,21 @@ export default function CompensationPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Incentive Type *</label>
-                <input value={incForm.type} onChange={(e) => setIncForm({ ...incForm, type: e.target.value })} placeholder="e.g. Sales Commission" className={inputCls} />
+                <select value={incForm.type} onChange={(e) => setIncForm({ ...incForm, type: e.target.value })} className={inputCls}>
+                  <option value="">— Select Incentive Type —</option>
+                  {INCENTIVE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Amount (₹) *</label>
-                <input type="number" value={incForm.amount || ""} onChange={(e) => setIncForm({ ...incForm, amount: Number(e.target.value) })} className={inputCls} />
+                <input type="number" min="1" value={incForm.amount || ""} onChange={(e) => setIncForm({ ...incForm, amount: Number(e.target.value) })} className={inputCls} />
               </div>
               <div className="col-span-2">
-                <label className="text-xs font-medium text-gray-600 block mb-1">Performance Basis</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Performance Basis *</label>
                 <input value={incForm.basis} onChange={(e) => setIncForm({ ...incForm, basis: e.target.value })} placeholder="e.g. Closed 5 deals, exceeded KPI" className={inputCls} />
+                {incForm.basis.trim() !== "" && !isValidPerformanceBasis(incForm.basis) && (
+                  <p className="text-red-500 text-[10px] mt-1">Enter a meaningful justification (min 5 characters, not just numbers).</p>
+                )}
               </div>
             </div>
             <div className="px-6 pb-6">
