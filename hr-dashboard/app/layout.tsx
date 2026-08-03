@@ -14,7 +14,7 @@ const poppins = Poppins({
 });
 
 export const metadata: Metadata = {
-  title: "Woways",
+  title: "Woways HR Portal",
   description: "Enterprise HR Dashboard",
 };
 

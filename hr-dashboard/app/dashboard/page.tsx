@@ -5,13 +5,14 @@ import {
   LineChart, Line,
 } from "recharts";
 import { cachedEmployees, cachedAttendance, cachedLeaveRequests, cachedGoals } from "@/lib/cachedService";
+import { effectiveStatus } from "@/lib/attendanceStatus";
 import { SkeletonHeader, SkeletonStatGrid, SkeletonChart, SkeletonCard } from "@/components/Skeleton";
 
 interface Employee {
   id: string; status: string; employmentType: string; department: string;
   doj: string;
 }
-interface AttRecord { empId: string; status: string; late: boolean; workingHours: string; }
+interface AttRecord { empId: string; status: string; late: boolean; workingHours: string; clockIn?: string; clockOut?: string; }
 interface LeaveRequest { status: string; leaveType: string; startDate: string; }
 interface Goal { status: string; }
 
@@ -116,10 +117,12 @@ export default function DashboardPage() {
   // ── Attendance overview ───────────────────────────────────────────────────
   const activeEmpIds = new Set(employees.map(e => e.id));
   const validAttRecords = attRecords.filter(r => !r.empId || activeEmpIds.has(r.empId));
-  const presentCount  = validAttRecords.filter(r => r.status === "Present").length;
-  const absentCount   = validAttRecords.filter(r => r.status === "Absent").length;
+  // BUG-06: derive status via shared helper so dashboard tile matches Reports.
+  const derived = validAttRecords.map(r => ({ ...r, _eff: effectiveStatus(r) }));
+  const presentCount  = derived.filter(r => r._eff === "Present").length;
+  const absentCount   = derived.filter(r => r._eff === "Absent").length;
   const lateCount     = validAttRecords.filter(r => r.late).length;
-  const halfDayCount  = validAttRecords.filter(r => r.status === "Half Day").length;
+  const halfDayCount  = derived.filter(r => r._eff === "Half Day").length;
   const hoursArr      = validAttRecords.map(r => parseWorkingHours(r.workingHours)).filter(h => h > 0);
   const avgHours      = hoursArr.length ? (hoursArr.reduce((s, h) => s + h, 0) / hoursArr.length).toFixed(1) + "h" : "—";
 

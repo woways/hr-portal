@@ -94,14 +94,20 @@ export default function CompensationPage() {
 
   function showMsg(msg: string) { setToast(msg); setTimeout(() => setToast(null), 3000); }
 
+  // Field-level validation (BUG-04). Truthy string = failure message.
+  const addFormErrors = {
+    empId: (!addForm.empId || !addForm.name) ? "Please select an employee." : "",
+    designation: !addForm.designation?.trim() ? "Designation is required." : "",
+    salary: !(addForm.salary > 0) ? "Payroll amount must be greater than ₹0." : "",
+    negatives: (addForm.incentive < 0 || addForm.bonus < 0 || addForm.deductions < 0) ? "Incentive, bonus and deductions cannot be negative." : "",
+    paymentDate: !addForm.paymentDate ? "Payment date is required." : "",
+  } as const;
+  const addFormFirstError = Object.values(addFormErrors).find(v => !!v) ?? "";
+  const canSaveComp = !addFormFirstError;
+
   async function handleAddComp() {
     if (saving) return;
-    // Required-field validation before a payroll record can be saved (BUG-04).
-    if (!addForm.empId || !addForm.name) { showMsg("Please select an employee."); return; }
-    if (!addForm.designation?.trim()) { showMsg("Designation is required."); return; }
-    if (!(addForm.salary > 0)) { showMsg("Payroll amount must be greater than ₹0."); return; }
-    if (addForm.incentive < 0 || addForm.bonus < 0 || addForm.deductions < 0) { showMsg("Incentive, bonus and deductions cannot be negative."); return; }
-    if (addForm.paymentStatus === "Paid" && !addForm.paymentDate) { showMsg("Payment date is required for a Paid record."); return; }
+    if (!canSaveComp) { showMsg(addFormFirstError); return; }
     setSaving(true);
     try {
       const netPay = addForm.netPay || (addForm.salary + addForm.incentive + addForm.bonus - addForm.deductions);
@@ -893,7 +899,8 @@ export default function CompensationPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Designation *</label>
-                <input value={addForm.designation} onChange={(e) => setAddForm({ ...addForm, designation: e.target.value })} placeholder="e.g. Software Engineer" className={inputCls} />
+                <input value={addForm.designation} onChange={(e) => setAddForm({ ...addForm, designation: e.target.value })} placeholder="e.g. Software Engineer" aria-invalid={addFormErrors.designation ? true : undefined} aria-describedby={addFormErrors.designation ? "err-designation" : undefined} className={inputCls} />
+                {addFormErrors.designation && <p id="err-designation" className="text-[11px] text-red-600 mt-1">{addFormErrors.designation}</p>}
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Emp Type</label>
@@ -903,7 +910,8 @@ export default function CompensationPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Payroll (₹) *</label>
-                <input type="number" min="0" value={addForm.salary || ""} onChange={(e) => setAddForm({ ...addForm, salary: Number(e.target.value) })} className={inputCls} />
+                <input type="number" min="0" value={addForm.salary || ""} onChange={(e) => setAddForm({ ...addForm, salary: Number(e.target.value) })} aria-invalid={addFormErrors.salary ? true : undefined} aria-describedby={addFormErrors.salary ? "err-salary" : undefined} className={inputCls} />
+                {addFormErrors.salary && <p id="err-salary" className="text-[11px] text-red-600 mt-1">{addFormErrors.salary}</p>}
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Incentive (₹)</label>
@@ -934,13 +942,26 @@ export default function CompensationPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Payment Date</label>
-                <input type="date" value={addForm.paymentDate} onChange={(e) => setAddForm({ ...addForm, paymentDate: e.target.value })} className={inputCls} />
+                <input type="date" value={addForm.paymentDate} onChange={(e) => setAddForm({ ...addForm, paymentDate: e.target.value })} aria-invalid={addFormErrors.paymentDate ? true : undefined} aria-describedby={addFormErrors.paymentDate ? "err-paymentDate" : undefined} className={inputCls} />
+                {addFormErrors.paymentDate && <p id="err-paymentDate" className="text-[11px] text-red-600 mt-1">{addFormErrors.paymentDate}</p>}
               </div>
             </div>
-            <div className="px-6 pb-6">
-              <button onClick={handleAddComp} disabled={saving} className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8] transition flex items-center justify-center gap-2 disabled:opacity-70">
+            <div className="px-6 pb-6 space-y-3">
+              <div role="alert" aria-live="polite" className="min-h-[0]">
+                {!canSaveComp && addFormFirstError && (
+                  <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{addFormFirstError}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleAddComp}
+                aria-disabled={saving || !canSaveComp}
+                aria-describedby="save-payroll-hint"
+                className={`w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold transition flex items-center justify-center gap-2 ${(saving || !canSaveComp) ? "opacity-60 cursor-not-allowed" : "hover:bg-[#3d2fa8]"}`}
+              >
                 {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : "Save Payroll"}
               </button>
+              <p id="save-payroll-hint" className="sr-only">Fill Employee, Designation, Payroll amount (greater than zero) and Payment Date to enable Save.</p>
             </div>
           </div>
         </div>

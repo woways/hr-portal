@@ -32,9 +32,10 @@ interface ReportData {
 function canonicalWorkMode(raw: unknown): string {
   const v = String(raw ?? "").trim().toLowerCase();
   if (!v) return "On-site";
-  if (["remote", "wfh", "work from home", "work-from-home"].includes(v)) return "Remote";
-  if (["on-site", "onsite", "on site", "office", "in-office", "in office"].includes(v)) return "On-site";
-  if (v === "hybrid") return "Hybrid";
+  if (["remote", "wfh", "work from home", "work-from-home", "wfh only"].includes(v)) return "Remote";
+  if (["on-site", "onsite", "on site", "office", "in-office", "in office", "onsite only"].includes(v)) return "On-site";
+  if (["hybrid", "hybrid mode", "flexible"].includes(v)) return "Hybrid";
+  // Unknown variant — Title Case it but still coerce common casings collapsed
   return v.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -706,9 +707,9 @@ export default function ReportsPage() {
                     {analytics.workMode.length === 0 ? (
                       <p className="text-center text-xs text-gray-400 py-10">No employee data</p>
                     ) : (
-                      <ResponsiveContainer width="100%" height={250}>
-                        <PieChart margin={{ top: 22, right: 16, bottom: 12, left: 16 }}>
-                          <Pie data={analytics.workMode} dataKey="count" nameKey="mode" cx="50%" cy="50%" outerRadius={62} label={(props) => { const p = props as unknown as { mode: string; percent?: number }; return `${p.mode} ${((p.percent ?? 0) * 100).toFixed(0)}%`; }} labelLine={false}>
+                      <ResponsiveContainer width="100%" height={280}>
+                        <PieChart margin={{ top: 32, right: 40, bottom: 20, left: 40 }}>
+                          <Pie data={analytics.workMode} dataKey="count" nameKey="mode" cx="50%" cy="50%" outerRadius={58} label={(props) => { const p = props as unknown as { mode: string; percent?: number }; return `${p.mode} ${((p.percent ?? 0) * 100).toFixed(0)}%`; }} labelLine={false}>
                             {analytics.workMode.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                           </Pie>
                           <Tooltip contentStyle={{ borderRadius: "10px", border: "1px solid #e5e7eb", fontSize: "12px" }} />

@@ -353,7 +353,7 @@ function FormModal({
                 <input value={form.nationality} onChange={(e) => f("nationality", e.target.value)} placeholder="e.g. Indian" className={inputCls} />
               </div>
               <div>
-                <label className={labelCls}>Father's / Spouse's Name</label>
+                <label className={labelCls}>Father&apos;s / Spouse&apos;s Name</label>
                 <textarea value={form.fatherSpouseName} onChange={(e) => f("fatherSpouseName", e.target.value)} placeholder="Name" rows={2} className={textAreaCls} />
               </div>
               <div>
@@ -1749,7 +1749,7 @@ export default function EmployeesPage() {
             {createdCreds.email && (
               <>
                 <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3">
-                  ⚠️ The employee can change their password after logging in via "Forgot password?"
+                  ⚠️ The employee can change their password after logging in via &quot;Forgot password?&quot;
                 </p>
                 <button
                   onClick={() => {

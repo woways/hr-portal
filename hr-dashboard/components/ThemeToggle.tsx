@@ -3,13 +3,13 @@ import { useState, useEffect } from "react";
 import { Sun, Moon } from "lucide-react";
 
 export default function ThemeToggle() {
-  const [dark, setDark] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  // Lazy initializers: read DOM once on mount, avoid setState-in-effect.
+  const [dark, setDark] = useState(() => typeof document !== "undefined" && document.documentElement.classList.contains("dark"));
+  const [mounted, setMounted] = useState(() => typeof document !== "undefined");
 
   useEffect(() => {
-    setMounted(true);
-    setDark(document.documentElement.classList.contains("dark"));
-  }, []);
+    if (!mounted) setMounted(true);
+  }, [mounted]);
 
   function toggle() {
     const next = !dark;

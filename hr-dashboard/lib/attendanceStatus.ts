@@ -45,6 +45,14 @@ export function parseWorkedHours(rec: AttStatusRecord): number {
   return m ? Number(m[1]) + Number(m[2] || 0) / 60 : 0;
 }
 
+// Convenience wrapper — uses DEFAULT_ATT_THRESHOLDS. Prefer this in UI counting
+// paths (dashboard tile, attendance page counts) so every surface applies the same
+// derivation regardless of what's stored in `status`. Fixes BUG-06 dashboard/report
+// mismatch: raw `r.status` could be stale from before backfill; derived is truth.
+export function effectiveStatus(rec: AttStatusRecord): string {
+  return deriveAttendanceStatus(rec, DEFAULT_ATT_THRESHOLDS);
+}
+
 // Derive the effective attendance status. Single rule shared by dashboard + reports:
 //  • No clock-in / 0 hours   → Absent (or the stored Leave / Week Off).
 //  • Leave / Week Off        → unchanged.

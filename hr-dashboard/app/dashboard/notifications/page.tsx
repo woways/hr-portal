@@ -87,8 +87,8 @@ export default function HRNotificationsPage() {
       const q = query(collection(db, "notifications"), where("userId", "==", "HR_PORTAL"));
       const snapUnsub = onSnapshot(q, async (snap) => {
         // Cross-reference with active employees to exclude notifications from deleted employees
-        let activeEmpIds = new Set<string>();
-        let activeEmpNames = new Set<string>();
+        const activeEmpIds = new Set<string>();
+        const activeEmpNames = new Set<string>();
         try {
           const empSnap = await getDocs(collection(db, "employees"));
           empSnap.docs.forEach(d => {

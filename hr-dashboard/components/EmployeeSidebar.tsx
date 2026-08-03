@@ -81,7 +81,7 @@ export default function EmployeeSidebar() {
 
         // Prefer emailEmpId (actual Firestore doc ID from email query).
         // Fall back to eidFromUsers (users/{uid}.employeeId).
-        let empId = emailEmpId || eidFromUsers;
+        const empId = emailEmpId || eidFromUsers;
 
         if (!empId) {
           if (ud) {
@@ -130,7 +130,9 @@ export default function EmployeeSidebar() {
 
   // Listen for same-session photo upload events
   useEffect(() => {
-    if (auth.currentUser?.photoURL) setEmpPhoto(auth.currentUser.photoURL);
+    // Hoist current photoURL into state via subscription-side callback (React 19)
+    const initial = auth.currentUser?.photoURL;
+    if (initial) setEmpPhoto((prev) => prev || initial);
     function onPhotoEvent(e: Event) {
       const url = (e as CustomEvent<{ url: string }>).detail?.url ?? "";
       setEmpPhoto(url);
@@ -138,6 +140,7 @@ export default function EmployeeSidebar() {
     }
     window.addEventListener("employeePhotoUpdated", onPhotoEvent);
     return () => window.removeEventListener("employeePhotoUpdated", onPhotoEvent);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
   }, []);
 
   useEffect(() => {

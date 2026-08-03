@@ -9,6 +9,7 @@ import { db } from "@/lib/firebase";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
 import { backfillEmployee, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 import { markEmpNotifRead } from "@/lib/firebaseService";
+import { effectiveStatus } from "@/lib/attendanceStatus";
 
 type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
 
@@ -509,9 +510,11 @@ export default function AttendancePage() {
     const mStr = SHORT_MONTHS[d.getMonth()];
     return e.date.startsWith(mStr) && e.date.endsWith(String(d.getFullYear()));
   });
-  const presentCount  = currentMonthEntries.filter(e => e.status === "Present").length;
-  const absentCount   = currentMonthEntries.filter(e => !e.isWeekend && e.status === "Absent").length;
-  const halfDayCount  = currentMonthEntries.filter(e => e.status === "Half Day").length;
+  // BUG-06: derive status so employee tile matches HR dashboard/reports.
+  const cmDerived = currentMonthEntries.map(e => ({ e, eff: effectiveStatus(e) }));
+  const presentCount  = cmDerived.filter(x => x.eff === "Present").length;
+  const absentCount   = cmDerived.filter(x => !x.e.isWeekend && x.eff === "Absent").length;
+  const halfDayCount  = cmDerived.filter(x => x.eff === "Half Day").length;
   const lateCount     = currentMonthEntries.filter(e => e.late).length;
   // Compute total working days for the current month dynamically
   const totalWorkDays = (() => {
@@ -902,9 +905,10 @@ export default function AttendancePage() {
           const mStr = SHORT_MONTHS[selMonthIdx];
           return e.date.startsWith(mStr) && e.date.endsWith(String(selYearNum));
         }).filter(e => !e.isWeekend);
-        const selPresent  = selEntries.filter(e => e.status === "Present").length;
-        const selAbsent   = selEntries.filter(e => e.status === "Absent").length;
-        const selHalfDay  = selEntries.filter(e => e.status === "Half Day").length;
+        const selDerived = selEntries.map(e => effectiveStatus(e));
+        const selPresent  = selDerived.filter(s => s === "Present").length;
+        const selAbsent   = selDerived.filter(s => s === "Absent").length;
+        const selHalfDay  = selDerived.filter(s => s === "Half Day").length;
         const selHoursArr = selEntries.map(e => e.hoursVal).filter(h => h > 0);
         const selAvgHours = selHoursArr.length > 0
           ? (selHoursArr.reduce((a, b) => a + b, 0) / selHoursArr.length).toFixed(1) + "h"

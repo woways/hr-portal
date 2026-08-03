@@ -809,7 +809,7 @@ export default function RecruitmentPage() {
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
                           <button onClick={() => setEditInterview({ ...i })} title="Edit" className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500"><Pencil size={13} /></button>
-                          <button onClick={() => setRescheduleInterview({ ...i, status: "Rescheduled" })} title="Reschedule" className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-500 text-xs font-medium">↺</button>
+                          <button onClick={() => setRescheduleInterview({ ...i, status: "Scheduled", finalDecision: "", rating: 0, feedback: "", reminderSent: false, date: "", time: "" })} title="Reschedule" className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-500 text-xs font-medium">↺</button>
                           <button
                             onClick={() => sendReminder(i.id, i.candidateName)}
                             disabled={i.reminderSent}
@@ -1654,7 +1654,7 @@ export default function RecruitmentPage() {
                           </div>
                         </div>
                         <p className="text-xs text-gray-500">Interviewer: {iv.interviewer} · {iv.date} {iv.time}</p>
-                        {iv.feedback && <p className="text-xs text-gray-700 mt-1 italic">"{iv.feedback}"</p>}
+                        {iv.feedback && <p className="text-xs text-gray-700 mt-1 italic">&quot;{iv.feedback}&quot;</p>}
                         <span className={`mt-1 inline-block text-xs px-2 py-0.5 rounded-full font-medium ${interviewStatusColor[iv.status]}`}>{iv.status}</span>
                       </div>
                     ))}

@@ -114,7 +114,7 @@ export default function AccessPage() {
           </div>
           <div>
             <h2 className="text-base font-semibold text-gray-900">Password Reset</h2>
-            <p className="text-xs text-gray-400">Send a password reset link to any employee's email address</p>
+            <p className="text-xs text-gray-400">Send a password reset link to any employee&apos;s email address</p>
           </div>
         </div>
 

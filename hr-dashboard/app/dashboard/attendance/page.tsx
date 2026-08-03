@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import { getAttendance, updateAttendance, upsertAttendance, updateRegularizationStatus, markHRNotifRead } from "@/lib/firebaseService";
 import { invalidateAttendance } from "@/lib/cachedService";
-import { deriveAttendanceStatus } from "@/lib/attendanceStatus";
+import { deriveAttendanceStatus, effectiveStatus } from "@/lib/attendanceStatus";
 import { readCache, writeCache } from "@/lib/cache";
 import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -417,7 +417,7 @@ export default function AttendancePage() {
       const m = rec._month ?? rec.date?.slice(0, 7) ?? "";
       if (!m) continue;
       if (!byMonth[m]) byMonth[m] = { absent: 0, late: 0 };
-      if (rec.status === "Absent") byMonth[m].absent++;
+      if (effectiveStatus(rec) === "Absent") byMonth[m].absent++; // BUG-06
       if (rec.late) byMonth[m].late++;
     }
     return Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b)).map(([ym, v]) => {
@@ -435,7 +435,7 @@ export default function AttendancePage() {
     : "0.0";
   const allForRate = [...historyRecords, ...records];
   const totalEmployeeDays = allForRate.length || 1;
-  const totalAbsent = allForRate.filter((r) => r.status === "Absent").length;
+  const totalAbsent = allForRate.filter((r) => effectiveStatus(r) === "Absent").length; // BUG-06
   const absenteeismRate = ((totalAbsent / totalEmployeeDays) * 100).toFixed(1);
 
   // Compute OT from today's records — parse "Xh Ym" or numeric strings
@@ -455,9 +455,10 @@ export default function AttendancePage() {
       if (!r.empId) continue;
       if (!byEmp[r.empId]) byEmp[r.empId] = { name: r.name, empId: r.empId, dept: r.dept, present: 0, absent: 0, halfDays: 0, late: 0, totalSecs: 0, dayCount: 0 };
       const e = byEmp[r.empId];
-      if (r.status === "Present") e.present++;
-      if (r.status === "Absent") e.absent++;
-      if (r.status === "Half Day") { e.halfDays++; e.present++; }
+      const eff = effectiveStatus(r); // BUG-06
+      if (eff === "Present") e.present++;
+      if (eff === "Absent") e.absent++;
+      if (eff === "Half Day") { e.halfDays++; e.present++; }
       if (r.late) e.late++;
       const secs = parseOTHours(r.workingHours) * 3600;
       if (secs > 0) { e.totalSecs += secs; e.dayCount++; }
@@ -482,7 +483,7 @@ export default function AttendancePage() {
       if (r.clockIn && r.clockIn !== "—") {
         const parts = r.clockIn.match(/(\d+):(\d+)\s*(AM|PM)/i);
         if (parts) {
-          let h = parseInt(parts[1]), m = parseInt(parts[2]);
+          let h = parseInt(parts[1]); const m = parseInt(parts[2]);
           if (parts[3].toUpperCase() === "PM" && h !== 12) h += 12;
           if (parts[3].toUpperCase() === "AM" && h === 12) h = 0;
           const delayMins = Math.max(0, h * 60 + m - 9 * 60);
@@ -502,7 +503,7 @@ export default function AttendancePage() {
     for (const r of [...monthlyAttendance, ...records.filter(r2 => r2.date === TODAY)]) {
       if (!dayMap[r.date]) dayMap[r.date] = { present: 0, total: 0 };
       dayMap[r.date].total++;
-      if (r.status === "Present" || r.status === "Half Day") dayMap[r.date].present++;
+      { const eff = effectiveStatus(r); if (eff === "Present" || eff === "Half Day") dayMap[r.date].present++; } // BUG-06
     }
     const weekMap = new Map<string, (number | null)[]>();
     for (const date of Object.keys(dayMap).sort()) {
@@ -529,7 +530,7 @@ export default function AttendancePage() {
       const dept = r.dept || "Unknown";
       if (!byDept[dept]) byDept[dept] = { onTime: 0, total: 0 };
       byDept[dept].total++;
-      if ((r.status === "Present" || r.status === "Half Day") && !lateByThreshold(r)) byDept[dept].onTime++;
+      { const eff = effectiveStatus(r); if ((eff === "Present" || eff === "Half Day") && !lateByThreshold(r)) byDept[dept].onTime++; } // BUG-06
     }
     return Object.entries(byDept)
       .map(([dept, { onTime, total }]) => ({ dept, compliance: total > 0 ? Math.round((onTime / total) * 100) : 0 }))
@@ -656,10 +657,12 @@ export default function AttendancePage() {
   // they all reconcile against the same underlying records (ATT-010).
   const clocedIn = (r: AttendanceRecord) => !!(r.clockIn && r.clockIn !== "" && r.clockIn !== "—");
   const summaryRecords = normalizedRecords.filter(r => r.date === TODAY);
-  const presentCount = summaryRecords.filter(r => r.status === "Present").length;
-  const absentCount = summaryRecords.filter(r => r.status === "Absent").length;
+  // BUG-06: derive effective status so the tiles align with the Reports module.
+  const summaryDerived = summaryRecords.map(r => ({ r, eff: effectiveStatus(r) }));
+  const presentCount = summaryDerived.filter(x => x.eff === "Present").length;
+  const absentCount = summaryDerived.filter(x => x.eff === "Absent").length;
   const lateCount = summaryRecords.filter(r => lateByThreshold(r)).length;
-  const halfDayCount = summaryRecords.filter(r => r.status === "Half Day").length;
+  const halfDayCount = summaryDerived.filter(x => x.eff === "Half Day").length;
   // Count every WFH employee who clocked in today — not just those whose status is
   // Present — so the tile doesn't undercount Half Day / Late remote workers (ATT-010).
   const wfhCount = summaryRecords.filter(r => r.location === "WFH" && clocedIn(r)).length;
@@ -687,7 +690,7 @@ export default function AttendancePage() {
     if (/^\d{2}:\d{2}$/.test(t)) return t;
     const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
     if (!m) return "";
-    let h = parseInt(m[1]), min = parseInt(m[2]);
+    let h = parseInt(m[1]); const min = parseInt(m[2]);
     const isPM = /PM/i.test(m[3]);
     if (isPM && h !== 12) h += 12;
     if (!isPM && h === 12) h = 0;
@@ -886,11 +889,13 @@ export default function AttendancePage() {
                           <p className="text-sm font-medium text-gray-900 truncate">{r.name}</p>
                           <p className="text-xs text-gray-400">{r.empId} · {r.dept}</p>
                         </div>
+                        {(() => { const eff = effectiveStatus(r); return (
                         <span className={`ml-auto text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
-                          r.status === "Present" ? "bg-green-100 text-green-700" :
-                          r.status === "Absent"  ? "bg-red-100 text-red-600"   :
+                          eff === "Present" ? "bg-green-100 text-green-700" :
+                          eff === "Absent"  ? "bg-red-100 text-red-600"   :
                           "bg-gray-100 text-gray-500"
-                        }`}>{r.status}</span>
+                        }`}>{eff}</span>
+                        ); })()}
                       </button>
                     ))}
                   </div>
@@ -1351,7 +1356,7 @@ export default function AttendancePage() {
                       : <span className="text-xs text-gray-300">—</span>}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[r.status]}`}>{r.status}</span>
+                    {(() => { const eff = effectiveStatus(r) as AttendanceStatus; return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[eff] ?? statusColor[r.status]}`}>{eff}</span>; })()}
                   </td>
                   <td className="px-4 py-3">
                     {lateByThreshold(r)

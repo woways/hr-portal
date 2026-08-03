@@ -17,7 +17,7 @@ export interface Goal {
   lastUpdated?: string;
 }
 
-let store: Goal[] = [];
+const store: Goal[] = [];
 
 export function getAll(): Goal[] { return store; }
 
