@@ -5,6 +5,7 @@ import { collection, addDoc, getDocs, doc, getDoc, setDoc } from "firebase/fires
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { computeNextEmployeeId } from "@/lib/employeeId";
+import { isValidJobTitle } from "@/lib/jobTitle";
 import { invalidateEmployees } from "@/lib/cachedService";
 import { DEPARTMENTS } from "@/lib/constants";
 import { useDepartments } from "@/lib/useDepartments";
@@ -281,6 +282,7 @@ export default function RecruitmentPage() {
       return;
     }
     if (!candidateForm.role.trim()) { showCandidateToast("Role applied is required."); return; }
+    if (!isValidJobTitle(candidateForm.role)) { showCandidateToast("Please enter a valid role/designation (letters — not numbers or placeholder text)."); return; }
     if (!candidateForm.department.trim()) { showCandidateToast("Department is required."); return; }
     const linkedin = candidateForm.linkedin.trim();
     if (linkedin && !/^(https?:\/\/)?([\w-]+\.)*linkedin\.com\/.+/i.test(linkedin)) {
@@ -531,6 +533,7 @@ export default function RecruitmentPage() {
     // Require a real recipient and terms — a blank offer is meaningless (OFFER-001).
     if (!offerForm.candidateName.trim()) { showCandidateToast("Please enter the candidate name."); return; }
     if (!offerForm.role.trim()) { showCandidateToast("Please enter the role for this offer."); return; }
+    if (!isValidJobTitle(offerForm.role)) { showCandidateToast("Please enter a valid role/designation (letters — not numbers or placeholder text)."); return; }
     const salaryDigits = offerForm.salary.replace(/[^\d.]/g, "");
     if (!offerForm.salary.trim() || offerForm.salary.includes("-") || !(parseFloat(salaryDigits) > 0)) { showCandidateToast("Please enter a valid payroll/stipend amount."); return; }
     if (!offerForm.offerDate) { showCandidateToast("Please select an offer date."); return; }
@@ -629,6 +632,7 @@ export default function RecruitmentPage() {
     const mobileDigits = onboardingForm.mobile.replace(/\D/g, "");
     if (mobileDigits.length !== 10 || /^[0-5]/.test(mobileDigits)) { show("A valid 10-digit contact number (starting 6-9) is required."); return; }
     if (!onboardingForm.role.trim()) { show("Role is required."); return; }
+    if (!isValidJobTitle(onboardingForm.role)) { show("Please enter a valid Role/Designation (letters — not numbers or placeholder text)."); return; }
     if (!onboardingForm.empId.trim()) { show("Employee ID is required."); return; }
     // Bounds-enforce the auto-generated ID even if the read-only field is tampered
     // with: it must be a well-formed EMP#### and must equal the next sequential ID

@@ -9,6 +9,7 @@ import { createUserProfile } from "@/lib/authService";
 import { getEmployees, upsertEmployee, updateEmployee, deleteEmployee } from "@/lib/firebaseService";
 import { invalidateEmployees } from "@/lib/cachedService";
 import { computeNextEmployeeId } from "@/lib/employeeId";
+import { isValidJobTitle } from "@/lib/jobTitle";
 import { readCache, writeCache } from "@/lib/cache";
 import { getDoc, doc as fsDoc } from "firebase/firestore";
 import { DEPARTMENTS } from "@/lib/constants";
@@ -1209,6 +1210,12 @@ export default function EmployeesPage() {
         return;
       }
     }
+    // Designation must be a real job title, not numbers/placeholder text (BUG-REC-03).
+    if (!isValidJobTitle(form.designation)) {
+      setAddToast({ msg: "Please enter a valid Designation (letters — not numbers or placeholder text).", ok: false });
+      setTimeout(() => setAddToast(null), 3500);
+      return;
+    }
     // Work-email format + company-domain check.
     const emailErr = validateWorkEmail(form.email);
     if (emailErr) {
@@ -1438,6 +1445,11 @@ export default function EmployeesPage() {
         setTimeout(() => setAddToast(null), 3500);
         return;
       }
+    }
+    if (!isValidJobTitle(editForm.designation)) {
+      setAddToast({ msg: "Please enter a valid Designation (letters — not numbers or placeholder text).", ok: false });
+      setTimeout(() => setAddToast(null), 3500);
+      return;
     }
     const emailErr = validateWorkEmail(editForm.email);
     if (emailErr) {
