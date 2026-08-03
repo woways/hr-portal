@@ -401,6 +401,10 @@ export async function updateIncentiveStatus(docId: string, status: string) {
   await updateDoc(doc(db, "incentives", docId), { status, updatedAt: new Date().toISOString() });
 }
 
+export async function updateIncentive(docId: string, data: Record<string, unknown>) {
+  await updateDoc(doc(db, "incentives", docId), { ...data, updatedAt: new Date().toISOString() });
+}
+
 // ─── Real-time listeners ──────────────────────────────────────────────────────
 export function listenToLeaveRequests(callback: (data: Record<string, unknown>[]) => void) {
   return onSnapshot(collection(db, "leaveRequests"), (snap) => {

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { Pencil, FileText, Plus, X, Search, Loader2 } from "lucide-react";
-import { getCompensation, addCompensation, updateCompensation, getIncentives, addIncentive, getEmployees, markHRNotifRead } from "@/lib/firebaseService";
+import { Pencil, FileText, Plus, X, Search, Loader2, Check } from "lucide-react";
+import { getCompensation, addCompensation, updateCompensation, getIncentives, addIncentive, updateIncentiveStatus, updateIncentive, getEmployees, markHRNotifRead } from "@/lib/firebaseService";
 import { cachedEmployees, cachedCompensation, cachedIncentives, invalidateCompensation, invalidateIncentives } from "@/lib/cachedService";
 import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -18,9 +18,10 @@ interface CompRecord {
   paymentStatus: PaymentStatus; paymentDate: string; month: string;
 }
 
+type IncentiveStatus = "Approved" | "Pending" | "Rejected";
 interface Incentive {
   id: string; month: string; employee: string; type: string;
-  amount: number; basis: string; status: "Approved" | "Pending";
+  amount: number; basis: string; status: IncentiveStatus;
 }
 
 interface EmpOption { id: string; name: string; empId: string; designation: string; department: string; }
@@ -57,6 +58,10 @@ export default function CompensationPage() {
   const [addForm, setAddForm] = useState({ ...blankAdd, empId: "" });
   const [showIncentive, setShowIncentive] = useState(false);
   const [incForm, setIncForm] = useState({ ...blankInc });
+  // When set, the incentive modal is editing this record instead of adding (BUG-PAY-02).
+  const [editIncId, setEditIncId] = useState<string | null>(null);
+  // Incentive currently being approved/rejected (disables its row buttons).
+  const [incActionId, setIncActionId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [empList, setEmpList] = useState<EmpOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -142,15 +147,44 @@ export default function CompensationPage() {
     if (!incForm.employee) { showMsg("Please select an employee."); return; }
     setSaving(true);
     try {
-      const data = { month: incForm.month, employee: incForm.employee, type: incForm.type, amount: incForm.amount, basis: incForm.basis, status: "Pending" as const };
-      const docId = await addIncentive(data);
-      setIncentives((p) => [...p, { id: docId, ...data }]);
-      invalidateIncentives();
-      setShowIncentive(false);
-      setIncForm({ ...blankInc });
-      showMsg("Incentive added and pending approval.");
+      if (editIncId) {
+        // Edit an existing incentive (BUG-PAY-02) — keep its current approval status.
+        const patch = { month: incForm.month, employee: incForm.employee, type: incForm.type, amount: incForm.amount, basis: incForm.basis };
+        await updateIncentive(editIncId, patch);
+        setIncentives((p) => p.map((i) => i.id === editIncId ? { ...i, ...patch } : i));
+        invalidateIncentives();
+        setShowIncentive(false); setEditIncId(null); setIncForm({ ...blankInc });
+        showMsg("Incentive updated.");
+      } else {
+        const data = { month: incForm.month, employee: incForm.employee, type: incForm.type, amount: incForm.amount, basis: incForm.basis, status: "Pending" as const };
+        const docId = await addIncentive(data);
+        setIncentives((p) => [...p, { id: docId, ...data }]);
+        invalidateIncentives();
+        setShowIncentive(false); setIncForm({ ...blankInc });
+        showMsg("Incentive added and pending approval.");
+      }
     } catch { showMsg("Failed to save incentive."); }
     finally { setSaving(false); }
+  }
+
+  // Approve / Reject a pending incentive (BUG-PAY-02 approval workflow).
+  async function setIncentiveApproval(id: string, status: "Approved" | "Rejected") {
+    if (incActionId) return;
+    setIncActionId(id);
+    try {
+      await updateIncentiveStatus(id, status);
+      setIncentives((p) => p.map((i) => i.id === id ? { ...i, status } : i));
+      invalidateIncentives();
+      showMsg(`Incentive ${status.toLowerCase()}.`);
+    } catch { showMsg(`Failed to ${status === "Approved" ? "approve" : "reject"} incentive.`); }
+    finally { setIncActionId(null); }
+  }
+
+  // Open the incentive modal pre-filled to edit an existing record.
+  function openEditIncentive(i: Incentive) {
+    setEditIncId(i.id);
+    setIncForm({ month: i.month, employee: i.employee, type: i.type, amount: i.amount, basis: i.basis });
+    setShowIncentive(true);
   }
 
   // Payroll search filter
@@ -643,7 +677,7 @@ export default function CompensationPage() {
           <div>
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h2 className="text-base font-semibold text-gray-900">Incentive Management</h2>
-              <button onClick={() => setShowIncentive(true)} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium">
+              <button onClick={() => { setEditIncId(null); setIncForm({ ...blankInc }); setShowIncentive(true); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium">
                 <Plus size={14} /> Add Incentive
               </button>
             </div>
@@ -657,9 +691,13 @@ export default function CompensationPage() {
                     <th className="px-4 py-3 text-right">Amount</th>
                     <th className="px-4 py-3 text-left">Performance Basis</th>
                     <th className="px-4 py-3 text-left">Approval Status</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
+                  {incentives.length === 0 && (
+                    <tr><td colSpan={7}><EmptyState title="No incentives yet" subtitle="Add an incentive to get started." /></td></tr>
+                  )}
                   {incentives.map((i) => (
                     <tr key={i.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-gray-600">{i.month}</td>
@@ -678,7 +716,32 @@ export default function CompensationPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.status === "Approved" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>{i.status}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.status === "Approved" ? "bg-green-100 text-green-700" : i.status === "Rejected" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>{i.status}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {i.status === "Pending" && (
+                            <>
+                              <button
+                                onClick={() => setIncentiveApproval(i.id, "Approved")}
+                                disabled={incActionId === i.id}
+                                title="Approve"
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-green-50 text-green-700 hover:bg-green-100 transition disabled:opacity-50"
+                              >
+                                {incActionId === i.id ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Approve
+                              </button>
+                              <button
+                                onClick={() => setIncentiveApproval(i.id, "Rejected")}
+                                disabled={incActionId === i.id}
+                                title="Reject"
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 text-red-600 hover:bg-red-100 transition disabled:opacity-50"
+                              >
+                                <X size={12} /> Reject
+                              </button>
+                            </>
+                          )}
+                          <button onClick={() => openEditIncentive(i)} title="Edit" className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500 transition"><Pencil size={13} /></button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -985,13 +1048,13 @@ export default function CompensationPage() {
         </div>
       )}
 
-      {/* Add Incentive Modal */}
+      {/* Add / Edit Incentive Modal */}
       {showIncentive && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowIncentive(false)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { setShowIncentive(false); setEditIncId(null); }}>
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b">
-              <h2 className="text-lg font-bold">Add Incentive</h2>
-              <button onClick={() => setShowIncentive(false)}><X size={20} /></button>
+              <h2 className="text-lg font-bold">{editIncId ? "Edit Incentive" : "Add Incentive"}</h2>
+              <button onClick={() => { setShowIncentive(false); setEditIncId(null); }}><X size={20} /></button>
             </div>
             <div className="p-6 grid grid-cols-2 gap-4">
               <div>
@@ -1028,7 +1091,7 @@ export default function CompensationPage() {
             </div>
             <div className="px-6 pb-6">
               <button onClick={handleAddIncentive} disabled={saving} className="w-full bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8] transition flex items-center justify-center gap-2 disabled:opacity-70">
-                {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : "Add Incentive"}
+                {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : (editIncId ? "Save Changes" : "Add Incentive")}
               </button>
             </div>
           </div>
