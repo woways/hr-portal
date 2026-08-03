@@ -639,6 +639,15 @@ export default function RecruitmentPage() {
     if (mobileDigits.length !== 10 || /^[0-5]/.test(mobileDigits)) { show("A valid 10-digit contact number (starting 6-9) is required."); return; }
     if (!onboardingForm.role.trim()) { show("Role is required."); return; }
     if (!onboardingForm.empId.trim()) { show("Employee ID is required."); return; }
+    // Bounds-enforce the auto-generated ID even if the read-only field is tampered
+    // with: it must be a well-formed EMP#### and must equal the next sequential ID
+    // (no arbitrary / out-of-sequence values) — BUG-REC-02.
+    const expectedId = await suggestNextEmpId();
+    if (!/^EMP\d{1,6}$/i.test(onboardingForm.empId.trim()) || onboardingForm.empId.trim().toUpperCase() !== expectedId.toUpperCase()) {
+      show(`Employee ID is auto-generated. The next available ID is ${expectedId}.`);
+      setOnboardingForm((f) => ({ ...f, empId: expectedId }));
+      return;
+    }
     // Enforce Employee ID uniqueness at assignment time (BUG-02).
     if (await isEmployeeIdTaken(onboardingForm.empId)) {
       const suggestion = await suggestNextEmpId();
@@ -959,7 +968,7 @@ export default function RecruitmentPage() {
           </div>
 
           <div className="flex justify-end">
-            <button onClick={async () => { setShowAddOnboarding(true); const id = await suggestNextEmpId(); setOnboardingForm((f) => (f.empId.trim() ? f : { ...f, empId: id })); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium">
+            <button onClick={async () => { setShowAddOnboarding(true); const id = await suggestNextEmpId(); setOnboardingForm((f) => ({ ...f, empId: id })); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium">
               <Plus size={16} /> Start Onboarding
             </button>
           </div>
@@ -1496,10 +1505,10 @@ export default function RecruitmentPage() {
                 <input value={onboardingForm.role} onChange={(e) => setOnboardingForm({ ...onboardingForm, role: e.target.value })} placeholder="e.g. Software Engineer" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Employee ID * <span className="text-gray-400 font-normal">(auto-generated)</span></label>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Employee ID * <span className="text-gray-400 font-normal">(auto-generated · read-only)</span></label>
                 <div className="flex gap-2">
-                  <input value={onboardingForm.empId} onChange={(e) => setOnboardingForm({ ...onboardingForm, empId: e.target.value })} placeholder="e.g. EMP058" className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
-                  <button type="button" onClick={async () => { const id = await suggestNextEmpId(); setOnboardingForm((f) => ({ ...f, empId: id })); }} title="Fill next available ID" className="shrink-0 px-3 rounded-xl border border-gray-200 text-xs font-medium text-[#4F3CC9] hover:bg-[#F5F3FF]">Auto</button>
+                  <input value={onboardingForm.empId} readOnly aria-readonly="true" tabIndex={-1} title="Auto-generated sequentially — cannot be edited manually" placeholder="EMP…" className="flex-1 px-3 py-2 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-600 cursor-not-allowed focus:outline-none select-none" />
+                  <button type="button" onClick={async () => { const id = await suggestNextEmpId(); setOnboardingForm((f) => ({ ...f, empId: id })); }} title="Regenerate the next available ID" className="shrink-0 px-3 rounded-xl border border-gray-200 text-xs font-medium text-[#4F3CC9] hover:bg-[#F5F3FF]">↻</button>
                 </div>
               </div>
               <div>
