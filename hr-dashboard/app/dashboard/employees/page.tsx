@@ -14,6 +14,7 @@ import { readCache, writeCache } from "@/lib/cache";
 import { getDoc, doc as fsDoc } from "firebase/firestore";
 import { DEPARTMENTS } from "@/lib/constants";
 import { useDepartments } from "@/lib/useDepartments";
+import { canonicalWorkMode, canonicalEmploymentType, canonicalDepartment, isKnownDepartment } from "@/lib/enums";
 import { EmptyState } from "@/components/EmptyState";
 import { uploadDocFile, saveDocMeta, loadDocMeta, StoredDoc } from "@/lib/documentService";
 import { SkeletonTableRows } from "@/components/Skeleton";
@@ -775,9 +776,9 @@ function rowToEmployee(row: BulkRow, id: string): Employee {
     ...empDefaults,
     id,
     name: row.name, email: row.email, phone: row.phone,
-    designation: row.designation, department: row.department || DEPARTMENTS[0], role: row.role || "",
-    workMode: (row.workMode as WorkMode) || "Remote",
-    employmentType: (row.employmentType as EmpType) || "Full-Time",
+    designation: row.designation, department: canonicalDepartment(row.department || DEPARTMENTS[0], DEPARTMENTS), role: row.role || "",
+    workMode: canonicalWorkMode(row.workMode) as WorkMode,
+    employmentType: canonicalEmploymentType(row.employmentType) as EmpType,
     doj: toISODate(row.doj), gender: row.gender || "Male", dob: toISODate(row.dob),
     reportingManager: row.reportingManager || "",
     branch: row.branch || "Bengaluru HQ", shift: row.shift || "9AM–6PM",
@@ -1071,7 +1072,13 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
 interface CreatedCreds { name: string; email: string; password: string; empId: string; }
 
 export default function EmployeesPage() {
-  const departmentOptions = ["All", ...useDepartments()];
+  const departmentList = useDepartments();
+  const departmentOptions = ["All", ...departmentList];
+  // Latest department list, readable inside loadEmployees (which is memoized with
+  // no deps) so department normalization uses the configured set as it updates.
+  const departmentListRef = useRef<string[]>(departmentList);
+  departmentListRef.current = departmentList;
+  const canonDeptSet = Array.from(new Set([...DEPARTMENTS, ...departmentList]));
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const EMP_CACHE = "hr_employees_v2";
@@ -1104,6 +1111,9 @@ export default function EmployeesPage() {
       const docs = await getEmployees();
       const statusFixes: { docId: string; status: EmployeeStatus }[] = [];
       const dateFixes: { docId: string; data: Record<string, string> }[] = [];
+      const enumFixes: { docId: string; data: Record<string, string> }[] = [];
+      // Canonical department set = configured/settings list ∪ built-in defaults.
+      const canonDepts = Array.from(new Set([...DEPARTMENTS, ...departmentListRef.current]));
       const data: Employee[] = docs.map((d) => {
         const r = d as Record<string, unknown>;
         const normStatus = normalizeEmployeeStatus(r.status);
@@ -1121,14 +1131,25 @@ export default function EmployeesPage() {
         if (typeof r.doj === "string" && r.doj.trim() && isoDoj !== r.doj) dfix.doj = isoDoj;
         if (typeof r.dob === "string" && r.dob.trim() && isoDob !== r.dob) dfix.dob = isoDob;
         if (Object.keys(dfix).length) dateFixes.push({ docId: r.id as string, data: dfix });
+        // Normalize categorical values to strict enum casing (BUG-EMP-03) and
+        // persist the fix so mixed-case / placeholder values ("remote", "hybrid",
+        // "intern") are cleaned at the source, not just masked on display.
+        const wm = canonicalWorkMode(r.workMode);
+        const et = canonicalEmploymentType(r.employmentType);
+        const dept = canonicalDepartment(r.department, canonDepts);
+        const efix: Record<string, string> = {};
+        if (typeof r.workMode === "string" && r.workMode.trim() && wm !== r.workMode) efix.workMode = wm;
+        if (typeof r.employmentType === "string" && r.employmentType.trim() && et !== r.employmentType) efix.employmentType = et;
+        if (typeof r.department === "string" && r.department.trim() && dept !== r.department) efix.department = dept;
+        if (Object.keys(efix).length) enumFixes.push({ docId: r.id as string, data: efix });
         return {
           id: (r.employeeId ?? r.id) as string,
           name: (r.name as string) ?? "",
           designation: (r.designation as string) ?? "",
-          department: (r.department as string) ?? "",
+          department: dept,
           role: (r.role as string) ?? "",
-          workMode: ((r.workMode as WorkMode) ?? "Remote"),
-          employmentType: ((r.employmentType as EmpType) ?? "Full-Time"),
+          workMode: (wm as WorkMode),
+          employmentType: (et as EmpType),
           doj: toISODate(r.doj),
           status: normStatus,
           email: (r.email as string) ?? "",
@@ -1181,6 +1202,11 @@ export default function EmployeesPage() {
       }
       // Persist normalized ISO dates so the stored data is consistent (BUG-EMP-01).
       for (const fix of dateFixes) {
+        updateEmployee(fix.docId, fix.data).catch(() => {});
+      }
+      // Persist normalized categorical enums (BUG-EMP-03) so Work Mode / Employment
+      // Type / Department casing is standardized at the source for every screen.
+      for (const fix of enumFixes) {
         updateEmployee(fix.docId, fix.data).catch(() => {});
       }
     } catch (err) {
@@ -1661,9 +1687,14 @@ export default function EmployeesPage() {
                   </td>
                   <td className="px-4 py-3 font-medium text-gray-900">{emp.name}</td>
                   <td className="px-4 py-3 text-gray-600">{emp.designation}</td>
-                  <td className="px-4 py-3 text-gray-600">{emp.department}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {emp.department || "—"}
+                    {emp.department?.trim() && !isKnownDepartment(emp.department, canonDeptSet) && (
+                      <span title="Non-standard department — not in the configured department list. Edit to choose a standard department." className="ml-1.5 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 align-middle">⚠ non-standard</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${workModeColor[emp.workMode]}`}>{emp.workMode}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${workModeColor[emp.workMode] ?? "bg-gray-100 text-gray-600"}`}>{emp.workMode}</span>
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs">{emp.employmentType}</td>
                   <td className={`px-4 py-3 text-xs ${!emp.doj?.trim() ? "text-red-500 font-medium" : "text-gray-600"}`}>{toISODate(emp.doj) || "⚠ missing"}</td>

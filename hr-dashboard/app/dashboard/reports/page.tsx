@@ -16,6 +16,7 @@ import {
   getPayroll, getGoals, getCompensation, getSettingsDoc,
 } from "@/lib/firebaseService";
 import { deriveAttendanceStatus, DEFAULT_ATT_THRESHOLDS, type AttThresholds } from "@/lib/attendanceStatus";
+import { canonicalWorkMode } from "@/lib/enums";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ReportId = "employee" | "hiring" | "attendance" | "leave" | "payroll" | "goal" | "internship";
@@ -26,18 +27,8 @@ interface ReportData {
   summary?: { label: string; value: string | number }[];
 }
 
-// Collapse work-mode values to one canonical, consistently-cased label so the
-// Work Mode Distribution chart shows a single entry per category (BUG-05) —
-// e.g. "Hybrid"/"hybrid" merge, and WFH/office variants map to the canonical set.
-function canonicalWorkMode(raw: unknown): string {
-  const v = String(raw ?? "").trim().toLowerCase();
-  if (!v) return "On-site";
-  if (["remote", "wfh", "work from home", "work-from-home", "wfh only"].includes(v)) return "Remote";
-  if (["on-site", "onsite", "on site", "office", "in-office", "in office", "onsite only"].includes(v)) return "On-site";
-  if (["hybrid", "hybrid mode", "flexible"].includes(v)) return "Hybrid";
-  // Unknown variant — Title Case it but still coerce common casings collapsed
-  return v.replace(/\b\w/g, (c) => c.toUpperCase());
-}
+// canonicalWorkMode (BUG-05 / BUG-EMP-03) is shared from lib/enums so the Work
+// Mode Distribution chart and the Employees module normalize casing identically.
 
 function getToday() { return new Date().toISOString().split("T")[0]; }
 function fmtDate(d: string) { return d ? d.slice(0, 10) : "—"; }
