@@ -248,9 +248,9 @@ const FORM_TAB_LABELS: Record<FormTab, string> = {
 };
 
 function FormModal({
-  title, subtitle, empId, onEmpIdChange, form, setForm, onSave, onClose, saveLabel, saving,
+  title, subtitle, empId, form, setForm, onSave, onClose, saveLabel, saving,
 }: {
-  title: string; subtitle?: string; empId: string; onEmpIdChange?: (id: string) => void;
+  title: string; subtitle?: string; empId: string;
   form: FormState; setForm: (f: FormState) => void;
   onSave: () => void; onClose: () => void; saveLabel: string; saving?: boolean;
 }) {
@@ -318,14 +318,16 @@ function FormModal({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className={labelCls}>
-                  Employee ID {onEmpIdChange && <span className="text-gray-400 font-normal">(auto-filled · editable)</span>}
+                  Employee ID <span className="text-gray-400 font-normal">(auto-generated · read-only)</span>
                 </label>
                 <input
                   value={empId}
-                  readOnly={!onEmpIdChange}
-                  onChange={(e) => onEmpIdChange?.(e.target.value.toUpperCase())}
-                  placeholder="e.g. EMP001"
-                  className={`w-full px-3 py-2 rounded-xl border text-sm focus:outline-none ${onEmpIdChange ? `${inputCls} border-gray-200` : "border-gray-200 bg-gray-50"}`}
+                  readOnly
+                  aria-readonly="true"
+                  tabIndex={-1}
+                  title="Auto-generated sequentially — cannot be edited manually"
+                  placeholder="EMP…"
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-600 cursor-not-allowed focus:outline-none select-none"
                 />
               </div>
               <div>
@@ -1253,10 +1255,14 @@ export default function EmployeesPage() {
     }
     if (saving) return;
 
-    const nums = employees.map((e) => parseInt(e.id.replace("EMP", ""), 10)).filter((n) => !isNaN(n));
+    const nums = employees.map((e) => parseInt(String(e.id).replace(/\D/g, ""), 10)).filter((n) => !isNaN(n));
     const next = Math.max(0, ...nums) + 1;
     const autoId = `EMP${String(next).padStart(3, "0")}`;
-    const newId = addEmpId.trim() || autoId;
+    // Employee ID is always the next sequential auto ID (BUG-REC-02). The field is
+    // read-only, and the saved value is recomputed here from the highest existing
+    // index — so no arbitrary / out-of-sequence value can ever be stored, even if
+    // the read-only input is bypassed.
+    const newId = autoId;
 
     setSaving(true);
 
@@ -1521,7 +1527,7 @@ export default function EmployeesPage() {
     XLSX.writeFile(wb, `employees_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
-  const nums = employees.map((e) => parseInt(e.id.replace("EMP", ""), 10)).filter((n) => !isNaN(n));
+  const nums = employees.map((e) => parseInt(String(e.id).replace(/\D/g, ""), 10)).filter((n) => !isNaN(n));
   const nextAddId = `EMP${String(Math.max(0, ...nums) + 1).padStart(3, "0")}`;
 
   return (
@@ -1637,7 +1643,6 @@ export default function EmployeesPage() {
         <FormModal
           title="Add New Employee"
           empId={addEmpId}
-          onEmpIdChange={setAddEmpId}
           form={form}
           setForm={setForm}
           onSave={handleAdd}
