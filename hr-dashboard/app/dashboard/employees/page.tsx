@@ -771,6 +771,38 @@ function validateBulkRow(row: BulkRow): string | null {
   return null;
 }
 
+// Context needed to detect duplicates across the whole import (BUG-IMP-01):
+// the set of emails/IDs already in the system, plus how many times each email
+// appears within the file being imported.
+interface DupContext {
+  existingEmails: Set<string>;   // lower-cased emails already in Firestore
+  batchEmailCounts: Map<string, number>; // occurrences of each email in this file
+}
+
+function buildDupContext(existingEmails: Set<string>, rows: BulkRow[]): DupContext {
+  const batchEmailCounts = new Map<string, number>();
+  for (const r of rows) {
+    if (isEmptyBulkRow(r)) continue;
+    const e = (r.email || "").trim().toLowerCase();
+    if (e) batchEmailCounts.set(e, (batchEmailCounts.get(e) ?? 0) + 1);
+  }
+  return { existingEmails, batchEmailCounts };
+}
+
+// Full per-row verdict for the import preview: field-level validation FIRST
+// (required/format/number), then duplicate detection against the system and
+// within the file. Returns null when the row is clean and safe to write.
+function bulkRowError(row: BulkRow, ctx: DupContext): string | null {
+  const base = validateBulkRow(row);
+  if (base) return base;
+  const email = (row.email || "").trim().toLowerCase();
+  if (email) {
+    if (ctx.existingEmails.has(email)) return "Duplicate: this email already exists in the system";
+    if ((ctx.batchEmailCounts.get(email) ?? 0) > 1) return "Duplicate: this email appears more than once in the file";
+  }
+  return null;
+}
+
 function rowToEmployee(row: BulkRow, id: string): Employee {
   return {
     ...empDefaults,
@@ -795,10 +827,11 @@ function rowToEmployee(row: BulkRow, id: string): Employee {
   };
 }
 
-function BulkImportModal({ onImport, onClose, nextIdStart }: {
+function BulkImportModal({ onImport, onClose, nextIdStart, existingEmails }: {
   onImport: (emps: Employee[]) => void;
   onClose: () => void;
   nextIdStart: number;
+  existingEmails: Set<string>;
 }) {
   const departments = useDepartments();
   const [mode, setMode] = useState<"multi" | "csv">("multi");
@@ -806,6 +839,14 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
   const [csvRows, setCsvRows] = useState<BulkRow[]>([]);
   const [csvName, setCsvName] = useState("");
   const [toast, setToast] = useState("");
+
+  // Live duplicate context over whatever rows are currently in view, so the
+  // preview flags duplicate emails (against the system and within the file)
+  // the moment they appear — not silently at write time (BUG-IMP-01).
+  const activeSource = mode === "multi" ? rows : csvRows;
+  const dupCtx = buildDupContext(existingEmails, activeSource);
+  // Single source of truth for a row's verdict — field validation + duplicates.
+  const errorFor = (r: BulkRow): string | null => isEmptyBulkRow(r) ? null : bulkRowError(r, dupCtx);
 
   const inputCls = "w-full px-2 py-1.5 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-1 focus:ring-[#4F3CC9]";
   const selectCls = "w-full px-2 py-1.5 rounded-lg border border-gray-200 text-xs focus:outline-none focus:ring-1 focus:ring-[#4F3CC9] bg-white";
@@ -839,19 +880,21 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
 
   function handleImport() {
     const source = mode === "multi" ? rows : csvRows;
+    const ctx = buildDupContext(existingEmails, source);
     // Re-validate every non-empty row at import time (edits clear _err), so bad
-    // phone numbers / salaries / emails can never slip through (EMP-001 retest).
+    // phone numbers / salaries / emails / DUPLICATES can never slip through
+    // (EMP-001 + BUG-IMP-01: validate & de-dupe prior to import, not after).
     const annotated = source.map((r) =>
-      isEmptyBulkRow(r) ? { ...r, _err: undefined } : { ...r, _err: validateBulkRow(r) ?? undefined }
+      isEmptyBulkRow(r) ? { ...r, _err: undefined } : { ...r, _err: bulkRowError(r, ctx) ?? undefined }
     );
     const valid = annotated.filter((r) => !isEmptyBulkRow(r) && !r._err);
     const invalid = annotated.filter((r) => !isEmptyBulkRow(r) && r._err).length;
     // Surface the errors on the preview rows so it's clear why a row was rejected.
     if (mode === "multi") setRows(annotated); else setCsvRows(annotated);
-    // Block the entire import until every row passes number-format/required checks —
-    // don't silently skip bad rows (EMP-001 retest: "validate numeric fields prior to import").
+    // Block the entire import until every row passes validation AND has no
+    // duplicate email — don't silently skip bad/duplicate rows.
     if (invalid > 0) {
-      setToast(`${invalid} row${invalid !== 1 ? "s" : ""} have invalid data (phone/salary/email/PIN). Fix the highlighted rows before importing.`);
+      setToast(`${invalid} row${invalid !== 1 ? "s" : ""} have invalid or duplicate data. Fix or remove the highlighted rows before importing.`);
       setTimeout(() => setToast(""), 5000);
       return;
     }
@@ -867,8 +910,8 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
   }
 
   const previewRows = mode === "multi" ? rows : csvRows;
-  const validCount = previewRows.filter((r) => !isEmptyBulkRow(r) && !validateBulkRow(r)).length;
-  const invalidCount = previewRows.filter((r) => !isEmptyBulkRow(r) && !!validateBulkRow(r)).length;
+  const validCount = previewRows.filter((r) => !isEmptyBulkRow(r) && !errorFor(r)).length;
+  const invalidCount = previewRows.filter((r) => !isEmptyBulkRow(r) && !!errorFor(r)).length;
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -923,14 +966,17 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {rows.map((row, i) => (
-                      <tr key={i} className={row._err ? "bg-red-50" : "hover:bg-gray-50"}>
+                    {rows.map((row, i) => {
+                      const rowErr = errorFor(row);
+                      const isDup = !!rowErr && rowErr.startsWith("Duplicate");
+                      return (
+                      <tr key={i} className={rowErr ? "bg-red-50" : "hover:bg-gray-50"}>
                         <td className="px-2 py-2 text-gray-400 font-mono">{i + 1}</td>
                         <td className="px-2 py-2">
-                          <input value={row.name} onChange={(e) => setCell(i, "name", e.target.value)} placeholder="Full Name" className={`${inputCls} ${row._err ? "border-red-300" : ""}`} />
-                          {row._err && <p className="text-red-500 text-[10px] mt-0.5">{row._err}</p>}
+                          <input value={row.name} onChange={(e) => setCell(i, "name", e.target.value)} placeholder="Full Name" className={`${inputCls} ${rowErr ? "border-red-300" : ""}`} />
+                          {rowErr && <p className="text-red-500 text-[10px] mt-0.5">{rowErr}</p>}
                         </td>
-                        <td className="px-2 py-2"><input value={row.email} onChange={(e) => setCell(i, "email", e.target.value)} placeholder="name@woways.in" className={inputCls} /></td>
+                        <td className="px-2 py-2"><input value={row.email} onChange={(e) => setCell(i, "email", e.target.value)} placeholder="name@woways.in" className={`${inputCls} ${isDup ? "border-red-300" : ""}`} /></td>
                         <td className="px-2 py-2">
                           <input
                             type="tel" inputMode="numeric" maxLength={10}
@@ -979,7 +1025,8 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                           <button onClick={() => removeRow(i)} className="text-gray-300 hover:text-red-400 transition"><X size={14} /></button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1005,7 +1052,7 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
               </label>
               {csvRows.length > 0 && (
                 <div>
-                  <p className="text-xs font-medium text-gray-600 mb-2">{csvRows.length} rows detected — preview:</p>
+                  <p className="text-xs font-medium text-gray-600 mb-2">{csvRows.length} rows detected — preview <span className="text-gray-400 font-normal">(values shown are normalized to standard enums &amp; ISO dates before import)</span>:</p>
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs border-collapse">
                       <thead>
@@ -1014,6 +1061,8 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                           <th className="px-3 py-2 text-left">Name</th>
                           <th className="px-3 py-2 text-left">Email</th>
                           <th className="px-3 py-2 text-left">Phone</th>
+                          <th className="px-3 py-2 text-left">Work Mode</th>
+                          <th className="px-3 py-2 text-left">Type</th>
                           <th className="px-3 py-2 text-left">Payroll (₹)</th>
                           <th className="px-3 py-2 text-left">DOJ</th>
                           <th className="px-3 py-2 text-left">Status</th>
@@ -1021,19 +1070,29 @@ function BulkImportModal({ onImport, onClose, nextIdStart }: {
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {csvRows.map((r, i) => {
+                          const err = errorFor(r);
+                          const isDup = !!err && err.startsWith("Duplicate");
                           const badPhone = !r.phone?.trim() || !!validatePhone(r.phone);
                           const badSalary = !!r.ctc?.trim() && (r.ctc.includes("-") || !(parseFloat(r.ctc.replace(/[^\d.]/g, "")) > 0));
+                          // Show the NORMALIZED value the pipeline will actually write, and
+                          // mark it when it differs from the raw CSV cell so the fix is visible.
+                          const normMode = canonicalWorkMode(r.workMode);
+                          const normType = canonicalEmploymentType(r.employmentType);
+                          const modeChanged = !!r.workMode?.trim() && normMode !== r.workMode.trim();
+                          const typeChanged = !!r.employmentType?.trim() && normType !== r.employmentType.trim();
                           return (
-                          <tr key={i} className={r._err ? "bg-red-50" : ""}>
+                          <tr key={i} className={err ? "bg-red-50" : ""}>
                             <td className="px-3 py-2 text-gray-400">{i + 1}</td>
                             <td className="px-3 py-2 font-medium">{r.name || <span className="text-red-400">—</span>}</td>
-                            <td className="px-3 py-2 text-gray-600">{r.email || <span className="text-red-400">—</span>}</td>
+                            <td className={`px-3 py-2 ${isDup ? "text-red-500 font-medium" : "text-gray-600"}`}>{r.email || <span className="text-red-400">—</span>}</td>
                             <td className={`px-3 py-2 ${badPhone ? "text-red-500 font-medium" : "text-gray-600"}`}>{r.phone || "—"}</td>
+                            <td className="px-3 py-2 text-gray-600" title={modeChanged ? `raw: "${r.workMode}"` : undefined}>{r.workMode?.trim() ? normMode : "—"}{modeChanged && <span className="ml-1 text-[10px] text-amber-600">✎</span>}</td>
+                            <td className="px-3 py-2 text-gray-600" title={typeChanged ? `raw: "${r.employmentType}"` : undefined}>{r.employmentType?.trim() ? normType : "—"}{typeChanged && <span className="ml-1 text-[10px] text-amber-600">✎</span>}</td>
                             <td className={`px-3 py-2 ${badSalary ? "text-red-500 font-medium" : "text-gray-600"}`}>{r.ctc || "—"}</td>
                             <td className="px-3 py-2 text-gray-600">{toISODate(r.doj) || "—"}</td>
                             <td className="px-3 py-2">
-                              {r._err
-                                ? <span className="text-red-500">{r._err}</span>
+                              {err
+                                ? <span className="text-red-500">{err}</span>
                                 : <span className="text-green-600">✓ Valid</span>
                               }
                             </td>
@@ -1724,6 +1783,7 @@ export default function EmployeesPage() {
           onImport={handleBulkImport}
           onClose={() => setShowBulk(false)}
           nextIdStart={Math.max(0, ...employees.map((e) => parseInt(e.id.replace("EMP", ""), 10)).filter((n) => !isNaN(n))) + 1}
+          existingEmails={new Set(employees.map((e) => (e.email || "").trim().toLowerCase()).filter(Boolean))}
         />
       )}
 
