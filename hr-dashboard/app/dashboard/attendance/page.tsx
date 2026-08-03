@@ -8,6 +8,7 @@ import {
 import { getAttendance, updateAttendance, upsertAttendance, updateRegularizationStatus, markHRNotifRead } from "@/lib/firebaseService";
 import { invalidateAttendance } from "@/lib/cachedService";
 import { deriveAttendanceStatus, effectiveStatus } from "@/lib/attendanceStatus";
+import { canonicalWorkMode } from "@/lib/enums";
 import { readCache, writeCache } from "@/lib/cache";
 import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -135,10 +136,14 @@ export default function AttendancePage() {
   }, []);
 
   // ── Load ALL employees + today's attendance and merge ─────────────────────
+  // Work-location attribution derived from the employee's ACTUAL configured Work
+  // Mode (BUG-ATT-01) — canonicalized first so "On-site"/"Office", "Remote"/"WFH"
+  // and casing variants all resolve correctly. Only genuine remote/hybrid modes
+  // count as WFH; On-site (office) employees are never defaulted to WFH.
   function defaultLocation(workMode: string): WorkLocation {
-    if (workMode === "Remote" || workMode === "WFH") return "WFH";
-    if (workMode === "Hybrid") return "WFH";
-    return "Office";
+    const wm = canonicalWorkMode(workMode);
+    if (wm === "Remote" || wm === "Hybrid") return "WFH";
+    return "Office"; // On-site / office / anything else
   }
 
   const loadAttendance = useCallback(async () => {
@@ -189,11 +194,16 @@ export default function AttendancePage() {
         const empLoc = defaultLocation(emp.workMode);
         const existing = attMap.get(emp.id);
         if (existing) {
-          // Employee clocked in from employee-dashboard without writing a location field —
-          // back-fill the location from their workMode so WFH distribution counts are correct.
+          // BUG-ATT-01: attribute the record to the employee's ACTUAL configured
+          // Work Mode, not a stale/defaulted `location` on the stored doc. The
+          // employee clock-in writes no location, and old backfills may have written
+          // a location from a since-changed workMode — so a stored WFH/Office value
+          // must never override the current workMode. Only a genuinely-distinct
+          // "Client Site" (which can't be derived from workMode) is preserved.
+          const stored = existing.location as string | undefined;
           return {
             ...existing,
-            location: ((existing.location as string) || empLoc) as WorkLocation,
+            location: (stored === "Client Site" ? "Client Site" : empLoc) as WorkLocation,
           };
         }
         return {
