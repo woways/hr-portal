@@ -6,6 +6,7 @@ import {
 } from "recharts";
 import { cachedEmployees, cachedAttendance, cachedLeaveRequests, cachedGoals } from "@/lib/cachedService";
 import { effectiveStatus } from "@/lib/attendanceStatus";
+import { useAttendanceThresholds } from "@/lib/useAttendanceThresholds";
 import { SkeletonHeader, SkeletonStatGrid, SkeletonChart, SkeletonCard } from "@/components/Skeleton";
 
 interface Employee {
@@ -33,6 +34,10 @@ function getMonthLabel(daysBack: number) {
 }
 
 export default function DashboardPage() {
+  // Subscribe to the configured attendance thresholds so effectiveStatus() counts
+  // below use the same Settings-driven cutoffs as the Attendance module (BUG-ATT-02
+  // + BUG-DASH-01 reconciliation).
+  useAttendanceThresholds();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [attRecords, setAttRecords] = useState<AttRecord[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);

@@ -45,20 +45,38 @@ export function parseWorkedHours(rec: AttStatusRecord): number {
   return m ? Number(m[1]) + Number(m[2] || 0) / 60 : 0;
 }
 
-// Convenience wrapper — uses DEFAULT_ATT_THRESHOLDS. Prefer this in UI counting
-// paths (dashboard tile, attendance page counts) so every surface applies the same
-// derivation regardless of what's stored in `status`. Fixes BUG-06 dashboard/report
-// mismatch: raw `r.status` could be stale from before backfill; derived is truth.
-export function effectiveStatus(rec: AttStatusRecord): string {
-  return deriveAttendanceStatus(rec, DEFAULT_ATT_THRESHOLDS);
+// Session-wide CONFIGURED thresholds (BUG-ATT-02). effectiveStatus() reads these
+// instead of the hardcoded defaults so the Half-Day / Present cutoffs set in
+// Settings → Attendance Rules are honored on EVERY surface (attendance tiles,
+// dashboard, reports) — and, because it's one shared value, those surfaces stay
+// reconciled with each other (BUG-06 / BUG-DASH-01). Kept in sync by
+// useAttendanceThresholds(), which subscribes to settings/attendanceRules.
+let CONFIGURED_ATT_THRESHOLDS: AttThresholds = { ...DEFAULT_ATT_THRESHOLDS };
+export function setConfiguredThresholds(t: AttThresholds): void {
+  CONFIGURED_ATT_THRESHOLDS = { minHours: t.minHours, halfDayThreshold: t.halfDayThreshold ?? 0 };
+}
+export function getConfiguredThresholds(): AttThresholds {
+  return CONFIGURED_ATT_THRESHOLDS;
 }
 
-// Derive the effective attendance status. Single rule shared by dashboard + reports:
-//  • No clock-in / 0 hours   → Absent (or the stored Leave / Week Off).
-//  • Leave / Week Off        → unchanged.
-//  • Clocked in, not out yet  → Present (an open shift is treated as working).
-//  • Clocked out, ≥ full day  → Present.
-//  • Clocked out, any work    → Half Day (any positive time under a full day counts).
+// Convenience wrapper — uses the CONFIGURED thresholds (from Settings). Prefer this
+// in UI counting paths (dashboard tile, attendance page counts, reports) so every
+// surface applies the same, Settings-driven derivation regardless of what's stored
+// in `status`. Fixes BUG-06 (dashboard/report mismatch) + BUG-ATT-02 (honor config).
+export function effectiveStatus(rec: AttStatusRecord): string {
+  return deriveAttendanceStatus(rec, CONFIGURED_ATT_THRESHOLDS);
+}
+
+// Derive the effective attendance status. Single rule shared by dashboard + reports,
+// driven by the configured thresholds (BUG-ATT-02):
+//  • No clock-in / 0 hours    → Absent (or the stored Leave / Week Off).
+//  • Leave / Week Off         → unchanged.
+//  • Clocked in, not out yet   → Present (an open shift is treated as working).
+//  • Clocked out, ≥ minHours   → Present (full day, threshold from Settings).
+//  • Clocked out, ≥ halfDay    → Half Day (met the configured half-day minimum).
+//  • Clocked out, below halfDay → Absent (didn't reach the half-day threshold).
+// With the default halfDayThreshold of 0, "≥ halfDay" is any positive time, so the
+// baseline "any work under a full day = Half Day" rule (ATT-003) is unchanged.
 export function deriveAttendanceStatus(rec: AttStatusRecord, t: AttThresholds): string {
   const clockIn = rec.clockIn ?? "";
   const status = rec.status ?? "";
@@ -69,7 +87,8 @@ export function deriveAttendanceStatus(rec: AttStatusRecord, t: AttThresholds): 
   const clockedOut = !!clockOut && clockOut !== "Ongoing" && clockOut !== "—" && clockOut !== "";
   if (!clockedOut) return status && status !== "Absent" ? status : "Present";
   const hrs = parseWorkedHours(rec);
-  if (hrs >= t.minHours) return "Present"; // full day or more
-  if (hrs > 0) return "Half Day";          // any work under a full day
-  return "Absent";                          // clocked in and out with no measurable time
+  const halfMin = t.halfDayThreshold ?? 0;
+  if (hrs >= t.minHours) return "Present";          // full day or more (configured minHours)
+  if (hrs > 0 && hrs >= halfMin) return "Half Day"; // within the configured half-day band
+  return "Absent";                                   // below the half-day threshold (or no time)
 }

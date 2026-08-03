@@ -9,6 +9,7 @@ import { getAttendance, updateAttendance, upsertAttendance, updateRegularization
 import { invalidateAttendance } from "@/lib/cachedService";
 import { deriveAttendanceStatus, effectiveStatus } from "@/lib/attendanceStatus";
 import { canonicalWorkMode } from "@/lib/enums";
+import { useAttendanceThresholds } from "@/lib/useAttendanceThresholds";
 import { readCache, writeCache } from "@/lib/cache";
 import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -72,9 +73,11 @@ export default function AttendancePage() {
   const [loadingRecords, setLoadingRecords] = useState(true);
   // Configured Late Login Threshold (HH:MM, 24h) from Settings → Work Timings.
   const [lateThreshold, setLateThreshold] = useState("09:30");
-  // Min full-day hours and half-day threshold from Settings → Attendance Rules.
-  const [minHours, setMinHours] = useState(8);
-  const [halfDayThreshold, setHalfDayThreshold] = useState(4);
+  // Min full-day hours and half-day threshold from Settings → Attendance Rules,
+  // via the shared reactive hook so the Half-Day / Present calculation honors the
+  // configured values AND every surface (tiles, dashboard, reports) stays in sync
+  // through effectiveStatus() (BUG-ATT-02).
+  const { minHours, halfDayThreshold } = useAttendanceThresholds();
   // Standard hours beyond which extra time counts as Overtime (ATT-009). Default 9.
   const [overtimeThreshold, setOvertimeThreshold] = useState(9);
 
@@ -85,11 +88,7 @@ export default function AttendancePage() {
     getDoc(doc(db, "settings", "attendanceRules"))
       .then((snap) => {
         if (!snap.exists()) return;
-        const mh = parseFloat(snap.data().minHours as string);
-        const hd = parseFloat(snap.data().halfDayThreshold as string);
         const ot = parseFloat((snap.data().overtimeThreshold ?? snap.data().standardHours) as string);
-        if (!isNaN(mh)) setMinHours(mh);
-        if (!isNaN(hd)) setHalfDayThreshold(hd);
         if (!isNaN(ot)) setOvertimeThreshold(ot);
       })
       .catch(() => { /* keep defaults */ });
@@ -803,7 +802,7 @@ export default function AttendancePage() {
           {/* Make the active status rule explicit so the cutoff in force is never
               ambiguous (ATT-003) — values come live from Settings → Attendance Rules. */}
           <p className="text-xs text-gray-400 mt-1">
-            Status rule: Present ≥ {minHours}h worked · Half Day = any work under {minHours}h · Absent = no clock-in · full-day hours configurable in Settings → Attendance Rules
+            Status rule: Present ≥ {minHours}h worked · Half Day = {halfDayThreshold > 0 ? `${halfDayThreshold}h to under ${minHours}h` : `any work under ${minHours}h`} · Absent = {halfDayThreshold > 0 ? `no clock-in or under ${halfDayThreshold}h` : "no clock-in"} · thresholds configurable in Settings → Attendance Rules
           </p>
         </div>
         <div className="flex gap-3">
