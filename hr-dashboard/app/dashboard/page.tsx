@@ -115,15 +115,28 @@ export default function DashboardPage() {
   ];
 
   // ── Attendance overview ───────────────────────────────────────────────────
-  const activeEmpIds = new Set(employees.map(e => e.id));
-  const validAttRecords = attRecords.filter(r => !r.empId || activeEmpIds.has(r.empId));
+  // BUG-DASH-01: reconcile with the Attendance module by counting over the SAME
+  // source of truth. The Attendance module builds a record for EVERY employee who
+  // has joined by today — their doc for today, or a synthesized "Absent" when no
+  // doc exists — then derives Present/Half Day/Absent via effectiveStatus. The
+  // Dashboard previously counted only the attendance docs that physically existed,
+  // so employees with no record today were silently dropped: Absent and the daily
+  // total came out lower than Attendance & Workforce Analytics for the same date.
+  // Merging against the joined-by-today cohort makes the two views read identical
+  // totals. (Both derive status with the same effectiveStatus helper — BUG-06 —
+  // so once the cohort matches, every bucket matches.)
+  const attByEmp = new Map(attRecords.filter(r => r.empId).map(r => [r.empId, r] as const));
+  const attCohort = employees.filter(e => !e.doj || e.doj <= TODAY); // joined by today
+  const mergedAtt: AttRecord[] = attCohort.map(e =>
+    attByEmp.get(e.id) ?? { empId: e.id, status: "Absent", late: false, workingHours: "" }
+  );
   // BUG-06: derive status via shared helper so dashboard tile matches Reports.
-  const derived = validAttRecords.map(r => ({ ...r, _eff: effectiveStatus(r) }));
+  const derived = mergedAtt.map(r => ({ ...r, _eff: effectiveStatus(r) }));
   const presentCount  = derived.filter(r => r._eff === "Present").length;
   const absentCount   = derived.filter(r => r._eff === "Absent").length;
-  const lateCount     = validAttRecords.filter(r => r.late).length;
+  const lateCount     = mergedAtt.filter(r => r.late).length;
   const halfDayCount  = derived.filter(r => r._eff === "Half Day").length;
-  const hoursArr      = validAttRecords.map(r => parseWorkingHours(r.workingHours)).filter(h => h > 0);
+  const hoursArr      = mergedAtt.map(r => parseWorkingHours(r.workingHours)).filter(h => h > 0);
   const avgHours      = hoursArr.length ? (hoursArr.reduce((s, h) => s + h, 0) / hoursArr.length).toFixed(1) + "h" : "—";
 
   const attendanceOverview = [
