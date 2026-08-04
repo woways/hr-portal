@@ -715,7 +715,10 @@ export default function AttendancePage() {
 
   function openEdit(r: AttendanceRecord) {
     setEditRecord(r);
-    setCorrection({ name: r.name, date: r.date, clockIn: to24h(r.clockIn), clockOut: to24h(r.clockOut), status: r.status, reason: "" });
+    // Default the dropdown to the CURRENTLY DISPLAYED (derived) status — e.g. a
+    // clocked-in employee shows "Present" — so just adjusting clock times doesn't
+    // accidentally re-freeze a stale "Absent" as a manual override.
+    setCorrection({ name: r.name, date: r.date, clockIn: to24h(r.clockIn), clockOut: to24h(r.clockOut), status: effectiveStatus(r) as AttendanceStatus, reason: "" });
   }
 
   async function saveCorrection() {
@@ -739,9 +742,14 @@ export default function AttendancePage() {
       return clockMins > thresholdMins;
     })();
     const computedHours = computeHours(ciStr, coStr);
-    // Mark the status as manually set so the clock-based derivation respects HR's
-    // choice instead of recomputing Present/Absent from clock-in.
-    const updated = { ...editRecord, clockIn: ciStr, clockOut: coStr, status: correction.status, statusManual: true, late: isLate, workingHours: computedHours || editRecord.workingHours };
+    // Only treat this as a manual OVERRIDE when HR's chosen status differs from what
+    // the clock-based rule would derive (clocked in → Present, else Absent). If HR
+    // just adjusts clock times and leaves the status at its derived value, keep it
+    // auto (statusManual: false) so it never freezes — this is what caused clocked-in
+    // employees to be stuck "Absent".
+    const autoStatus = deriveAttendanceStatus({ clockIn: ciStr, clockOut: coStr, status: "", workingHours: computedHours });
+    const isManual = correction.status !== autoStatus;
+    const updated = { ...editRecord, clockIn: ciStr, clockOut: coStr, status: correction.status, statusManual: isManual, late: isLate, workingHours: computedHours || editRecord.workingHours };
     setRecords(records.map((r) => r.id === editRecord.id ? updated : r));
     setEditRecord(null);
     try {
