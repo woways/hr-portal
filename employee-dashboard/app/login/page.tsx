@@ -1,4 +1,4 @@
-f"use client";
+"use client";
 import { useState, useEffect, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
