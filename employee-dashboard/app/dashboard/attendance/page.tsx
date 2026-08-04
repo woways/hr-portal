@@ -25,16 +25,15 @@ interface AttEntry {
 }
 
 // Derive the displayed attendance category (same rule as the HR module):
-//   • HR manual override (statusManual) → keep the stored status
-//   • Leave / Week Off                  → unchanged
-//   • clocked in                        → Present
-//   • no clock-in                       → Absent
-// No hours-based Half-Day calculation — Half Day only appears when HR sets it.
+//   • clocked in  → ALWAYS Present, irrespective of anything
+//   • no clock-in → HR-set status if any (Leave / Week Off / Half Day / Absent),
+//                   else Week Off on weekends, otherwise Absent
 function deriveDisplayStatus(e: AttEntry): AttStatus {
+  const hasClockIn = !!e.clockIn && e.clockIn !== "—" && e.clockIn !== "";
+  if (hasClockIn) return "Present";
   if (e.statusManual) return e.status || (e.isWeekend ? "Week Off" : "Absent");
   if (e.status === "Leave" || e.status === "Week Off") return e.status;
-  const hasClockIn = !!e.clockIn && e.clockIn !== "—" && e.clockIn !== "";
-  return hasClockIn ? "Present" : "Absent";
+  return e.isWeekend ? "Week Off" : "Absent";
 }
 
 interface RegRequest {

@@ -68,21 +68,20 @@ export function effectiveStatus(rec: AttStatusRecord): string {
   return deriveAttendanceStatus(rec, CONFIGURED_ATT_THRESHOLDS);
 }
 
-// Derive the effective attendance status. Simple, clock-based rule shared by the
-// HR Attendance module, the Dashboard, Reports and the employee view:
-//  • HR manual override (statusManual) → whatever HR set it to (Present / Absent /
-//    Half Day / Leave / Week Off) — this always wins.
-//  • Leave / Week Off (system-managed) → unchanged.
-//  • Clocked in  → Present.
-//  • No clock-in → Absent.
-// There is no hours-based Half-Day calculation; Half Day only exists when HR sets
-// it manually. The optional thresholds argument is accepted for backwards
-// compatibility but is ignored.
+// Derive the effective attendance status. Clock-in is the single source of truth,
+// shared by the HR Attendance module, Dashboard, Reports and the employee view:
+//  • Clocked in  → ALWAYS Present, irrespective of any stored/manual status
+//    (a clock-in can never be Absent).
+//  • No clock-in → the HR-set status if any (Absent / Half Day / Leave / Week Off),
+//    otherwise Absent.
+// There is no hours-based Half-Day calculation. The optional thresholds argument is
+// accepted for backwards compatibility but is ignored.
 export function deriveAttendanceStatus(rec: AttStatusRecord, _t?: AttThresholds): string {
-  const status = rec.status ?? "";
-  if (rec.statusManual) return status || "Absent";          // HR override wins
-  if (status === "Leave" || status === "Week Off") return status; // system-managed
   const clockIn = rec.clockIn ?? "";
-  const hasClockIn = !!clockIn && clockIn !== "—" && clockIn !== "";
-  return hasClockIn ? "Present" : "Absent";
+  const hasClockIn = !!clockIn && clockIn !== "—" && clockIn !== "" && clockIn !== "--:--";
+  if (hasClockIn) return "Present";                         // clocked in → always Present
+  const status = rec.status ?? "";
+  if (rec.statusManual) return status || "Absent";          // HR status for a no-clock-in day
+  if (status === "Leave" || status === "Week Off") return status; // system-managed
+  return "Absent";
 }
