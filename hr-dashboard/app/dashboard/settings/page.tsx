@@ -42,6 +42,14 @@ const DEFAULT_COMPANY      = { name: "", industry: "", website: "", address: "" 
 const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]";
 
+// Keep only a valid decimal number as the user types (BUG-ATT-02 hardening):
+// strips letters/symbols and any extra dots, so a typed range like "4-5" can
+// never be entered or saved into an hours threshold.
+function sanitizeDecimal(raw: string): string {
+  const cleaned = raw.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1");
+  return cleaned;
+}
+
 // Auto-derive day name from a date string
 function dayName(dateStr: string): string {
   if (!dateStr) return "";
@@ -312,11 +320,16 @@ export default function SettingsPage() {
     // module reads are always coherent — Half-Day start must sit below the
     // Full-Day (Present) cutoff, otherwise there's no valid Half-Day band.
     if (docId === "attendanceRules") {
-      const mh = parseFloat(String((data as Record<string, unknown>).minHours));
-      const hd = parseFloat(String((data as Record<string, unknown>).halfDayThreshold));
-      if (isNaN(mh) || mh <= 0) { showToast("Full Day hours must be a positive number.", false); return; }
-      if (isNaN(hd) || hd < 0) { showToast("Half Day hours must be zero or more.", false); return; }
-      if (hd >= mh) { showToast("Half-Day start must be less than Full-Day hours (e.g. Half Day from 4, Full Day at 7).", false); return; }
+      const numRe = /^\d+(\.\d+)?$/; // clean integer/decimal only — rejects "4-5", "abc", etc.
+      const mhRaw = String((data as Record<string, unknown>).minHours ?? "").trim();
+      const hdRaw = String((data as Record<string, unknown>).halfDayThreshold ?? "").trim();
+      if (!numRe.test(mhRaw)) { showToast("Full Day hours must be a number (e.g. 6 or 6.5).", false); return; }
+      if (!numRe.test(hdRaw)) { showToast("Half Day hours must be a number (e.g. 3 or 3.5).", false); return; }
+      const mh = parseFloat(mhRaw);
+      const hd = parseFloat(hdRaw);
+      if (mh <= 0) { showToast("Full Day hours must be greater than 0.", false); return; }
+      if (hd < 0) { showToast("Half Day hours must be zero or more.", false); return; }
+      if (hd >= mh) { showToast("Half-Day start must be less than Full-Day hours (e.g. Half Day from 3, Full Day at 6).", false); return; }
     }
     setSavingTab(tab);
     try {
@@ -634,7 +647,7 @@ export default function SettingsPage() {
                       <div>
                         <label className="text-xs font-medium text-gray-600 block mb-1">Half Day — from</label>
                         <div className="flex items-center gap-2">
-                          <input value={attRules.halfDayThreshold} onChange={(e) => setAttRules({ ...attRules, halfDayThreshold: e.target.value })} className={inputCls} />
+                          <input value={attRules.halfDayThreshold} inputMode="decimal" onChange={(e) => setAttRules({ ...attRules, halfDayThreshold: sanitizeDecimal(e.target.value) })} className={inputCls} />
                           <span className="text-sm text-gray-500 shrink-0">hours</span>
                         </div>
                         <p className="text-[11px] text-gray-400 mt-1">Lower bound — below this counts as Absent.</p>
@@ -642,7 +655,7 @@ export default function SettingsPage() {
                       <div>
                         <label className="text-xs font-medium text-gray-600 block mb-1">Full Day — Present at</label>
                         <div className="flex items-center gap-2">
-                          <input value={attRules.minHours} onChange={(e) => setAttRules({ ...attRules, minHours: e.target.value })} className={inputCls} />
+                          <input value={attRules.minHours} inputMode="decimal" onChange={(e) => setAttRules({ ...attRules, minHours: sanitizeDecimal(e.target.value) })} className={inputCls} />
                           <span className="text-sm text-gray-500 shrink-0">hours</span>
                         </div>
                         <p className="text-[11px] text-gray-400 mt-1">Upper bound — at/above this counts as Present.</p>
@@ -672,7 +685,7 @@ export default function SettingsPage() {
                       <div key={key}>
                         <label className="text-xs font-medium text-gray-600 block mb-1">{label}</label>
                         <div className="flex items-center gap-2">
-                          <input value={attRules[key]} onChange={(e) => setAttRules({ ...attRules, [key]: e.target.value })} className={inputCls} />
+                          <input value={attRules[key]} inputMode="numeric" onChange={(e) => setAttRules({ ...attRules, [key]: e.target.value.replace(/\D/g, "") })} className={inputCls} />
                           <span className="text-sm text-gray-500 shrink-0">{unit}</span>
                         </div>
                       </div>
