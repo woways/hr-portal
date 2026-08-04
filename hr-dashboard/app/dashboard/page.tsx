@@ -6,14 +6,13 @@ import {
 } from "recharts";
 import { cachedEmployees, cachedAttendance, cachedLeaveRequests, cachedGoals } from "@/lib/cachedService";
 import { effectiveStatus } from "@/lib/attendanceStatus";
-import { useAttendanceThresholds } from "@/lib/useAttendanceThresholds";
 import { SkeletonHeader, SkeletonStatGrid, SkeletonChart, SkeletonCard } from "@/components/Skeleton";
 
 interface Employee {
   id: string; status: string; employmentType: string; department: string;
   doj: string;
 }
-interface AttRecord { empId: string; status: string; late: boolean; workingHours: string; clockIn?: string; clockOut?: string; }
+interface AttRecord { empId: string; status: string; late: boolean; workingHours: string; clockIn?: string; clockOut?: string; statusManual?: boolean; }
 interface LeaveRequest { status: string; leaveType: string; startDate: string; }
 interface Goal { status: string; }
 
@@ -34,10 +33,6 @@ function getMonthLabel(daysBack: number) {
 }
 
 export default function DashboardPage() {
-  // Subscribe to the configured attendance thresholds so effectiveStatus() counts
-  // below use the same Settings-driven cutoffs as the Attendance module (BUG-ATT-02
-  // + BUG-DASH-01 reconciliation).
-  useAttendanceThresholds();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [attRecords, setAttRecords] = useState<AttRecord[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
@@ -83,14 +78,12 @@ export default function DashboardPage() {
         status: (d.status as string) ?? "",
         late: Boolean(d.late),
         workingHours: (d.workingHours as string) ?? "",
-        // BUG-DASH-01: carry clockIn/clockOut so effectiveStatus DERIVES the status
-        // from hours worked (same as the Attendance module) instead of falling back
-        // to the raw stored status. Without these, deriveAttendanceStatus hits its
-        // "no clock-in" branch and returns the frozen stored status — computed at
-        // clock-out under whatever thresholds applied then — so the Dashboard and
-        // Attendance & Workforce Analytics disagreed after any Settings change.
+        // Carry clockIn + the HR manual-override flag so effectiveStatus derives the
+        // same way as the Attendance module (clocked in → Present, else Absent, with
+        // HR overrides preserved) and the two views always reconcile (BUG-DASH-01).
         clockIn: (d.clockIn as string) ?? "",
         clockOut: (d.clockOut as string) ?? "",
+        statusManual: Boolean(d.statusManual),
       })));
       if (!seen.att) { seen.att = true; bump(); }
     }, TODAY).catch(() => { if (!seen.att) { seen.att = true; bump(); } });

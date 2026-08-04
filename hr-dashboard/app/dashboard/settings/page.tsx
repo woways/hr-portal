@@ -42,14 +42,6 @@ const DEFAULT_COMPANY      = { name: "", industry: "", website: "", address: "" 
 const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]";
 
-// Keep only a valid decimal number as the user types (BUG-ATT-02 hardening):
-// strips letters/symbols and any extra dots, so a typed range like "4-5" can
-// never be entered or saved into an hours threshold.
-function sanitizeDecimal(raw: string): string {
-  const cleaned = raw.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1");
-  return cleaned;
-}
-
 // Auto-derive day name from a date string
 function dayName(dateStr: string): string {
   if (!dateStr) return "";
@@ -316,21 +308,6 @@ export default function SettingsPage() {
 
   // ── Save helpers ──────────────────────────────────────────────────────────
   async function saveToFirebase(docId: string, data: Record<string, unknown>, tab: SettingsTab) {
-    // BUG-ATT-02: guard the Half-Day range so the thresholds the Attendance
-    // module reads are always coherent — Half-Day start must sit below the
-    // Full-Day (Present) cutoff, otherwise there's no valid Half-Day band.
-    if (docId === "attendanceRules") {
-      const numRe = /^\d+(\.\d+)?$/; // clean integer/decimal only — rejects "4-5", "abc", etc.
-      const mhRaw = String((data as Record<string, unknown>).minHours ?? "").trim();
-      const hdRaw = String((data as Record<string, unknown>).halfDayThreshold ?? "").trim();
-      if (!numRe.test(mhRaw)) { showToast("Full Day hours must be a number (e.g. 6 or 6.5).", false); return; }
-      if (!numRe.test(hdRaw)) { showToast("Half Day hours must be a number (e.g. 3 or 3.5).", false); return; }
-      const mh = parseFloat(mhRaw);
-      const hd = parseFloat(hdRaw);
-      if (mh <= 0) { showToast("Full Day hours must be greater than 0.", false); return; }
-      if (hd < 0) { showToast("Half Day hours must be zero or more.", false); return; }
-      if (hd >= mh) { showToast("Half-Day start must be less than Full-Day hours (e.g. Half Day from 3, Full Day at 6).", false); return; }
-    }
     setSavingTab(tab);
     try {
       await saveSettingsDoc(docId, data);
@@ -636,46 +613,9 @@ export default function SettingsPage() {
                 <div className="flex justify-center py-10"><Loader2 size={24} className="animate-spin text-[#4F3CC9]" /></div>
               ) : (
                 <>
-                  {/* Half-Day range (BUG-ATT-02): the two hour thresholds define
-                      three worked-hours bands. Half-Day start is the lower bound;
-                      Full-Day (Present) hours is the upper bound of the Half-Day
-                      range. The Attendance module honors these exactly. */}
-                  <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-4 space-y-3">
-                    <p className="text-sm font-medium text-gray-700">Working-Hours Thresholds</p>
-                    <p className="text-xs text-gray-500">A day counts as <b>Half Day</b> when hours worked fall in the range below, <b>Present</b> at or above the Full-Day hours, and <b>Absent</b> under the Half-Day start.</p>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-xs font-medium text-gray-600 block mb-1">Half Day — from</label>
-                        <div className="flex items-center gap-2">
-                          <input value={attRules.halfDayThreshold} inputMode="decimal" onChange={(e) => setAttRules({ ...attRules, halfDayThreshold: sanitizeDecimal(e.target.value) })} className={inputCls} />
-                          <span className="text-sm text-gray-500 shrink-0">hours</span>
-                        </div>
-                        <p className="text-[11px] text-gray-400 mt-1">Lower bound — below this counts as Absent.</p>
-                      </div>
-                      <div>
-                        <label className="text-xs font-medium text-gray-600 block mb-1">Full Day — Present at</label>
-                        <div className="flex items-center gap-2">
-                          <input value={attRules.minHours} inputMode="decimal" onChange={(e) => setAttRules({ ...attRules, minHours: sanitizeDecimal(e.target.value) })} className={inputCls} />
-                          <span className="text-sm text-gray-500 shrink-0">hours</span>
-                        </div>
-                        <p className="text-[11px] text-gray-400 mt-1">Upper bound — at/above this counts as Present.</p>
-                      </div>
-                    </div>
-                    {(() => {
-                      const hd = parseFloat(attRules.halfDayThreshold);
-                      const mh = parseFloat(attRules.minHours);
-                      const valid = !isNaN(hd) && !isNaN(mh) && hd >= 0 && mh > 0 && hd < mh;
-                      return valid ? (
-                        <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
-                          <span className="text-gray-400">Resulting bands:</span>
-                          <span className="px-2 py-1 rounded-lg bg-red-50 text-red-600 font-medium">Absent &lt; {hd}h</span>
-                          <span className="px-2 py-1 rounded-lg bg-yellow-50 text-yellow-700 font-medium">Half Day {hd}h – {mh}h</span>
-                          <span className="px-2 py-1 rounded-lg bg-green-50 text-green-700 font-medium">Present ≥ {mh}h</span>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-red-500 pt-1">Half-Day start must be below Full-Day hours — e.g. Half Day from 4, Full Day at 7.</p>
-                      );
-                    })()}
+                  <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-4">
+                    <p className="text-sm font-medium text-gray-700">Attendance status rule</p>
+                    <p className="text-xs text-gray-500 mt-1">A clocked-in day counts as <b>Present</b>; a day with no clock-in counts as <b>Absent</b>. HR can override any day's status (Half Day / Leave / Week Off, etc.) from the Attendance table's ✎ Edit action.</p>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     {([

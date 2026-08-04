@@ -9,7 +9,6 @@ import { getAttendance, updateAttendance, upsertAttendance, updateRegularization
 import { invalidateAttendance } from "@/lib/cachedService";
 import { deriveAttendanceStatus, effectiveStatus } from "@/lib/attendanceStatus";
 import { canonicalWorkMode } from "@/lib/enums";
-import { useAttendanceThresholds } from "@/lib/useAttendanceThresholds";
 import { readCache, writeCache } from "@/lib/cache";
 import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -25,6 +24,7 @@ interface AttendanceRecord {
   location: WorkLocation; shift: string; date: string;
   clockIn: string; clockOut: string; workingHours: string;
   overtimeHours: string; status: AttendanceStatus; late: boolean;
+  statusManual?: boolean; // true once HR has manually set the status (override)
 }
 
 // No static initRecords — data loads from /api/attendance (real employees only)
@@ -73,11 +73,6 @@ export default function AttendancePage() {
   const [loadingRecords, setLoadingRecords] = useState(true);
   // Configured Late Login Threshold (HH:MM, 24h) from Settings → Work Timings.
   const [lateThreshold, setLateThreshold] = useState("09:30");
-  // Min full-day hours and half-day threshold from Settings → Attendance Rules,
-  // via the shared reactive hook so the Half-Day / Present calculation honors the
-  // configured values AND every surface (tiles, dashboard, reports) stays in sync
-  // through effectiveStatus() (BUG-ATT-02).
-  const { minHours, halfDayThreshold } = useAttendanceThresholds();
   // Standard hours beyond which extra time counts as Overtime (ATT-009). Default 9.
   const [overtimeThreshold, setOvertimeThreshold] = useState(9);
 
@@ -306,6 +301,8 @@ export default function AttendancePage() {
       const updated = prev.map((rec) => {
         const clock = todayClocks.find((c) => c.empId === rec.empId);
         if (!clock) return rec;
+        // Don't let live clock data override a status HR set by hand.
+        if (rec.statusManual) return rec;
         const secs = clock.status === "clocked-in"
           ? Math.floor((Date.now() - clock.clockInTs) / 1000)
           : (clock.totalSeconds ?? 0);
@@ -624,14 +621,11 @@ export default function AttendancePage() {
     return `${Math.floor(otMins / 60)}h ${String(otMins % 60).padStart(2, "0")}m`;
   }
 
-  // Re-derive the displayed status from hours worked vs the configured thresholds so
-  // it's always consistent with the half-day rule (not a stale/default/manually-set
-  // value). A record with a real clock-in is never "Absent" (ATT-008); Leave / Week
-  // Off are left untouched.
+  // Re-derive the displayed status via the shared helper: clocked in → Present,
+  // no clock-in → Absent, with HR manual overrides and Leave / Week Off preserved.
+  // Keeps the Attendance module, Dashboard and Reports perfectly consistent.
   const normalizedRecords = records.map((r) => {
-    // Derive status via the shared helper so the Attendance dashboard and the
-    // Reports module always agree on Present/Half Day/Absent (BUG-06 / ATT-003).
-    const derived = deriveAttendanceStatus(r, { minHours, halfDayThreshold }) as AttendanceStatus;
+    const derived = deriveAttendanceStatus(r) as AttendanceStatus;
     // Derive overtime from hours worked beyond the standard threshold (ATT-009).
     const overtimeHours = overtimeFor(r);
     if (derived === r.status && overtimeHours === r.overtimeHours) return r;
@@ -732,7 +726,9 @@ export default function AttendancePage() {
       return clockMins > thresholdMins;
     })();
     const computedHours = computeHours(ciStr, coStr);
-    const updated = { ...editRecord, clockIn: ciStr, clockOut: coStr, status: correction.status, late: isLate, workingHours: computedHours || editRecord.workingHours };
+    // Mark the status as manually set so the clock-based derivation respects HR's
+    // choice instead of recomputing Present/Absent from clock-in.
+    const updated = { ...editRecord, clockIn: ciStr, clockOut: coStr, status: correction.status, statusManual: true, late: isLate, workingHours: computedHours || editRecord.workingHours };
     setRecords(records.map((r) => r.id === editRecord.id ? updated : r));
     setEditRecord(null);
     try {
@@ -802,7 +798,7 @@ export default function AttendancePage() {
           {/* Make the active status rule explicit so the cutoff in force is never
               ambiguous (ATT-003) — values come live from Settings → Attendance Rules. */}
           <p className="text-xs text-gray-400 mt-1">
-            Status rule: Present ≥ {minHours}h worked · Half Day = {halfDayThreshold > 0 ? `${halfDayThreshold}h to under ${minHours}h` : `any work under ${minHours}h`} · Absent = {halfDayThreshold > 0 ? `no clock-in or under ${halfDayThreshold}h` : "no clock-in"} · thresholds configurable in Settings → Attendance Rules
+            Status rule: Present = clocked in · Absent = no clock-in · use the ✎ Edit action on any row to set a different status (Half Day / Leave / Week Off)
           </p>
         </div>
         <div className="flex gap-3">

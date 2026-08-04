@@ -12,6 +12,7 @@ export interface AttStatusRecord {
   clockOut?: string;
   status?: string;
   workingHours?: string;
+  statusManual?: boolean; // true when HR has manually set the status (override wins)
 }
 
 export const DEFAULT_ATT_THRESHOLDS: AttThresholds = { minHours: 8, halfDayThreshold: 0 };
@@ -67,28 +68,21 @@ export function effectiveStatus(rec: AttStatusRecord): string {
   return deriveAttendanceStatus(rec, CONFIGURED_ATT_THRESHOLDS);
 }
 
-// Derive the effective attendance status. Single rule shared by dashboard + reports,
-// driven by the configured thresholds (BUG-ATT-02):
-//  • No clock-in / 0 hours    → Absent (or the stored Leave / Week Off).
-//  • Leave / Week Off         → unchanged.
-//  • Clocked in, not out yet   → Present (an open shift is treated as working).
-//  • Clocked out, ≥ minHours   → Present (full day, threshold from Settings).
-//  • Clocked out, ≥ halfDay    → Half Day (met the configured half-day minimum).
-//  • Clocked out, below halfDay → Absent (didn't reach the half-day threshold).
-// With the default halfDayThreshold of 0, "≥ halfDay" is any positive time, so the
-// baseline "any work under a full day = Half Day" rule (ATT-003) is unchanged.
-export function deriveAttendanceStatus(rec: AttStatusRecord, t: AttThresholds): string {
-  const clockIn = rec.clockIn ?? "";
+// Derive the effective attendance status. Simple, clock-based rule shared by the
+// HR Attendance module, the Dashboard, Reports and the employee view:
+//  • HR manual override (statusManual) → whatever HR set it to (Present / Absent /
+//    Half Day / Leave / Week Off) — this always wins.
+//  • Leave / Week Off (system-managed) → unchanged.
+//  • Clocked in  → Present.
+//  • No clock-in → Absent.
+// There is no hours-based Half-Day calculation; Half Day only exists when HR sets
+// it manually. The optional thresholds argument is accepted for backwards
+// compatibility but is ignored.
+export function deriveAttendanceStatus(rec: AttStatusRecord, _t?: AttThresholds): string {
   const status = rec.status ?? "";
+  if (rec.statusManual) return status || "Absent";          // HR override wins
+  if (status === "Leave" || status === "Week Off") return status; // system-managed
+  const clockIn = rec.clockIn ?? "";
   const hasClockIn = !!clockIn && clockIn !== "—" && clockIn !== "";
-  if (!hasClockIn) return status || "Absent";
-  if (status === "Leave" || status === "Week Off") return status;
-  const clockOut = rec.clockOut ?? "";
-  const clockedOut = !!clockOut && clockOut !== "Ongoing" && clockOut !== "—" && clockOut !== "";
-  if (!clockedOut) return status && status !== "Absent" ? status : "Present";
-  const hrs = parseWorkedHours(rec);
-  const halfMin = t.halfDayThreshold ?? 0;
-  if (hrs >= t.minHours) return "Present";          // full day or more (configured minHours)
-  if (hrs > 0 && hrs >= halfMin) return "Half Day"; // within the configured half-day band
-  return "Absent";                                   // below the half-day threshold (or no time)
+  return hasClockIn ? "Present" : "Absent";
 }

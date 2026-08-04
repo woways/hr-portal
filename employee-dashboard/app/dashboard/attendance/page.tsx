@@ -21,27 +21,20 @@ interface AttEntry {
   status: AttStatus;
   late: boolean;
   isWeekend: boolean;
+  statusManual?: boolean;
 }
 
-// Derive the displayed attendance category from hours worked against the CURRENT
-// Settings → Attendance Rules thresholds, so the employee view depends entirely on
-// the HR-configured rules (same rule as the HR Attendance module):
-//   • no clock-in            → keep stored (Absent / Week Off / Leave)
-//   • Leave / Week Off       → unchanged
-//   • clocked in, not out    → Present (open shift)
-//   • hours ≥ Full-Day       → Present
-//   • hours ≥ Half-Day start → Half Day
-//   • below Half-Day start   → Absent
-function deriveDisplayStatus(e: AttEntry, minHours: number, halfDayThreshold: number): AttStatus {
-  const hasClockIn = !!e.clockIn && e.clockIn !== "—" && e.clockIn !== "";
-  if (!hasClockIn) return e.status || (e.isWeekend ? "Week Off" : "Absent");
+// Derive the displayed attendance category (same rule as the HR module):
+//   • HR manual override (statusManual) → keep the stored status
+//   • Leave / Week Off                  → unchanged
+//   • clocked in                        → Present
+//   • no clock-in                       → Absent
+// No hours-based Half-Day calculation — Half Day only appears when HR sets it.
+function deriveDisplayStatus(e: AttEntry): AttStatus {
+  if (e.statusManual) return e.status || (e.isWeekend ? "Week Off" : "Absent");
   if (e.status === "Leave" || e.status === "Week Off") return e.status;
-  const clockedOut = !!e.clockOut && e.clockOut !== "—" && e.clockOut !== "" && e.clockOut !== "Ongoing";
-  if (!clockedOut) return "Present"; // open shift counts as working
-  const hrs = e.hoursVal;
-  if (hrs >= minHours) return "Present";
-  if (hrs > 0 && hrs >= halfDayThreshold) return "Half Day";
-  return "Absent";
+  const hasClockIn = !!e.clockIn && e.clockIn !== "—" && e.clockIn !== "";
+  return hasClockIn ? "Present" : "Absent";
 }
 
 interface RegRequest {
@@ -121,18 +114,11 @@ export default function AttendancePage() {
   const [isLate, setIsLate]                   = useState(false);
   const [lateHour, setLateHour]               = useState(9);
   const [lateMinute, setLateMinute]           = useState(30);
-  // Attendance rules from Settings → Attendance Rules (hours).
-  const [minHours, setMinHours]               = useState(8);
-  const [halfDayThreshold, setHalfDayThreshold] = useState(0);
 
-  // Present ≥ Full-Day · Half Day = Half-Day start up to Full-Day · Absent below.
-  // Honors BOTH configured thresholds so it matches the HR Attendance module.
-  function statusFromHours(totalSeconds: number, isWeekend: boolean): AttStatus {
-    if (isWeekend) return "Week Off";
-    const hrs = totalSeconds / 3600;
-    if (hrs >= minHours) return "Present";
-    if (hrs > 0 && hrs >= halfDayThreshold) return "Half Day";
-    return "Absent";
+  // Clocking out means the employee clocked in today → Present. (No hours-based
+  // Half-Day; HR can override to Half Day / Leave from the Attendance table.)
+  function statusFromHours(_totalSeconds: number, isWeekend: boolean): AttStatus {
+    return isWeekend ? "Week Off" : "Present";
   }
 
   // UI state
@@ -152,20 +138,6 @@ export default function AttendancePage() {
   // Auto-mark unread attendance notifications as read when employee opens this page
   useEffect(() => { if (empId) markEmpNotifRead("attendance", empId); }, [empId]);
 
-  // Live attendance-rule thresholds: subscribe to Settings → Attendance Rules so a
-  // change HR makes immediately re-categorizes this employee's attendance (the
-  // display derives from these via deriveDisplayStatus). onSnapshot fires with the
-  // current value on mount too, so this also covers the initial load.
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "settings", "attendanceRules"), (snap) => {
-      if (!snap.exists()) return;
-      const mh = parseFloat(snap.data().minHours as string);
-      const hd = parseFloat(snap.data().halfDayThreshold as string);
-      if (!isNaN(mh)) setMinHours(mh);
-      if (!isNaN(hd)) setHalfDayThreshold(hd);
-    }, () => { /* keep last-known values on error */ });
-    return unsub;
-  }, []);
 
   // ── Load employee identity from Firebase Auth → Firestore ───────────────────
   useEffect(() => {
@@ -178,10 +150,9 @@ export default function AttendancePage() {
         const eid = (userData.employeeId as string) ?? "";
         if (!eid) return;
 
-        const [empSnap, timingsSnap, rulesSnap] = await Promise.all([
+        const [empSnap, timingsSnap] = await Promise.all([
           getDoc(doc(db, "employees", eid)),
           getDoc(doc(db, "settings", "workTimings")),
-          getDoc(doc(db, "settings", "attendanceRules")),
         ]);
         if (!empSnap.exists()) return;
         const empData = empSnap.data();
@@ -194,13 +165,6 @@ export default function AttendancePage() {
           const threshold = (timingsSnap.data().lateThreshold as string) ?? "09:30";
           const [h, m] = threshold.split(":").map(Number);
           if (!isNaN(h)) { setLateHour(h); setLateMinute(m || 0); }
-        }
-        // Load min-hours / half-day thresholds (e.g. 8 / 4 hours)
-        if (rulesSnap.exists()) {
-          const mh = parseFloat(rulesSnap.data().minHours as string);
-          const hd = parseFloat(rulesSnap.data().halfDayThreshold as string);
-          if (!isNaN(mh)) setMinHours(mh);
-          if (!isNaN(hd)) setHalfDayThreshold(hd);
         }
       } catch { /* ignore */ }
     });
@@ -275,6 +239,7 @@ export default function AttendancePage() {
             status:   (rec.status || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
             late:     rec.late ?? false,
             isWeekend,
+            statusManual: Boolean(rec.statusManual),
             isoDate:  rec.date as string,
           } as AttEntry & { isoDate: string };
         })
@@ -509,13 +474,11 @@ export default function AttendancePage() {
           late: h > lateHour || (h === lateHour && m > lateMinute),
         };
       }
-      // Otherwise derive the category from hours worked against the CURRENT
-      // Settings → Attendance Rules thresholds, so the employee's Present/Half
-      // Day/Absent depends entirely on the HR-configured rules and updates live
-      // when HR changes them — never a status frozen at clock-out time.
-      return { ...entry, status: deriveDisplayStatus(entry, minHours, halfDayThreshold) };
+      // Otherwise: clocked in → Present, no clock-in → Absent (HR overrides and
+      // Leave / Week Off preserved). Consistent with the HR Attendance module.
+      return { ...entry, status: deriveDisplayStatus(entry) };
     });
-  }, [pastLog, todayEntry, requests, minHours, halfDayThreshold, lateHour, lateMinute]);
+  }, [pastLog, todayEntry, requests, lateHour, lateMinute]);
 
   // Stats for current month
   const currentMonthEntries = fullLog.filter((e) => {
@@ -661,7 +624,7 @@ export default function AttendancePage() {
           <p className="text-gray-500 text-sm mt-1">Track your daily attendance and working hours.</p>
           {/* Same rule line the HR view shows, so both sides read the same cutoff (ATT-003). */}
           <p className="text-xs text-gray-400 mt-1">
-            Status rule: Present ≥ {minHours}h worked · Half Day = {halfDayThreshold > 0 ? `${halfDayThreshold}h to under ${minHours}h` : `any work under ${minHours}h`} · Absent = {halfDayThreshold > 0 ? `no clock-in or under ${halfDayThreshold}h` : "no clock-in"} · set by HR in Settings
+            Status rule: Present = clocked in · Absent = no clock-in · HR may adjust any day&apos;s status
           </p>
         </div>
         {empId && (
