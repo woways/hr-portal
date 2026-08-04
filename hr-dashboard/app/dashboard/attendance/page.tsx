@@ -1497,7 +1497,16 @@ export default function AttendancePage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Clock In</label>
-                  <input type="time" value={correction.clockIn} onChange={(e) => setCorrection({ ...correction, clockIn: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
+                  <input type="time" value={correction.clockIn} onChange={(e) => {
+                    const ci = e.target.value;
+                    const hasCI = !!ci && ci.trim() !== "";
+                    // Keep status consistent with clock-in: a clocked-in employee can't
+                    // be Absent, and one with no clock-in can't be Present.
+                    let status = correction.status;
+                    if (hasCI && status === "Absent") status = "Present";
+                    if (!hasCI && status === "Present") status = "Absent";
+                    setCorrection({ ...correction, clockIn: ci, status: status as AttendanceStatus });
+                  }} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Clock Out</label>
@@ -1507,8 +1516,20 @@ export default function AttendancePage() {
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
                 <select value={correction.status} onChange={(e) => setCorrection({ ...correction, status: e.target.value as AttendanceStatus })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
-                  {["Present","Absent","Half Day","Leave","Week Off"].map((s) => <option key={s}>{s}</option>)}
+                  {(() => {
+                    const hasCI = !!correction.clockIn && correction.clockIn.trim() !== "" && correction.clockIn !== "--:--";
+                    // A clocked-in employee is Present — "Absent" is not offered. Without a
+                    // clock-in they can't be "Present". Half Day / Leave / Week Off always allowed.
+                    return ["Present", "Absent", "Half Day", "Leave", "Week Off"]
+                      .filter((s) => (hasCI ? s !== "Absent" : s !== "Present"))
+                      .map((s) => <option key={s}>{s}</option>);
+                  })()}
                 </select>
+                <p className="text-[11px] text-gray-400 mt-1">
+                  {correction.clockIn && correction.clockIn !== "--:--"
+                    ? "Clocked in → can't be marked Absent. Clear the Clock In time to mark Absent."
+                    : "No clock-in → can't be marked Present. Enter a Clock In time to mark Present."}
+                </p>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Reason for Correction</label>
