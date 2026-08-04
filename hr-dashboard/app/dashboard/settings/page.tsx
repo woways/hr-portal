@@ -308,6 +308,16 @@ export default function SettingsPage() {
 
   // ── Save helpers ──────────────────────────────────────────────────────────
   async function saveToFirebase(docId: string, data: Record<string, unknown>, tab: SettingsTab) {
+    // BUG-ATT-02: guard the Half-Day range so the thresholds the Attendance
+    // module reads are always coherent — Half-Day start must sit below the
+    // Full-Day (Present) cutoff, otherwise there's no valid Half-Day band.
+    if (docId === "attendanceRules") {
+      const mh = parseFloat(String((data as Record<string, unknown>).minHours));
+      const hd = parseFloat(String((data as Record<string, unknown>).halfDayThreshold));
+      if (isNaN(mh) || mh <= 0) { showToast("Full Day hours must be a positive number.", false); return; }
+      if (isNaN(hd) || hd < 0) { showToast("Half Day hours must be zero or more.", false); return; }
+      if (hd >= mh) { showToast("Half-Day start must be less than Full-Day hours (e.g. Half Day from 4, Full Day at 7).", false); return; }
+    }
     setSavingTab(tab);
     try {
       await saveSettingsDoc(docId, data);
@@ -613,10 +623,49 @@ export default function SettingsPage() {
                 <div className="flex justify-center py-10"><Loader2 size={24} className="animate-spin text-[#4F3CC9]" /></div>
               ) : (
                 <>
+                  {/* Half-Day range (BUG-ATT-02): the two hour thresholds define
+                      three worked-hours bands. Half-Day start is the lower bound;
+                      Full-Day (Present) hours is the upper bound of the Half-Day
+                      range. The Attendance module honors these exactly. */}
+                  <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-4 space-y-3">
+                    <p className="text-sm font-medium text-gray-700">Working-Hours Thresholds</p>
+                    <p className="text-xs text-gray-500">A day counts as <b>Half Day</b> when hours worked fall in the range below, <b>Present</b> at or above the Full-Day hours, and <b>Absent</b> under the Half-Day start.</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Half Day — from</label>
+                        <div className="flex items-center gap-2">
+                          <input value={attRules.halfDayThreshold} onChange={(e) => setAttRules({ ...attRules, halfDayThreshold: e.target.value })} className={inputCls} />
+                          <span className="text-sm text-gray-500 shrink-0">hours</span>
+                        </div>
+                        <p className="text-[11px] text-gray-400 mt-1">Lower bound — below this counts as Absent.</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Full Day — Present at</label>
+                        <div className="flex items-center gap-2">
+                          <input value={attRules.minHours} onChange={(e) => setAttRules({ ...attRules, minHours: e.target.value })} className={inputCls} />
+                          <span className="text-sm text-gray-500 shrink-0">hours</span>
+                        </div>
+                        <p className="text-[11px] text-gray-400 mt-1">Upper bound — at/above this counts as Present.</p>
+                      </div>
+                    </div>
+                    {(() => {
+                      const hd = parseFloat(attRules.halfDayThreshold);
+                      const mh = parseFloat(attRules.minHours);
+                      const valid = !isNaN(hd) && !isNaN(mh) && hd >= 0 && mh > 0 && hd < mh;
+                      return valid ? (
+                        <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
+                          <span className="text-gray-400">Resulting bands:</span>
+                          <span className="px-2 py-1 rounded-lg bg-red-50 text-red-600 font-medium">Absent &lt; {hd}h</span>
+                          <span className="px-2 py-1 rounded-lg bg-yellow-50 text-yellow-700 font-medium">Half Day {hd}h – {mh}h</span>
+                          <span className="px-2 py-1 rounded-lg bg-green-50 text-green-700 font-medium">Present ≥ {mh}h</span>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-red-500 pt-1">Half-Day start must be below Full-Day hours — e.g. Half Day from 4, Full Day at 7.</p>
+                      );
+                    })()}
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     {([
-                      { label: "Min Working Hours",      key: "minHours"         as const, unit: "hours" },
-                      { label: "Half Day Threshold",     key: "halfDayThreshold" as const, unit: "hours" },
                       { label: "Grace Period",           key: "gracePeriod"      as const, unit: "mins"  },
                       { label: "Auto Mark Absent After", key: "autoAbsentAfter"  as const, unit: "mins"  },
                     ]).map(({ label, key, unit }) => (
