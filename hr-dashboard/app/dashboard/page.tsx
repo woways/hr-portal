@@ -83,6 +83,14 @@ export default function DashboardPage() {
         status: (d.status as string) ?? "",
         late: Boolean(d.late),
         workingHours: (d.workingHours as string) ?? "",
+        // BUG-DASH-01: carry clockIn/clockOut so effectiveStatus DERIVES the status
+        // from hours worked (same as the Attendance module) instead of falling back
+        // to the raw stored status. Without these, deriveAttendanceStatus hits its
+        // "no clock-in" branch and returns the frozen stored status — computed at
+        // clock-out under whatever thresholds applied then — so the Dashboard and
+        // Attendance & Workforce Analytics disagreed after any Settings change.
+        clockIn: (d.clockIn as string) ?? "",
+        clockOut: (d.clockOut as string) ?? "",
       })));
       if (!seen.att) { seen.att = true; bump(); }
     }, TODAY).catch(() => { if (!seen.att) { seen.att = true; bump(); } });
