@@ -91,6 +91,11 @@ export default function AttendancePage() {
   // Keyed by empId → WorkLocation derived from employee's workMode
   const empWorkLocRef = useRef<Map<string, WorkLocation>>(new Map());
   const backfillDoneRef = useRef(false);
+  // Latest employee cohort + today's attendance docs, so a live change to EITHER
+  // (an employee clock-in writes the attendance doc directly) re-merges the table.
+  type EmpLite = { id: string; name: string; department: string; reportingManager: string; shift: string; workMode: string; doj: string };
+  const empListRef = useRef<EmpLite[]>([]);
+  const attListRef = useRef<Record<string, unknown>[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [highlightedEmpId, setHighlightedEmpId] = useState<string | null>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -140,6 +145,37 @@ export default function AttendancePage() {
     return "Office"; // On-site / office / anything else
   }
 
+  // Merge the current employee cohort with today's attendance docs into one row per
+  // employee (their doc, or a default "Absent"). Called whenever EITHER source
+  // changes live, so an employee's clock-in (which writes their attendance doc)
+  // immediately flips the HR row from Absent → Present. Preserves HR manual status.
+  const remerge = useCallback(() => {
+    const empList = empListRef.current;
+    if (empList.length === 0) return;
+    const attMap = new Map<string, AttendanceRecord>();
+    attListRef.current.forEach((a) => { if (a.empId) attMap.set(String(a.empId), a as unknown as AttendanceRecord); });
+    const merged: AttendanceRecord[] = empList.map((emp) => {
+      const empLoc = defaultLocation(emp.workMode);
+      const existing = attMap.get(emp.id);
+      if (existing) {
+        // BUG-ATT-01: attribute location to the employee's actual Work Mode, not a
+        // stale stored value; only a genuinely-distinct "Client Site" is preserved.
+        const stored = existing.location as string | undefined;
+        return { ...existing, location: (stored === "Client Site" ? "Client Site" : empLoc) as WorkLocation };
+      }
+      return {
+        id: `${TODAY}-${emp.id}`, empId: emp.id, name: emp.name, dept: emp.department,
+        manager: emp.reportingManager, location: empLoc, shift: emp.shift, date: TODAY,
+        clockIn: "", clockOut: "", workingHours: "", overtimeHours: "-",
+        status: "Absent" as AttendanceStatus, late: false,
+      };
+    });
+    setRecords(merged);
+    writeCache(`hr_att_records_${TODAY}`, merged);
+    setLoadingRecords(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadAttendance = useCallback(async () => {
     try {
       // ── Load employees + today's attendance IN PARALLEL ──
@@ -170,57 +206,16 @@ export default function AttendancePage() {
       });
       setDeptCount(Object.entries(deptMap).map(([dept, count]) => ({ dept, count })).sort((a, b) => b.count - a.count));
 
-      const attList: Record<string, unknown>[] = (rawAtt ?? []) as Record<string, unknown>[];
-
       // Populate work-location ref for syncClockData
       const locMap = new Map<string, WorkLocation>();
       empList.forEach((e) => locMap.set(e.id, defaultLocation(e.workMode)));
       empWorkLocRef.current = locMap;
 
-      // Build attMap keyed by empId
-      const attMap = new Map<string, AttendanceRecord>();
-      attList.forEach((a) => {
-        if (a.empId) attMap.set(String(a.empId), a as unknown as AttendanceRecord);
-      });
-
-      // Merge: every employee gets a record (existing or default Absent)
-      const merged: AttendanceRecord[] = empList.map((emp) => {
-        const empLoc = defaultLocation(emp.workMode);
-        const existing = attMap.get(emp.id);
-        if (existing) {
-          // BUG-ATT-01: attribute the record to the employee's ACTUAL configured
-          // Work Mode, not a stale/defaulted `location` on the stored doc. The
-          // employee clock-in writes no location, and old backfills may have written
-          // a location from a since-changed workMode — so a stored WFH/Office value
-          // must never override the current workMode. Only a genuinely-distinct
-          // "Client Site" (which can't be derived from workMode) is preserved.
-          const stored = existing.location as string | undefined;
-          return {
-            ...existing,
-            location: (stored === "Client Site" ? "Client Site" : empLoc) as WorkLocation,
-          };
-        }
-        return {
-          id:            `${TODAY}-${emp.id}`,
-          empId:         emp.id,
-          name:          emp.name,
-          dept:          emp.department,
-          manager:       emp.reportingManager,
-          location:      empLoc,
-          shift:         emp.shift,
-          date:          TODAY,
-          clockIn:       "",
-          clockOut:      "",
-          workingHours:  "",
-          overtimeHours: "-",
-          status:        "Absent" as AttendanceStatus,
-          late:          false,
-        };
-      });
-
-      setRecords(merged);
-      writeCache(`hr_att_records_${TODAY}`, merged);
-      setLoadingRecords(false);
+      // Feed the shared refs and merge. The live attendance onSnapshot below keeps
+      // attListRef fresh, so a later clock-in re-merges without a reload.
+      empListRef.current = empList;
+      attListRef.current = (rawAtt ?? []) as Record<string, unknown>[];
+      remerge();
 
       if (!backfillDoneRef.current && empList.length > 0) {
         backfillDoneRef.current = true;
@@ -242,8 +237,22 @@ export default function AttendancePage() {
       setRecords(cached);
       setLoadingRecords(false);
     }
-    loadAttendance(); // single initial load — real-time clock updates handled by onSnapshot below
+    loadAttendance(); // initial employee load + backfill; live updates via onSnapshot below
   }, [loadAttendance]);
+
+  // Live link to the employee portal: subscribe to today's attendance docs. The
+  // employee clock-in/out writes attendance/{TODAY}-{empId} directly, so this fires
+  // the moment an employee clocks in and re-merges the HR table — Absent → Present
+  // with no reload. This is the primary status source; the clockRecords listener
+  // below only overlays live working-hours for the in-progress shift.
+  useEffect(() => {
+    const q = query(collection(db, "attendance"), where("date", "==", TODAY));
+    const unsub = onSnapshot(q, (snap) => {
+      attListRef.current = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+      remerge();
+    }, () => { /* ignore transient listen errors */ });
+    return unsub;
+  }, [remerge]);
 
   // ── Live clock polling — merges real employee clock-in/out into HR records ─
   interface ClockRecord { empId: string; empName: string; department?: string; date: string; clockInTs: number; clockInStr: string; clockOutStr?: string; totalSeconds?: number; status: "clocked-in" | "clocked-out"; isLate: boolean; }
