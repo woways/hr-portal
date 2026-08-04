@@ -287,8 +287,12 @@ export default function AttendancePage() {
 
   // Re-derive "late" from the record's clock-in vs the CURRENT configured threshold,
   // so changing the Late Login Threshold in Settings immediately affects the status
-  // (the stored `late` flag was frozen at clock-in time).
+  // (the stored `late` flag was frozen at clock-in time). Lateness only applies to
+  // someone who actually attended — an Absent / Leave / Week Off day (including an
+  // HR override to Absent) is never Late or On-Time; the column shows "—".
   function lateByThreshold(r: AttendanceRecord): boolean {
+    const eff = effectiveStatus(r);
+    if (eff !== "Present" && eff !== "Half Day") return false; // not attended → not late
     const ci = r.clockIn;
     if (!ci || ci === "—" || ci === "" || ci === "Ongoing") return false; // no clock-in → not late
     if (r.date) { const dow = new Date(r.date + "T00:00:00").getDay(); if (dow === 0 || dow === 6) return false; }
@@ -765,8 +769,8 @@ export default function AttendancePage() {
       "Clock Out":       r.clockOut || "-",
       "Working Hours":   r.workingHours,
       "Overtime Hours":  r.overtimeHours,
-      "Status":          r.status,
-      "Late":            lateByThreshold(r) ? "Yes" : "No",
+      "Status":          effectiveStatus(r),
+      "Late":            (() => { const eff = effectiveStatus(r); if (eff !== "Present" && eff !== "Half Day") return "-"; return lateByThreshold(r) ? "Yes" : "No"; })(),
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     ws["!cols"] = [
@@ -1373,11 +1377,14 @@ export default function AttendancePage() {
                     {(() => { const eff = effectiveStatus(r) as AttendanceStatus; return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[eff] ?? statusColor[r.status]}`}>{eff}</span>; })()}
                   </td>
                   <td className="px-4 py-3">
-                    {lateByThreshold(r)
-                      ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">Late</span>
-                      : r.clockIn
-                        ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-600">On Time</span>
-                        : null}
+                    {(() => {
+                      const eff = effectiveStatus(r);
+                      const attended = eff === "Present" || eff === "Half Day";
+                      if (!attended) return <span className="text-xs text-gray-300">—</span>; // Absent / Leave / Week Off
+                      return lateByThreshold(r)
+                        ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">Late</span>
+                        : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-600">On Time</span>;
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     <button onClick={() => openEdit(r)} title="Edit attendance record" aria-label="Edit attendance record" className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500"><Pencil size={14} /></button>
