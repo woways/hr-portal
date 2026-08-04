@@ -150,10 +150,14 @@ export default function AttendancePage() {
   // changes live, so an employee's clock-in (which writes their attendance doc)
   // immediately flips the HR row from Absent → Present. Preserves HR manual status.
   const remerge = useCallback(() => {
-    const empList = empListRef.current;
-    if (empList.length === 0) return;
+    const full = empListRef.current;
+    if (full.length === 0) return;
     const attMap = new Map<string, AttendanceRecord>();
     attListRef.current.forEach((a) => { if (a.empId) attMap.set(String(a.empId), a as unknown as AttendanceRecord); });
+    // One row per employee who has joined by today OR has any attendance record today
+    // — so a brand-new hire who clocks in shows up (as Present) even if their start
+    // date is today/future, instead of being filtered out or stuck synthesized-Absent.
+    const empList = full.filter((e) => e.id && (!e.doj || e.doj <= TODAY || attMap.has(e.id)));
     const merged: AttendanceRecord[] = empList.map((emp) => {
       const empLoc = defaultLocation(emp.workMode);
       const existing = attMap.get(emp.id);
@@ -176,69 +180,56 @@ export default function AttendancePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadAttendance = useCallback(async () => {
-    try {
-      // ── Load employees + today's attendance IN PARALLEL ──
-      const [empSnap, rawAtt] = await Promise.all([
-        getDocs(collection(db, "employees")).catch(() => null),
-        getAttendance(TODAY).catch(() => []),
-      ]);
+  // Rebuild the employee cohort from a snapshot of the employees collection. Keeps
+  // the FULL list (remerge decides who is shown today) so it also covers new hires.
+  const processEmployees = useCallback((empDocs: Record<string, unknown>[]) => {
+    const empList: EmpLite[] = empDocs.map((d) => ({
+      id:               String(d.employeeId ?? d.id ?? ""),
+      name:             String(d.name ?? ""),
+      department:       String(d.department ?? ""),
+      reportingManager: String(d.reportingManager ?? ""),
+      shift:            String(d.shift ?? "9AM-6PM"),
+      workMode:         String(d.workMode ?? "Office"),
+      doj:              String(d.doj ?? ""),
+    })).filter((e) => e.id);
 
-      const empDocs: Record<string, unknown>[] = empSnap
-        ? empSnap.docs.map((d) => ({ ...d.data(), id: d.id }))
-        : [];
+    // Dept headcount from the loaded employees — no extra Firestore call
+    const deptMap: Record<string, number> = {};
+    empDocs.forEach((e) => { const d = String(e.department ?? "Other"); deptMap[d] = (deptMap[d] ?? 0) + 1; });
+    setDeptCount(Object.entries(deptMap).map(([dept, count]) => ({ dept, count })).sort((a, b) => b.count - a.count));
 
-      const empList = empDocs.map((d) => ({
-        id:               String(d.employeeId ?? d.id ?? ""),
-        name:             String(d.name ?? ""),
-        department:       String(d.department ?? ""),
-        reportingManager: String(d.reportingManager ?? ""),
-        shift:            String(d.shift ?? "9AM-6PM"),
-        workMode:         String(d.workMode ?? "Office"),
-        doj:              String(d.doj ?? ""),
-      })).filter((e) => e.id && (!e.doj || e.doj <= TODAY)); // only employees who have joined by today
+    const locMap = new Map<string, WorkLocation>();
+    empList.forEach((e) => locMap.set(e.id, defaultLocation(e.workMode)));
+    empWorkLocRef.current = locMap;
 
-      // Compute dept headcount from already-loaded employees — no extra Firestore call
-      const deptMap: Record<string, number> = {};
-      empDocs.forEach((e) => {
-        const d = String(e.department ?? "Other");
-        deptMap[d] = (deptMap[d] ?? 0) + 1;
-      });
-      setDeptCount(Object.entries(deptMap).map(([dept, count]) => ({ dept, count })).sort((a, b) => b.count - a.count));
+    empListRef.current = empList;
+    remerge();
 
-      // Populate work-location ref for syncClockData
-      const locMap = new Map<string, WorkLocation>();
-      empList.forEach((e) => locMap.set(e.id, defaultLocation(e.workMode)));
-      empWorkLocRef.current = locMap;
-
-      // Feed the shared refs and merge. The live attendance onSnapshot below keeps
-      // attListRef fresh, so a later clock-in re-merges without a reload.
-      empListRef.current = empList;
-      attListRef.current = (rawAtt ?? []) as Record<string, unknown>[];
-      remerge();
-
-      if (!backfillDoneRef.current && empList.length > 0) {
-        backfillDoneRef.current = true;
-        // Clean up any pre-July records already in Firestore, then backfill from July 1st onwards
-        deletePreStartAttendance()
-          .then(() => backfillAllEmployees(empList))
-          .catch(() => {});
-      }
-    } catch (e) {
-      setLoadingRecords(false);
+    if (!backfillDoneRef.current && empList.length > 0) {
+      backfillDoneRef.current = true;
+      const joined = empList.filter((e) => !e.doj || e.doj <= TODAY); // backfill only real, joined employees
+      deletePreStartAttendance().then(() => backfillAllEmployees(joined)).catch(() => {});
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [remerge]);
 
   useEffect(() => {
-    // Seed from cache so the attendance table renders instantly, then refresh
+    // Seed instantly from cache; the live subscriptions below refresh + keep current.
     const cached = readCache<AttendanceRecord[]>(`hr_att_records_${TODAY}`);
     if (cached && cached.length) {
       setRecords(cached);
       setLoadingRecords(false);
     }
-    loadAttendance(); // initial employee load + backfill; live updates via onSnapshot below
-  }, [loadAttendance]);
+  }, []);
+
+  // Live employee cohort: subscribe to the employees collection so a NEWLY ADDED
+  // employee (and their clock-in) is picked up without a reload — fixes new hires
+  // showing Absent because the list was only read once at mount.
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "employees"), (snap) => {
+      processEmployees(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
+    }, () => { /* keep last-known cohort on error */ });
+    return unsub;
+  }, [processEmployees]);
 
   // Live link to the employee portal: subscribe to today's attendance docs. The
   // employee clock-in/out writes attendance/{TODAY}-{empId} directly, so this fires
