@@ -211,7 +211,6 @@ export default function RecruitmentPage() {
 
   function showCandidateToast(msg: string) { setCandidateToast(msg); setTimeout(() => setCandidateToast(null), 3500); }
   const [rescheduleInterview, setRescheduleInterview] = useState<Interview | null>(null);
-  const [reminderToast, setReminderToast] = useState("");
   const [notePanel, setNotePanel] = useState<Candidate | null>(null);
   const [newNote, setNewNote] = useState("");
 
@@ -470,12 +469,6 @@ export default function RecruitmentPage() {
     saveInterview(id, { rating });
   }
 
-  function sendReminder(id: string, name: string) {
-    setInterviews(interviews.map((i) => i.id === id ? { ...i, reminderSent: true } : i));
-    saveInterview(id, { reminderSent: true });
-    setReminderToast(`Reminder sent to ${name}`);
-    setTimeout(() => setReminderToast(""), 3000);
-  }
 
   function setFinalDecision(id: string, decision: "Select" | "Reject") {
     setInterviews(interviews.map((i) => i.id === id ? { ...i, finalDecision: decision, status: "Completed" } : i));
@@ -783,11 +776,6 @@ export default function RecruitmentPage() {
       {/* Tab B: Interview Management */}
       {activeTab === "interviews" && (
         <div className="space-y-4">
-          {reminderToast && (
-            <div className="fixed top-6 right-6 z-50 bg-green-600 text-white text-sm px-5 py-3 rounded-xl shadow-lg">
-              ✓ {reminderToast}
-            </div>
-          )}
           <div className="flex justify-end">
             <button onClick={() => setShowAddInterview(true)} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium">
               <Plus size={16} /> Schedule Interview
@@ -846,12 +834,6 @@ export default function RecruitmentPage() {
                         <div className="flex gap-1">
                           <button onClick={() => setEditInterview({ ...i })} title="Edit" className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500"><Pencil size={13} /></button>
                           <button onClick={() => setRescheduleInterview({ ...i, status: "Scheduled", finalDecision: "", rating: 0, feedback: "", reminderSent: false, date: "", time: "" })} title="Reschedule" className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-500 text-xs font-medium">↺</button>
-                          <button
-                            onClick={() => sendReminder(i.id, i.candidateName)}
-                            disabled={i.reminderSent}
-                            title={i.reminderSent ? "Reminder sent" : "Send reminder"}
-                            className={`p-1.5 rounded-lg text-xs font-medium ${i.reminderSent ? "text-gray-300 cursor-not-allowed" : "hover:bg-blue-50 text-blue-500"}`}
-                          >✉</button>
                         </div>
                       </td>
                     </tr>
