@@ -839,11 +839,6 @@ export default function AttendancePage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Attendance & Workforce Analytics</h1>
           <p className="text-gray-500 text-sm mt-1">Operational visibility across teams, locations and shifts</p>
-          {/* Make the active status rule explicit so the cutoff in force is never
-              ambiguous (ATT-003) — values come live from Settings → Attendance Rules. */}
-          <p className="text-xs text-gray-400 mt-1">
-            Status rule: Present = clocked in · Absent = no clock-in · use the ✎ Edit action on any row to set a different status (Half Day / Leave / Week Off)
-          </p>
         </div>
         <div className="flex gap-3">
           <button
