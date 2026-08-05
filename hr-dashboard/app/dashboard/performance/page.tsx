@@ -59,6 +59,13 @@ interface PerformanceReview {
 
 type Tab = "goals" | "reviews";
 
+// Local (not UTC) today as YYYY-MM-DD — cutoff for "no past dates" that matches the
+// HR user's calendar and never slips a day near midnight.
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 const DEFAULT_GOAL_FORM = {
   employeeId: "",
   title: "",
@@ -131,6 +138,11 @@ export default function PerformancePage() {
 
   async function handleAddGoal(e: React.FormEvent) {
     e.preventDefault();
+    // A goal deadline can't be in the past (backstop for the date input's min).
+    if (goalForm.deadline && goalForm.deadline < todayStr()) {
+      alert("Goal deadline can't be a past date.");
+      return;
+    }
     setGoalSubmitting(true);
     try {
       await addDoc(collection(db, "personalGoals"), {
@@ -155,6 +167,10 @@ export default function PerformancePage() {
 
   async function handleAddReview(e: React.FormEvent) {
     e.preventDefault();
+    if (reviewForm.reviewDate && reviewForm.reviewDate < todayStr()) {
+      alert("Review date can't be a past date.");
+      return;
+    }
     setReviewSubmitting(true);
     try {
       await addDoc(collection(db, "performanceReviews"), {
@@ -405,6 +421,7 @@ export default function PerformancePage() {
                 <input
                   type="date"
                   value={goalForm.deadline}
+                  min={todayStr()}
                   onChange={(e) => setGoalForm((f) => ({ ...f, deadline: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
                   required
@@ -503,6 +520,7 @@ export default function PerformancePage() {
                 <input
                   type="date"
                   value={reviewForm.reviewDate}
+                  min={todayStr()}
                   onChange={(e) => setReviewForm((f) => ({ ...f, reviewDate: e.target.value }))}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]/30"
                   required
