@@ -49,6 +49,13 @@ const blankAdd = { name: "", assignees: [blankAssignee()], kpi: "", deadline: ""
 const blankEdit = { name: "", assignedTo: "", empId: "", department: depts[0], kpi: "", deadline: "", description: "", feedback: "" };
 const inputCls = "w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]";
 
+// Local (not UTC) today as YYYY-MM-DD, so the "no past dates" cutoff matches the
+// HR user's calendar and never slips a day near midnight.
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export default function GoalsPage() {
   const departments = useDepartments();
   const [goals, setGoals]   = useState<Goal[]>([]);
@@ -125,6 +132,8 @@ export default function GoalsPage() {
   async function handleAdd() {
     const validAssignees = form.assignees.filter((a) => a.empId);
     if (!form.name.trim() || !form.deadline || validAssignees.length === 0 || submitting) return;
+    // A goal deadline can't be in the past (backstop for the date input's min).
+    if (form.deadline < todayStr()) { showMsg("Deadline can't be a past date."); return; }
     setSubmitting(true);
     try {
       const base = Date.now();
@@ -187,6 +196,11 @@ export default function GoalsPage() {
 
   async function handleEditSave() {
     if (!editGoal) return;
+    // Block setting the deadline to a past date; allow keeping an already-past
+    // (overdue) deadline unchanged so other fields can still be edited.
+    if (editForm.deadline && editForm.deadline < todayStr() && editForm.deadline !== editGoal.deadline) {
+      showMsg("Deadline can't be set to a past date."); return;
+    }
     await updateGoal(editGoal.id, { ...editForm });
     setGoals((prev) => prev.map((g) => g.id === editGoal.id ? { ...g, ...editForm } : g));
     invalidateGoals();
@@ -454,7 +468,7 @@ export default function GoalsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Deadline *</label>
-                  <input type="date" value={form.deadline} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setForm({ ...form, deadline: e.target.value })} className={inputCls} />
+                  <input type="date" value={form.deadline} min={todayStr()} onChange={(e) => setForm({ ...form, deadline: e.target.value })} className={inputCls} />
                 </div>
               </div>
             </div>
@@ -524,7 +538,7 @@ export default function GoalsPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Deadline</label>
-                  <input type="date" value={editForm.deadline} onChange={(e) => setEditForm({ ...editForm, deadline: e.target.value })} className={inputCls} />
+                  <input type="date" value={editForm.deadline} min={editGoal && editForm.deadline < todayStr() ? editForm.deadline : todayStr()} onChange={(e) => setEditForm({ ...editForm, deadline: e.target.value })} className={inputCls} />
                 </div>
               </div>
               <div>
