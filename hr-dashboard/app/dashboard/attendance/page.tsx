@@ -692,9 +692,9 @@ export default function AttendancePage() {
   const absentCount = summaryDerived.filter(x => x.eff === "Absent").length;
   const lateCount = summaryRecords.filter(r => lateByThreshold(r)).length;
   const halfDayCount = summaryDerived.filter(x => x.eff === "Half Day").length;
-  // Count every WFH employee who clocked in today — not just those whose status is
-  // Present — so the tile doesn't undercount Half Day / Late remote workers (ATT-010).
-  const wfhCount = summaryRecords.filter(r => r.location === "WFH" && clocedIn(r)).length;
+  // WFH tile = employees who are PRESENT today AND work from home. A clock-in that
+  // nets 0 hours is Absent, so it must not be counted here.
+  const wfhCount = summaryDerived.filter(x => x.eff === "Present" && x.r.location === "WFH").length;
   const overtimeCount = summaryRecords.filter(r => r.overtimeHours !== "-").length;
 
   // WFH distribution — count only employees who actually clocked in, by their location
