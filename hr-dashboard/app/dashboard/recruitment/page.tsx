@@ -36,6 +36,14 @@ interface Candidate {
   resumeName?: string;
 }
 
+interface PastSchedule {
+  date: string;
+  time: string;
+  interviewer: string;
+  meetingLink?: string;
+  movedAt?: string; // ISO timestamp of when it was rescheduled away from this slot
+}
+
 interface Interview {
   id: string;
   candidateName: string;
@@ -49,6 +57,7 @@ interface Interview {
   status: InterviewStatus;
   finalDecision: "Pending" | "Select" | "Reject" | "";
   reminderSent: boolean;
+  rescheduleHistory?: PastSchedule[]; // previous scheduled slots, kept for HR visibility
 }
 
 interface Offer {
@@ -211,6 +220,7 @@ export default function RecruitmentPage() {
 
   function showCandidateToast(msg: string) { setCandidateToast(msg); setTimeout(() => setCandidateToast(null), 3500); }
   const [rescheduleInterview, setRescheduleInterview] = useState<Interview | null>(null);
+  const [historyInterview, setHistoryInterview] = useState<Interview | null>(null);
   const [notePanel, setNotePanel] = useState<Candidate | null>(null);
   const [newNote, setNewNote] = useState("");
 
@@ -485,7 +495,8 @@ export default function RecruitmentPage() {
     if (!isValidMeetingLink(rescheduleInterview.meetingLink)) { showCandidateToast("Please enter a valid meeting link URL (e.g. https://meet.google.com/...)."); return; }
     // New Date is optional — if left blank it defaults to the existing scheduled
     // date (or today if none). A NEW date the user picks still can't be in the past.
-    const originalDate = interviews.find((i) => i.id === rescheduleInterview.id)?.date ?? "";
+    const original = interviews.find((i) => i.id === rescheduleInterview.id);
+    const originalDate = original?.date ?? "";
     const date = rescheduleInterview.date?.trim() || originalDate || todayLocalStr();
     if (date !== originalDate && date < todayLocalStr()) { showCandidateToast("A new interview date cannot be in the past."); return; }
     const reset = {
@@ -495,7 +506,13 @@ export default function RecruitmentPage() {
       feedback: "",
       reminderSent: false,
     };
-    const rescheduled: Interview = { ...rescheduleInterview, date, ...reset };
+    // Keep the CURRENT (about-to-be-replaced) slot in the reschedule history so HR
+    // can always see the past scheduled data, not just the latest slot.
+    const priorHistory = original?.rescheduleHistory ?? [];
+    const rescheduleHistory: PastSchedule[] = original?.date
+      ? [...priorHistory, { date: original.date, time: original.time, interviewer: original.interviewer, meetingLink: original.meetingLink, movedAt: new Date().toISOString() }]
+      : priorHistory;
+    const rescheduled: Interview = { ...rescheduleInterview, date, rescheduleHistory, ...reset };
     setInterviews(interviews.map((i) => i.id === rescheduled.id ? rescheduled : i));
     saveInterview(rescheduled.id, rescheduled);
     setRescheduleInterview(null);
@@ -805,6 +822,15 @@ export default function RecruitmentPage() {
                       <td className="px-4 py-3 text-gray-600 text-xs">
                         <p>{i.date}</p>
                         <p className="text-gray-400">{i.time}</p>
+                        {i.rescheduleHistory && i.rescheduleHistory.length > 0 && (
+                          <button
+                            onClick={() => setHistoryInterview(i)}
+                            title="View previous scheduled slots"
+                            className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-[#4F3CC9] hover:underline"
+                          >
+                            🕘 Rescheduled {i.rescheduleHistory.length}× · view history
+                          </button>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-600">{i.interviewer}</td>
                       <td className="px-4 py-3">
@@ -1264,6 +1290,45 @@ export default function RecruitmentPage() {
             <div className="px-6 pb-6 flex gap-3">
               <button onClick={() => setRescheduleInterview(null)} className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50">Cancel</button>
               <button onClick={handleConfirmReschedule} className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8]">Confirm Reschedule</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reschedule History Modal — past scheduled slots for HR */}
+      {historyInterview && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setHistoryInterview(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 border-b">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Reschedule History</h2>
+                <p className="text-xs text-gray-400 mt-0.5">{historyInterview.candidateName} · {historyInterview.round}</p>
+              </div>
+              <button onClick={() => setHistoryInterview(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            <div className="p-6 space-y-3 max-h-[60vh] overflow-auto">
+              {/* Current (latest) slot */}
+              <div className="flex items-start gap-3 rounded-xl border border-green-100 bg-green-50/60 p-3">
+                <span className="mt-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700 shrink-0">Current</span>
+                <div className="text-sm">
+                  <p className="font-medium text-gray-900">{historyInterview.date} · {historyInterview.time}</p>
+                  <p className="text-xs text-gray-500">Interviewer: {historyInterview.interviewer || "—"}</p>
+                </div>
+              </div>
+              {/* Past slots, newest first */}
+              {[...(historyInterview.rescheduleHistory ?? [])].reverse().map((p, idx) => (
+                <div key={idx} className="flex items-start gap-3 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                  <span className="mt-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 shrink-0">Previous</span>
+                  <div className="text-sm">
+                    <p className="font-medium text-gray-700 line-through decoration-gray-300">{p.date} · {p.time}</p>
+                    <p className="text-xs text-gray-500">Interviewer: {p.interviewer || "—"}</p>
+                    {p.movedAt && <p className="text-[11px] text-gray-400 mt-0.5">Rescheduled on {p.movedAt.slice(0, 10)}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-6 pb-6">
+              <button onClick={() => setHistoryInterview(null)} className="w-full border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50">Close</button>
             </div>
           </div>
         </div>
