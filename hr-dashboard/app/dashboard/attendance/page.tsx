@@ -117,6 +117,7 @@ export default function AttendancePage() {
     catch { return new Set(); }
   });
   const [regToast, setRegToast] = useState<string | null>(null);
+  const [correctionError, setCorrectionError] = useState("");
   const [liveSeconds, setLiveSeconds] = useState(0);
   const [monthlyAttendance, setMonthlyAttendance] = useState<AttendanceRecord[]>([]);
 
@@ -727,6 +728,7 @@ export default function AttendancePage() {
 
   function openEdit(r: AttendanceRecord) {
     setEditRecord(r);
+    setCorrectionError("");
     // Default the dropdown to the currently displayed (derived) status; it's fully
     // editable so HR can change it to Half Day / Leave / etc.
     setCorrection({ name: r.name, date: r.date, clockIn: to24h(r.clockIn), clockOut: to24h(r.clockOut), status: effectiveStatus(r) as AttendanceStatus, reason: "" });
@@ -737,6 +739,14 @@ export default function AttendancePage() {
     // Preserve existing clock times if HR didn't enter new ones
     const ciStr = correction.clockIn  || editRecord.clockIn  || "";
     const coStr = correction.clockOut || editRecord.clockOut || "";
+    // Present / Half Day require a clock-in — you can't attend (even a half day)
+    // without clocking in. Absent / Leave / Week Off need no clock-in.
+    const hasClockIn = !!ciStr && ciStr !== "—" && ciStr.trim() !== "" && ciStr !== "--:--";
+    if ((correction.status === "Present" || correction.status === "Half Day") && !hasClockIn) {
+      setCorrectionError(`Enter a Clock In time to mark ${correction.status}.`);
+      return;
+    }
+    setCorrectionError("");
     const isLate = (() => {
       if (editRecord.date) {
         const dayOfWeek = new Date(editRecord.date + "T00:00:00").getDay();
@@ -1398,8 +1408,11 @@ export default function AttendancePage() {
                   <td className="px-4 py-3">
                     {(() => {
                       const eff = effectiveStatus(r);
-                      const attended = eff === "Present" || eff === "Half Day";
-                      if (!attended) return <span className="text-xs text-gray-300">—</span>; // Absent / Leave / Week Off
+                      const hasCI = !!r.clockIn && r.clockIn !== "—" && r.clockIn !== "" && r.clockIn !== "Ongoing";
+                      // Late / On-Time only makes sense with an actual clock-in and an
+                      // attended status; otherwise show "—".
+                      const attended = (eff === "Present" || eff === "Half Day") && hasCI;
+                      if (!attended) return <span className="text-xs text-gray-300">—</span>;
                       return lateByThreshold(r)
                         ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">Late</span>
                         : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-600">On Time</span>;
@@ -1518,6 +1531,7 @@ export default function AttendancePage() {
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Clock In</label>
                   <input type="time" value={correction.clockIn} onChange={(e) => {
+                    setCorrectionError("");
                     setCorrection({ ...correction, clockIn: e.target.value, status: reSuggestStatus(e.target.value, correction.clockOut, correction.status) });
                   }} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
                 </div>
@@ -1528,7 +1542,7 @@ export default function AttendancePage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
-                <select value={correction.status} onChange={(e) => setCorrection({ ...correction, status: e.target.value as AttendanceStatus })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
+                <select value={correction.status} onChange={(e) => { setCorrectionError(""); setCorrection({ ...correction, status: e.target.value as AttendanceStatus }); }} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
                   {["Present", "Absent", "Half Day", "Leave", "Week Off"].map((s) => <option key={s}>{s}</option>)}
                 </select>
                 <p className="text-[11px] text-gray-400 mt-1">
@@ -1539,6 +1553,7 @@ export default function AttendancePage() {
                 <label className="text-xs font-medium text-gray-600 block mb-1">Reason for Correction</label>
                 <textarea value={correction.reason} onChange={(e) => setCorrection({ ...correction, reason: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] h-20 resize-none" placeholder="Briefly describe the reason..." />
               </div>
+              {correctionError && <p className="text-xs text-red-500 font-medium">{correctionError}</p>}
               <div className="flex gap-3">
                 <button onClick={() => setEditRecord(null)} className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50">Cancel</button>
                 <button onClick={saveCorrection} className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 font-semibold hover:bg-[#3d2fa8]">Save Changes</button>
