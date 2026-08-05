@@ -25,15 +25,19 @@ interface AttEntry {
 }
 
 // Derive the displayed attendance category (same rule as the HR module):
-//   • clocked in  → ALWAYS Present, irrespective of anything
-//   • no clock-in → HR-set status if any (Leave / Week Off / Half Day / Absent),
-//                   else Week Off on weekends, otherwise Absent
+//   • HR manual override → the stored status (editable)
+//   • Leave / Week Off   → unchanged
+//   • no clock-in        → Week Off on weekends, else Absent
+//   • clocked out with 0 working hours → Absent
+//   • otherwise clocked in → Present
 function deriveDisplayStatus(e: AttEntry): AttStatus {
-  const hasClockIn = !!e.clockIn && e.clockIn !== "—" && e.clockIn !== "";
-  if (hasClockIn) return "Present";
   if (e.statusManual) return e.status || (e.isWeekend ? "Week Off" : "Absent");
   if (e.status === "Leave" || e.status === "Week Off") return e.status;
-  return e.isWeekend ? "Week Off" : "Absent";
+  const hasClockIn = !!e.clockIn && e.clockIn !== "—" && e.clockIn !== "";
+  if (!hasClockIn) return e.isWeekend ? "Week Off" : "Absent";
+  const clockedOut = !!e.clockOut && e.clockOut !== "—" && e.clockOut !== "" && e.clockOut !== "Ongoing";
+  if (clockedOut && (e.hoursVal ?? 0) <= 0) return "Absent"; // 0 hours worked → not Present
+  return "Present";
 }
 
 interface RegRequest {
@@ -114,10 +118,11 @@ export default function AttendancePage() {
   const [lateHour, setLateHour]               = useState(9);
   const [lateMinute, setLateMinute]           = useState(30);
 
-  // Clocking out means the employee clocked in today → Present. (No hours-based
-  // Half-Day; HR can override to Half Day / Leave from the Attendance table.)
-  function statusFromHours(_totalSeconds: number, isWeekend: boolean): AttStatus {
-    return isWeekend ? "Week Off" : "Present";
+  // On clock-out: Present if any time was actually worked, Absent if 0 hours
+  // (clocked in and out at the same moment). HR can still override in the table.
+  function statusFromHours(totalSeconds: number, isWeekend: boolean): AttStatus {
+    if (isWeekend) return "Week Off";
+    return totalSeconds > 0 ? "Present" : "Absent";
   }
 
   // UI state

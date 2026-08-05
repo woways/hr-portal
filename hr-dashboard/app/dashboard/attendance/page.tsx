@@ -276,6 +276,27 @@ export default function AttendancePage() {
     return `${Math.floor(diff / 60)}h ${String(diff % 60).padStart(2, "0")}m`;
   }
 
+  // Auto-suggested status for the correction modal from the entered clock times:
+  // no clock-in → Absent; clocked in with no clock-out → Present (open shift);
+  // clocked in & out with real hours → Present; same in/out (0 hours) → Absent.
+  function autoStatusFor(clockIn: string, clockOut: string): AttendanceStatus {
+    const hasCI = !!clockIn && clockIn.trim() !== "" && clockIn !== "--:--";
+    if (!hasCI) return "Absent";
+    const hasCO = !!clockOut && clockOut.trim() !== "" && clockOut !== "--:--";
+    if (!hasCO) return "Present";
+    const wh = computeHours(clockIn, clockOut); // "Xh Ym"
+    const m = wh.match(/(\d+)h\s*(\d+)?m?/);
+    const hrs = m ? Number(m[1]) + Number(m[2] || 0) / 60 : 0;
+    return hrs > 0 ? "Present" : "Absent"; // 0 working hours → Absent
+  }
+
+  // When clock times change, re-suggest the auto status — but keep a deliberate
+  // Half Day / Leave / Week Off that HR already chose.
+  function reSuggestStatus(clockIn: string, clockOut: string, current: AttendanceStatus): AttendanceStatus {
+    if (current === "Half Day" || current === "Leave" || current === "Week Off") return current;
+    return autoStatusFor(clockIn, clockOut);
+  }
+
   // Re-derive "late" from the record's clock-in vs the CURRENT configured threshold,
   // so changing the Late Login Threshold in Settings immediately affects the status
   // (the stored `late` flag was frozen at clock-in time). Lateness only applies to
@@ -706,13 +727,9 @@ export default function AttendancePage() {
 
   function openEdit(r: AttendanceRecord) {
     setEditRecord(r);
-    // Default to the displayed (derived) status, clamped to what the dropdown offers:
-    // clocked in → Present; no clock-in → never Present (fall back to Absent).
-    const ci = to24h(r.clockIn);
-    const hasCI = !!ci && ci !== "" && ci !== "--:--";
-    const eff = effectiveStatus(r);
-    const status = (hasCI ? "Present" : (eff === "Present" ? "Absent" : eff)) as AttendanceStatus;
-    setCorrection({ name: r.name, date: r.date, clockIn: ci, clockOut: to24h(r.clockOut), status, reason: "" });
+    // Default the dropdown to the currently displayed (derived) status; it's fully
+    // editable so HR can change it to Half Day / Leave / etc.
+    setCorrection({ name: r.name, date: r.date, clockIn: to24h(r.clockIn), clockOut: to24h(r.clockOut), status: effectiveStatus(r) as AttendanceStatus, reason: "" });
   }
 
   async function saveCorrection() {
@@ -1501,38 +1518,22 @@ export default function AttendancePage() {
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Clock In</label>
                   <input type="time" value={correction.clockIn} onChange={(e) => {
-                    const ci = e.target.value;
-                    const hasCI = !!ci && ci.trim() !== "";
-                    // A clock-in ALWAYS means Present; with no clock-in a stale "Present"
-                    // falls back to Absent.
-                    let status = correction.status;
-                    if (hasCI) status = "Present";
-                    else if (status === "Present") status = "Absent";
-                    setCorrection({ ...correction, clockIn: ci, status: status as AttendanceStatus });
+                    setCorrection({ ...correction, clockIn: e.target.value, status: reSuggestStatus(e.target.value, correction.clockOut, correction.status) });
                   }} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Clock Out</label>
-                  <input type="time" value={correction.clockOut} onChange={(e) => setCorrection({ ...correction, clockOut: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
+                  <input type="time" value={correction.clockOut} onChange={(e) => setCorrection({ ...correction, clockOut: e.target.value, status: reSuggestStatus(correction.clockIn, e.target.value, correction.status) })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]" />
                 </div>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
-                {(() => {
-                  const hasCI = !!correction.clockIn && correction.clockIn.trim() !== "" && correction.clockIn !== "--:--";
-                  // Clocked in → always Present (locked). No clock-in → HR picks the status.
-                  const opts = hasCI ? ["Present"] : ["Absent", "Half Day", "Leave", "Week Off"];
-                  return (<>
-                    <select value={correction.status} disabled={hasCI} onChange={(e) => setCorrection({ ...correction, status: e.target.value as AttendanceStatus })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none disabled:bg-gray-50 disabled:text-gray-500">
-                      {opts.map((s) => <option key={s}>{s}</option>)}
-                    </select>
-                    <p className="text-[11px] text-gray-400 mt-1">
-                      {hasCI
-                        ? "Clocked in → Present (automatic). Clear the Clock In time to set a different status."
-                        : "No clock-in — choose the status for this day."}
-                    </p>
-                  </>);
-                })()}
+                <select value={correction.status} onChange={(e) => setCorrection({ ...correction, status: e.target.value as AttendanceStatus })} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none">
+                  {["Present", "Absent", "Half Day", "Leave", "Week Off"].map((s) => <option key={s}>{s}</option>)}
+                </select>
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Auto-suggested from the clock times (0 working hours = Absent). Change it to record a Half Day, Leave or Week Off.
+                </p>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Reason for Correction</label>

@@ -68,20 +68,24 @@ export function effectiveStatus(rec: AttStatusRecord): string {
   return deriveAttendanceStatus(rec, CONFIGURED_ATT_THRESHOLDS);
 }
 
-// Derive the effective attendance status. Clock-in is the single source of truth,
-// shared by the HR Attendance module, Dashboard, Reports and the employee view:
-//  • Clocked in  → ALWAYS Present, irrespective of any stored/manual status
-//    (a clock-in can never be Absent).
-//  • No clock-in → the HR-set status if any (Absent / Half Day / Leave / Week Off),
-//    otherwise Absent.
-// There is no hours-based Half-Day calculation. The optional thresholds argument is
-// accepted for backwards compatibility but is ignored.
+// Derive the effective attendance status. Shared by the HR Attendance module,
+// Dashboard, Reports and the employee view:
+//  • HR manual override (statusManual) → whatever HR set (Present / Absent /
+//    Half Day / Leave / Week Off) — the dropdown is editable, so this always wins.
+//  • Leave / Week Off (system-managed) → unchanged.
+//  • No clock-in → Absent.
+//  • Clocked in but clocked out with 0 working hours (same in/out) → Absent.
+//  • Otherwise clocked in (open shift or real hours) → Present.
+// The optional thresholds argument is accepted for compatibility but ignored.
 export function deriveAttendanceStatus(rec: AttStatusRecord, _t?: AttThresholds): string {
+  const status = rec.status ?? "";
+  if (rec.statusManual) return status || "Absent";          // HR override wins
+  if (status === "Leave" || status === "Week Off") return status; // system-managed
   const clockIn = rec.clockIn ?? "";
   const hasClockIn = !!clockIn && clockIn !== "—" && clockIn !== "" && clockIn !== "--:--";
-  if (hasClockIn) return "Present";                         // clocked in → always Present
-  const status = rec.status ?? "";
-  if (rec.statusManual) return status || "Absent";          // HR status for a no-clock-in day
-  if (status === "Leave" || status === "Week Off") return status; // system-managed
-  return "Absent";
+  if (!hasClockIn) return "Absent";
+  const clockOut = rec.clockOut ?? "";
+  const clockedOut = !!clockOut && clockOut !== "Ongoing" && clockOut !== "—" && clockOut !== "" && clockOut !== "--:--";
+  if (clockedOut && parseWorkedHours(rec) <= 0) return "Absent"; // 0 hours worked → not Present
+  return "Present";
 }
