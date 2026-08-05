@@ -816,8 +816,10 @@ export default function AttendancePage() {
   type Tab = typeof TABS[number];
   const [activeTab, setActiveTab] = useState<Tab>("Overview");
 
-  function selectEmployee(empId: string, name: string) {
-    setSearch(name);
+  function selectEmployee(empId: string, _name: string) {
+    // Filter to the SPECIFIC employee by their unique ID (not the name) — otherwise
+    // picking "nm (EMP023)" would also match every other employee named "nm".
+    setSearch(empId);
     setShowSuggestions(false);
     setActiveTab("Daily Attendance");
     setHighlightedEmpId(empId);
