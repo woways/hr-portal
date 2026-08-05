@@ -692,9 +692,9 @@ export default function AttendancePage() {
   const absentCount = summaryDerived.filter(x => x.eff === "Absent").length;
   const lateCount = summaryRecords.filter(r => lateByThreshold(r)).length;
   const halfDayCount = summaryDerived.filter(x => x.eff === "Half Day").length;
-  // WFH tile = employees who are PRESENT today AND work from home. A clock-in that
-  // nets 0 hours is Absent, so it must not be counted here.
-  const wfhCount = summaryDerived.filter(x => x.eff === "Present" && x.r.location === "WFH").length;
+  // WFH tile = employees who ATTENDED today (Present or Half Day) AND work from
+  // home. A clock-in that nets 0 hours is Absent, so it must not be counted here.
+  const wfhCount = summaryDerived.filter(x => (x.eff === "Present" || x.eff === "Half Day") && x.r.location === "WFH").length;
   const overtimeCount = summaryRecords.filter(r => r.overtimeHours !== "-").length;
 
   // WFH distribution — count only employees who actually clocked in, by their location
