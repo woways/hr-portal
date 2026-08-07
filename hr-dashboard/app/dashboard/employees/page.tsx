@@ -338,11 +338,12 @@ function FormModal({
           ))}
         </div>
 
-        {/* Progress bar — fills as the user advances through the steps */}
+        {/* Progress bar — a violet line under the steps that fills by percentage
+            as the user completes each step (Basic Info 20% → … → Identity 100%). */}
         <div className="px-6 pt-3 shrink-0">
-          <div className="h-1 w-full rounded-full bg-gray-100 overflow-hidden">
+          <div className="h-2 w-full rounded-full bg-[#EDE9FF] overflow-hidden">
             <div
-              className="h-full bg-[#4F3CC9] rounded-full transition-all duration-300"
+              className="h-full bg-[#4F3CC9] rounded-full transition-all duration-500 ease-out"
               style={{ width: `${((tabIdx + 1) / FORM_TABS.length) * 100}%` }}
             />
           </div>
