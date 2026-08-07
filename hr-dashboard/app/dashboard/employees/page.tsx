@@ -338,6 +338,14 @@ function FormModal({
           ))}
         </div>
 
+        {/* Completion percentage so HR can see how far the form has progressed */}
+        <div className="px-6 pt-1.5 shrink-0">
+          <p className="text-xs font-medium text-[#4F3CC9]">
+            {Math.round(((tabIdx + 1) / FORM_TABS.length) * 100)}% complete
+            <span className="text-gray-400 font-normal"> · Step {tabIdx + 1} of {FORM_TABS.length}</span>
+          </p>
+        </div>
+
         {/* Form body */}
         <div className="overflow-y-auto flex-1 px-6 py-5">
 
