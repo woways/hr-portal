@@ -338,10 +338,12 @@ function FormModal({
           ))}
         </div>
 
-        {/* Completion percentage so HR can see how far the form has progressed */}
+        {/* Completion percentage so HR can see how far the form has progressed.
+            Counts COMPLETED steps (steps before the current one), so step 1 shows
+            0% and it rises 20% per completed step. */}
         <div className="px-6 pt-1.5 shrink-0">
           <p className="text-xs font-medium text-[#4F3CC9]">
-            {Math.round(((tabIdx + 1) / FORM_TABS.length) * 100)}% complete
+            {Math.round((tabIdx / FORM_TABS.length) * 100)}% complete
             <span className="text-gray-400 font-normal"> · Step {tabIdx + 1} of {FORM_TABS.length}</span>
           </p>
         </div>
