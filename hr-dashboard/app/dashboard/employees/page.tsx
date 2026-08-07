@@ -333,20 +333,9 @@ function FormModal({
                 }`}>{i < tabIdx ? "✓" : i + 1}</span>
                 {FORM_TAB_LABELS[t]}
               </button>
-              {i < FORM_TABS.length - 1 && <span className={`w-5 h-0.5 shrink-0 transition-colors duration-300 ${i < tabIdx ? "bg-[#4F3CC9]" : "bg-gray-200"}`} />}
+              {i < FORM_TABS.length - 1 && <span className="w-5 h-px bg-gray-200 shrink-0" />}
             </div>
           ))}
-        </div>
-
-        {/* Progress bar — a violet line under the steps that fills by percentage
-            as the user completes each step (Basic Info 20% → … → Identity 100%). */}
-        <div className="px-6 pt-3 shrink-0">
-          <div className="h-2 w-full rounded-full bg-[#EDE9FF] overflow-hidden">
-            <div
-              className="h-full bg-[#4F3CC9] rounded-full transition-all duration-500 ease-out"
-              style={{ width: `${((tabIdx + 1) / FORM_TABS.length) * 100}%` }}
-            />
-          </div>
         </div>
 
         {/* Form body */}
