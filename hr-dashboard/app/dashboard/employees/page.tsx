@@ -338,15 +338,41 @@ function FormModal({
           ))}
         </div>
 
-        {/* Completion percentage so HR can see how far the form has progressed.
-            Counts COMPLETED steps (steps before the current one), so step 1 shows
-            0% and it rises 20% per completed step. */}
-        <div className="px-6 pt-1.5 shrink-0">
-          <p className="text-xs font-medium text-[#4F3CC9]">
-            {Math.round((tabIdx / FORM_TABS.length) * 100)}% complete
-            <span className="text-gray-400 font-normal"> · Step {tabIdx + 1} of {FORM_TABS.length}</span>
-          </p>
-        </div>
+        {/* Completion percentage + visible progress bar so HR can see how far the
+            form has progressed. Counts COMPLETED steps (steps before the current
+            one), so step 1 shows 0% and it rises per completed step. */}
+        {(() => {
+          const percent = Math.round((tabIdx / FORM_TABS.length) * 100);
+          return (
+            <div className="px-6 pt-1.5 shrink-0">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-xs font-medium text-[#4F3CC9]">
+                  {percent}% complete
+                  <span className="text-gray-400 font-normal"> · Step {tabIdx + 1} of {FORM_TABS.length}</span>
+                </p>
+              </div>
+              <div
+                role="progressbar"
+                aria-valuenow={percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Add Employee form progress"
+                className="w-full h-1.5 rounded-full bg-gray-200 overflow-hidden"
+              >
+                <div
+                  className="h-full rounded-full bg-[#4F3CC9] wow-progress-fill"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+              <style jsx>{`
+                .wow-progress-fill { transition: width 300ms ease-out; }
+                @media (prefers-reduced-motion: reduce) {
+                  .wow-progress-fill { transition: none; }
+                }
+              `}</style>
+            </div>
+          );
+        })()}
 
         {/* Form body */}
         <div className="overflow-y-auto flex-1 px-6 py-5">
