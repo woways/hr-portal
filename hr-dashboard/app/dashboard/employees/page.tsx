@@ -274,6 +274,15 @@ const FORM_TAB_LABELS: Record<FormTab, string> = {
   education: "Education & Skills",
   identity: "Identity & Bank",
 };
+// Shorter labels used on the visible step tabs so all 5 fit without a
+// horizontal scroll. Screen readers still hear the full name via aria-label.
+const FORM_TAB_SHORT: Record<FormTab, string> = {
+  basic: "Basic Info",
+  contact: "Contact",
+  employment: "Employment",
+  education: "Education",
+  identity: "Identity",
+};
 
 function FormModal({
   title, subtitle, empId, form, setForm, onSave, onClose, saveLabel, saving,
@@ -308,7 +317,7 @@ function FormModal({
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={attemptClose}>
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b shrink-0">
           <div>
@@ -318,12 +327,15 @@ function FormModal({
           <button onClick={attemptClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
 
-        {/* Step indicator */}
-        <div className="flex items-center gap-0 px-6 pt-4 shrink-0 overflow-x-auto">
+        {/* Step indicator — all 5 tabs fit without horizontal scroll (wider modal
+            + shorter visible labels; full name kept in title + aria-label). */}
+        <div className="flex items-center gap-0 px-6 pt-4 shrink-0">
           {FORM_TABS.map((t, i) => (
             <div key={t} className="flex items-center gap-0 shrink-0">
               <button
                 onClick={() => setTab(t)}
+                title={FORM_TAB_LABELS[t]}
+                aria-label={FORM_TAB_LABELS[t]}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition whitespace-nowrap ${
                   tab === t ? "bg-[#EDE9FF] text-[#4F3CC9]" : i < tabIdx ? "text-green-600" : "text-gray-400 hover:bg-gray-100"
                 }`}
@@ -331,7 +343,7 @@ function FormModal({
                 <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
                   tab === t ? "bg-[#4F3CC9] text-white" : i < tabIdx ? "bg-green-500 text-white" : "bg-gray-200 text-gray-500"
                 }`}>{i < tabIdx ? "✓" : i + 1}</span>
-                {FORM_TAB_LABELS[t]}
+                {FORM_TAB_SHORT[t]}
               </button>
               {i < FORM_TABS.length - 1 && <span className="w-5 h-px bg-gray-200 shrink-0" />}
             </div>
