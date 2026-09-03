@@ -37,6 +37,17 @@ interface RegRequest {
   empName?: string;
 }
 
+interface LateReq {
+  id: string;
+  date: string;         // ISO YYYY-MM-DD
+  day: string;
+  clockInTime: string;  // "hh:mm AM/PM" — actual, preserved for audit
+  cutoff: string;       // "HH:MM" 24h — active cutoff when raised
+  reason: string;
+  status: "Pending" | "Approved" | "Rejected";
+  hrComment?: string;
+}
+
 // Past records loaded dynamically from attendance API — not hardcoded
 let PAST_LOG: AttEntry[] = [];
 
@@ -100,6 +111,14 @@ export default function AttendancePage() {
   const [reqTarget, setReqTarget] = useState<AttEntry | null>(null);
   const [reqForm, setReqForm] = useState({ actualArrival: "", reason: "", selectedDate: "" });
   const [reqToast, setReqToast] = useState<string | null>(null);
+  // Late Login Request state (parallel to Regularization; separate collection).
+  const [lateRequests, setLateRequests] = useState<LateReq[]>([]);
+  const [showLateModal, setShowLateModal] = useState(false);
+  const [lateReqTarget, setLateReqTarget] = useState<AttEntry | null>(null);
+  const [lateReqForm, setLateReqForm] = useState({ reason: "", selectedDate: "", clockInTime: "" });
+  const [lateReqError, setLateReqError] = useState<string>("");
+  const lateReasonRef = useRef<HTMLTextAreaElement | null>(null);
+  const lateModalOpenerRef = useRef<HTMLButtonElement | null>(null);
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [clockInTime, setClockInTime] = useState<string | null>(null);
   const [clockOutTime, setClockOutTime] = useState<string | null>(null);
@@ -111,8 +130,10 @@ export default function AttendancePage() {
   const [isLate, setIsLate] = useState(false);
   const [minHours, setMinHours] = useState(8);
   const [halfDayThreshold, setHalfDayThreshold] = useState(4);
-  const [lateHour, setLateHour] = useState(9);
+  const [lateHour, setLateHour] = useState(10);
   const [lateMinute, setLateMinute] = useState(30);
+  // Clock-Out same-day cutoff (default 23:00) — after this, button disabled.
+  const [clockOutCutoff, setClockOutCutoff] = useState("23:00");
   const [selectedMonth, setSelectedMonth] = useState(getTodayMonthLabel);
 
   // Present ≥ full day · Half Day = any work under a full day · Absent = no work.
@@ -128,10 +149,18 @@ export default function AttendancePage() {
     getDoc(doc(db, "settings", "attendanceRules"))
       .then((snap) => {
         if (!snap.exists()) return;
-        const mh = parseFloat(snap.data().minHours as string);
-        const hd = parseFloat(snap.data().halfDayThreshold as string);
+        const d = snap.data() as Record<string, unknown>;
+        const mh = parseFloat(String(d.minHours));
+        const hd = parseFloat(String(d.halfDayThreshold));
         if (!isNaN(mh)) setMinHours(mh);
         if (!isNaN(hd)) setHalfDayThreshold(hd);
+        // Late Login Cutoff (drives isLate + Late Login Request flow).
+        const llc = String(d.lateLoginCutoff ?? "").trim();
+        const mLL = llc.match(/^(\d{1,2}):(\d{2})$/);
+        if (mLL) { setLateHour(parseInt(mLL[1], 10)); setLateMinute(parseInt(mLL[2], 10)); }
+        // Same-day Clock-Out Cutoff.
+        const coc = String(d.clockOutCutoff ?? "").trim();
+        if (/^(\d{1,2}):(\d{2})$/.test(coc)) setClockOutCutoff(coc);
       })
       .catch(() => { /* keep defaults */ });
     // Load the configured Late Login Threshold (e.g. "09:30") so late status is
@@ -259,6 +288,30 @@ export default function AttendancePage() {
     return () => unsub();
   }, [empId]);
 
+  // Real-time listener for this employee's Late Login Requests (separate
+  // collection so the actual clockIn/clockOut on attendance/ stays untouched).
+  useEffect(() => {
+    if (!empId) return;
+    const q = query(collection(db, "lateLoginRequests"), where("empId", "==", empId));
+    const unsub = onSnapshot(q, (snap) => {
+      const mine: LateReq[] = snap.docs.map(d => {
+        const r = d.data() as Record<string, unknown>;
+        return {
+          id:          d.id,
+          date:        String(r.date        ?? ""),
+          day:         String(r.day         ?? ""),
+          clockInTime: String(r.clockInTime ?? ""),
+          cutoff:      String(r.cutoff      ?? ""),
+          reason:      String(r.reason      ?? ""),
+          status:      (r.status ?? "Pending") as LateReq["status"],
+          hrComment:   String(r.hrComment   ?? ""),
+        };
+      });
+      setLateRequests(mine);
+    }, () => {});
+    return () => unsub();
+  }, [empId]);
+
   // One-time backfill: create "Absent" records in Firestore for all working days
   // in the past 30 days where this employee has no attendance record, then reload log
   useEffect(() => {
@@ -346,6 +399,79 @@ export default function AttendancePage() {
     return requests.find((r) => r.date === iso);
   }
 
+  function getLateRequestForDate(date: string): LateReq | undefined {
+    const iso = date.includes("-") ? date : logDateToISO(date);
+    return lateRequests.find((r) => r.date === iso);
+  }
+
+  function openLateRequestModal(row: AttEntry) {
+    const iso = logDateToISO(row.date);
+    setLateReqTarget(row);
+    setLateReqForm({ reason: "", selectedDate: iso, clockInTime: row.clockIn || clockInTime || "" });
+    setLateReqError("");
+    setShowLateModal(true);
+    // Focus the textarea after paint so keyboard users land inside the dialog.
+    setTimeout(() => lateReasonRef.current?.focus(), 60);
+  }
+
+  function closeLateRequestModal() {
+    setShowLateModal(false);
+    setLateReqError("");
+    // Return focus to the button that opened the modal (WCAG 2.4.3).
+    setTimeout(() => lateModalOpenerRef.current?.focus(), 60);
+  }
+
+  async function submitLateRequest() {
+    const reason = lateReqForm.reason.trim();
+    if (!lateReqForm.selectedDate || !lateReqForm.clockInTime || !reason) {
+      setLateReqError("Please write a reason for your late clock-in.");
+      lateReasonRef.current?.focus();
+      return;
+    }
+    const isoDate = lateReqForm.selectedDate;
+    const dayLabel = new Date(isoDate + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short" });
+    const reqId = `${empId}-${isoDate}`;
+    const now = new Date().toISOString();
+    // Store the cutoff that was active when the employee raised the request so
+    // HR sees the exact rule that flagged the day, even if Settings change later.
+    const cutoff = String(lateHour).padStart(2, "0") + ":" + String(lateMinute).padStart(2, "0");
+    try {
+      await setDoc(doc(db, "lateLoginRequests", reqId), {
+        id:          reqId,
+        empId,
+        empName,
+        date:        isoDate,
+        day:         lateReqTarget?.day ?? dayLabel,
+        clockInTime: lateReqForm.clockInTime,
+        cutoff,
+        reason,
+        status:      "Pending",
+        hrComment:   "",
+        createdAt:   now,
+        updatedAt:   now,
+      });
+      await addDoc(collection(db, "notifications"), {
+        userId:    "HR_PORTAL",
+        empId,
+        type:      "attendance",
+        title:     `Late Login Request — ${empName}`,
+        message:   `${empName} (${empId}) requested late-login review for ${isoDate}. Clocked in at ${lateReqForm.clockInTime} (cutoff ${cutoff}).`,
+        read:      false,
+        createdAt: now,
+        refId:     reqId,
+      });
+      setShowLateModal(false);
+      setLateReqForm({ reason: "", selectedDate: "", clockInTime: "" });
+      setLateReqTarget(null);
+      setLateReqError("");
+      setReqToast("Late Login Request submitted to HR.");
+      setTimeout(() => setReqToast(null), 4000);
+    } catch {
+      setLateReqError("Failed to submit. Please check your connection and try again.");
+      lateReasonRef.current?.focus();
+    }
+  }
+
   async function submitRequest() {
     if (!reqForm.selectedDate || !reqForm.actualArrival || !reqForm.reason.trim()) return;
     const isoDate = reqForm.selectedDate;
@@ -411,6 +537,15 @@ export default function AttendancePage() {
 
     const clockId = `${date}-${empId}`;
     const now2 = new Date().toISOString();
+
+    // Enforce same-day Clock-Out cutoff (default 23:00). No-op if past cutoff —
+    // the button is already disabled visually; this guards against any bypass.
+    if (isClockedIn) {
+      const [coH, coM] = (clockOutCutoff || "23:00").split(":").map(Number);
+      const nowMins = now.getHours() * 60 + now.getMinutes();
+      const cutMins = (coH || 0) * 60 + (coM || 0);
+      if (nowMins >= cutMins) return;
+    }
 
     if (!isClockedIn) {
       const late = now.getHours() > lateHour || (now.getHours() === lateHour && now.getMinutes() > lateMinute);
@@ -625,6 +760,94 @@ export default function AttendancePage() {
       </div>
     )}
 
+    {showLateModal && lateReqTarget && (
+      <div
+        className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+        onClick={closeLateRequestModal}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="late-req-title"
+        onKeyDown={(e) => { if (e.key === "Escape") closeLateRequestModal(); }}
+      >
+        <div className="bg-white rounded-2xl w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div>
+              <h3 id="late-req-title" className="font-bold text-gray-900">Raise Late Login Request</h3>
+              <p className="text-xs text-gray-400 mt-0.5">Ask HR to excuse your late clock-in</p>
+            </div>
+            <button
+              type="button"
+              onClick={closeLateRequestModal}
+              aria-label="Close late login request dialog"
+            >
+              <XCircle size={20} className="text-gray-400" />
+            </button>
+          </div>
+          <div className="p-6 space-y-4">
+            <div className="bg-orange-50 rounded-xl px-4 py-3 text-sm text-orange-700 flex items-start gap-2">
+              <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>Your actual clock-in and clock-out times are always preserved. If HR approves, your status for the day updates to <strong>Present</strong>; your working hours stay based on the actual times.</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-medium text-gray-600 mb-1">Date</div>
+                <div className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-100 text-sm text-gray-900">
+                  {lateReqForm.selectedDate || "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-medium text-gray-600 mb-1">Actual Clock-In</div>
+                <div className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-100 text-sm text-gray-900">
+                  {lateReqForm.clockInTime || "—"}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="late-req-reason" className="text-xs font-medium text-gray-600 block mb-1">
+                Reason <span className="text-red-500" aria-hidden="true">*</span>
+              </label>
+              <textarea
+                id="late-req-reason"
+                ref={lateReasonRef}
+                rows={4}
+                placeholder="e.g. Traffic jam on ORR, unwell in the morning, urgent family matter…"
+                value={lateReqForm.reason}
+                onChange={(e) => { setLateReqForm({ ...lateReqForm, reason: e.target.value }); if (lateReqError) setLateReqError(""); }}
+                aria-required="true"
+                aria-invalid={!!lateReqError}
+                aria-describedby={lateReqError ? "late-req-error" : undefined}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] resize-none"
+              />
+              {lateReqError && (
+                <p id="late-req-error" role="alert" className="mt-1 text-xs text-red-600">
+                  {lateReqError}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={closeLateRequestModal}
+                className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitLateRequest}
+                className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-[#3d2fa3]"
+              >
+                Submit to HR
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
@@ -646,21 +869,62 @@ export default function AttendancePage() {
 
       {/* Clock In/Out */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+        {(() => {
+          // Same-day Clock-Out cutoff (e.g. 23:00). currentTime updates every second
+          // so this re-evaluates without any extra state. If the employee is clocked
+          // in past the cutoff, we disable the button and show a Regularization hint.
+          const [coH, coM] = (clockOutCutoff || "23:00").split(":").map(Number);
+          const now = new Date();
+          const nowMins = now.getHours() * 60 + now.getMinutes();
+          const cutMins = (coH || 0) * 60 + (coM || 0);
+          const pastCutoff = isClockedIn && nowMins >= cutMins;
+          const buttonDisabled = !empId || pastCutoff;
+          const to12h = (hh: number, mm: number) => {
+            const suffix = hh >= 12 ? "PM" : "AM";
+            const h12 = hh > 12 ? hh - 12 : hh === 0 ? 12 : hh;
+            return `${String(h12).padStart(2, "0")}:${String(mm).padStart(2, "0")} ${suffix}`;
+          };
+          return (
+        <>
+        {pastCutoff && (
+          <div
+            role="alert"
+            aria-live="polite"
+            className="mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          >
+            <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <div>
+              <p className="font-semibold">Clock-Out window closed</p>
+              <p className="text-xs mt-0.5">
+                The daily Clock-Out cutoff was <strong>{to12h(coH || 23, coM || 0)}</strong>. Please raise a
+                {" "}<strong>Regularization Request</strong> below to record your actual clock-out time. Your clock-in time and today&apos;s hours are preserved.
+              </p>
+            </div>
+          </div>
+        )}
         <div className="flex flex-col md:flex-row items-center gap-8">
           <div className="flex flex-col items-center gap-3">
             <button
               onClick={handleClockToggle}
-              disabled={!empId}
+              disabled={buttonDisabled}
+              aria-disabled={buttonDisabled}
+              aria-describedby={pastCutoff ? "clock-out-cutoff-note" : undefined}
+              title={pastCutoff ? `Clock-Out is disabled after ${to12h(coH || 23, coM || 0)}. Use Regularization.` : undefined}
               className={`w-36 h-36 rounded-full text-white text-lg font-bold shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
                 isClockedIn ? "bg-red-500 hover:bg-red-600" : "bg-[#4F3CC9] hover:bg-[#3d2fa3]"
               }`}
             >
               {!empId ? "Loading..." : isClockedIn ? "Clock Out" : "Clock In"}
             </button>
+            {pastCutoff && (
+              <span id="clock-out-cutoff-note" className="sr-only">
+                Clock-Out is disabled after {to12h(coH || 23, coM || 0)}. Raise a regularization request to record the correct clock-out.
+              </span>
+            )}
             <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
               isClockedIn ? "bg-green-100 text-green-700" : clockOutTime ? "bg-gray-200 text-gray-600" : "bg-gray-100 text-gray-600"
             }`}>
-              <CheckCircle size={12} />
+              <CheckCircle size={12} aria-hidden="true" />
               {isClockedIn ? "Present" : clockOutTime ? "Clocked Out" : "Not Started"}
             </span>
           </div>
@@ -685,6 +949,9 @@ export default function AttendancePage() {
             </div>
           </div>
         </div>
+        </>
+          );
+        })()}
       </div>
 
       {/* Stats */}
@@ -868,9 +1135,26 @@ export default function AttendancePage() {
                           {row.status === "Absent" && (() => {
                             const req = getRequestForDate(row.date);
                             if (!req) return <button onClick={() => { setReqTarget(row); setReqForm({ actualArrival: "", reason: "", selectedDate: logDateToISO(row.date) }); setShowReqModal(true); }} className="text-xs bg-orange-100 text-orange-700 hover:bg-orange-200 px-3 py-1.5 rounded-full font-medium whitespace-nowrap">Raise Request</button>;
-                            if (req.status === "Pending")  return <span className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-full font-medium">⏳ Pending</span>;
-                            if (req.status === "Approved") return <span className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-full font-medium">✓ Approved</span>;
-                            return <span className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-full font-medium">✗ Rejected</span>;
+                            if (req.status === "Pending")  return <span className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request pending">⏳ Pending</span>;
+                            if (req.status === "Approved") return <span className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request approved">✓ Approved</span>;
+                            return <span className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request rejected">✗ Rejected</span>;
+                          })()}
+                          {row.status !== "Absent" && row.late && (() => {
+                            const lreq = getLateRequestForDate(row.date);
+                            if (!lreq) return (
+                              <button
+                                type="button"
+                                ref={row.date === getTodayDateStr() ? lateModalOpenerRef : undefined}
+                                onClick={() => openLateRequestModal(row)}
+                                aria-label={`Raise Late Login Request for ${row.date}`}
+                                className="text-xs bg-orange-100 text-orange-700 hover:bg-orange-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 px-3 py-1.5 rounded-full font-medium whitespace-nowrap"
+                              >
+                                Raise Late Login Request
+                              </button>
+                            );
+                            if (lreq.status === "Pending")  return <span className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-full font-medium" aria-label="Late Login Request pending">⏳ Pending Review</span>;
+                            if (lreq.status === "Approved") return <span className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-full font-medium" aria-label="Late Login Request approved by HR">✓ Approved</span>;
+                            return <span className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-full font-medium" aria-label="Late Login Request rejected by HR">✗ Rejected</span>;
                           })()}
                         </td>
                       </tr>

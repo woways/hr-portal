@@ -5,7 +5,8 @@ import * as XLSX from "xlsx";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, PieChart, Pie, Cell,
 } from "recharts";
-import { getAttendance, updateAttendance, upsertAttendance, updateRegularizationStatus, markHRNotifRead } from "@/lib/firebaseService";
+import { getAttendance, updateAttendance, upsertAttendance, updateRegularizationStatus, markHRNotifRead, updateLateLoginRequestStatus } from "@/lib/firebaseService";
+import { addDoc, serverTimestamp } from "firebase/firestore";
 import { invalidateAttendance } from "@/lib/cachedService";
 import { deriveAttendanceStatus, effectiveStatus } from "@/lib/attendanceStatus";
 import { canonicalWorkMode } from "@/lib/enums";
@@ -111,6 +112,19 @@ export default function AttendancePage() {
   const [correction, setCorrection] = useState({ ...blankCorrection });
   const [month, setMonth] = useState(() => new Date().toLocaleString("en-IN", { month: "long", year: "numeric" }));
   const [regRequests, setRegRequests] = useState<RegRequest[]>([]);
+  // Late Login Requests — separate workflow from regularization; the actual
+  // clockIn/clockOut on the attendance doc is NEVER modified by approval.
+  // Approval flips the DERIVED status to "Present" via deriveAttendanceStatus()
+  // which reads the request's status; the audit trail (actual times) is preserved.
+  interface LateLoginReqAdmin {
+    id: string; empId: string; empName: string; date: string; day: string;
+    clockInTime: string; cutoff: string;
+    reason: string;
+    status: "Pending" | "Approved" | "Rejected";
+    hrComment?: string;
+  }
+  const [lateRequests, setLateRequests] = useState<LateLoginReqAdmin[]>([]);
+  const [lateHrComment, setLateHrComment] = useState<Record<string, string>>({});
   const [hrComment, setHrComment] = useState<Record<string, string>>({});
   const [clearedReviewedIds, setClearedReviewedIds] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem("hr_att_reviewed_cleared") ?? "[]")); }
@@ -629,6 +643,57 @@ export default function AttendancePage() {
     }
 
     setRegToast(`Request ${action === "Approved" ? "approved ✓" : "rejected ✗"} — ${req?.empName}`);
+    setTimeout(() => setRegToast(null), 3500);
+  }
+
+  // Real-time late login requests
+  useEffect(() => {
+    const q2 = query(collection(db, "lateLoginRequests"));
+    const unsub = onSnapshot(q2, (snap) => {
+      setLateRequests(snap.docs.map((d) => {
+        const r = d.data() as Record<string, unknown>;
+        return {
+          id:          d.id,
+          empId:       String(r.empId       ?? ""),
+          empName:     String(r.empName     ?? ""),
+          date:        String(r.date        ?? ""),
+          day:         String(r.day         ?? ""),
+          clockInTime: String(r.clockInTime ?? ""),
+          cutoff:      String(r.cutoff      ?? ""),
+          reason:      String(r.reason      ?? ""),
+          status:      (String(r.status     ?? "Pending")) as "Pending" | "Approved" | "Rejected",
+          hrComment:   String(r.hrComment   ?? ""),
+        };
+      }));
+    }, () => {});
+    return () => unsub();
+  }, []);
+
+  async function actionLateRequest(id: string, action: "Approved" | "Rejected") {
+    const req = lateRequests.find((r) => r.id === id);
+    const comment = lateHrComment[id] ?? "";
+
+    // Optimistic
+    setLateRequests((prev) => prev.map((r) => r.id === id ? { ...r, status: action, hrComment: comment } : r));
+
+    try {
+      await updateLateLoginRequestStatus(id, action, comment);
+      // Notify the employee — do NOT touch attendance/{docId} clock times.
+      if (req) {
+        await addDoc(collection(db, "notifications"), {
+          userId: req.empId,
+          empId: req.empId,
+          type: "attendance",
+          title: `Late Login Request ${action}`,
+          message: `Your late login request for ${req.date} was ${action.toLowerCase()}${comment ? ` — "${comment}"` : ""}.`,
+          read: false,
+          createdAt: serverTimestamp(),
+          refId: id,
+        });
+      }
+    } catch {}
+
+    setRegToast(`Late login ${action === "Approved" ? "approved ✓" : "rejected ✗"} — ${req?.empName ?? ""}`);
     setTimeout(() => setRegToast(null), 3500);
   }
 
@@ -1204,6 +1269,132 @@ export default function AttendancePage() {
         {/* ── Attendance Requests ── */}
         {activeTab === "Attendance Requests" && (
           <div className="p-6 space-y-6">
+
+      {/* ── Late Login Requests ── */}
+      {lateRequests.filter((r) => r.status === "Pending").length > 0 && (
+        <section
+          className="bg-white rounded-2xl shadow-sm overflow-hidden border-l-4 border-amber-500"
+          aria-labelledby="late-req-heading"
+        >
+          <div className="px-6 py-4 border-b flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h2 id="late-req-heading" className="text-base font-semibold text-gray-900">Late Login Requests</h2>
+              <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
+                {lateRequests.filter((r) => r.status === "Pending").length} Pending
+              </span>
+            </div>
+            <p className="text-xs text-gray-400">Actual clock-in / out times are preserved regardless of decision.</p>
+          </div>
+          <ul className="divide-y divide-gray-50">
+            {lateRequests.filter((r) => r.status === "Pending").map((req) => (
+              <li key={req.id} className="px-6 py-5 flex flex-col md:flex-row md:items-start gap-4">
+                <div className="flex-1 space-y-2">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="w-8 h-8 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0" aria-hidden="true">
+                      {(req.empName || "?").split(" ").map((n) => n[0]).join("").slice(0,2)}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{req.empName || "—"}</p>
+                      <p className="text-xs text-gray-400">{req.empId}</p>
+                    </div>
+                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                      {req.date}{req.day ? ` · ${req.day}` : ""}
+                    </span>
+                    <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                      Clock-In: {req.clockInTime || "—"}
+                    </span>
+                    {req.cutoff && (
+                      <span className="text-xs bg-gray-50 text-gray-500 px-2 py-0.5 rounded-full">
+                        Cutoff: {req.cutoff}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-600 bg-gray-50 rounded-xl px-4 py-3 leading-relaxed">
+                    &ldquo;{req.reason}&rdquo;
+                  </p>
+                  <label htmlFor={`late-comment-${req.id}`} className="sr-only">
+                    HR comment for {req.empName || "employee"} on {req.date}
+                  </label>
+                  <input
+                    id={`late-comment-${req.id}`}
+                    placeholder="Add a comment (optional)..."
+                    value={lateHrComment[req.id] ?? ""}
+                    onChange={(e) => setLateHrComment({ ...lateHrComment, [req.id]: e.target.value })}
+                    className="w-full text-sm px-3 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
+                  />
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => actionLateRequest(req.id, "Approved")}
+                    aria-label={`Approve late login for ${req.empName || req.empId} on ${req.date}`}
+                    className="px-5 py-2 rounded-xl bg-green-500 text-white text-sm font-semibold hover:bg-green-600 transition-colors"
+                  >
+                    ✓ Approve
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => actionLateRequest(req.id, "Rejected")}
+                    aria-label={`Reject late login for ${req.empName || req.empId} on ${req.date}`}
+                    className="px-5 py-2 rounded-xl bg-red-100 text-red-600 text-sm font-semibold hover:bg-red-200 transition-colors"
+                  >
+                    ✗ Reject
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Reviewed late login requests — compact table */}
+      {lateRequests.filter((r) => r.status !== "Pending").length > 0 && (
+        <section className="bg-white rounded-2xl shadow-sm overflow-hidden border border-gray-100" aria-labelledby="late-reviewed-heading">
+          <div className="px-6 py-3 border-b flex items-center gap-2">
+            <h2 id="late-reviewed-heading" className="text-sm font-semibold text-gray-700">Reviewed Late Logins</h2>
+            <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+              {lateRequests.filter((r) => r.status !== "Pending").length}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Late login requests already reviewed by HR</caption>
+              <thead>
+                <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
+                  <th scope="col" className="px-5 py-3 text-left">Employee</th>
+                  <th scope="col" className="px-5 py-3 text-left">Emp ID</th>
+                  <th scope="col" className="px-5 py-3 text-left">Date</th>
+                  <th scope="col" className="px-5 py-3 text-left">Clock-In</th>
+                  <th scope="col" className="px-5 py-3 text-left">Reason</th>
+                  <th scope="col" className="px-5 py-3 text-left">HR Comment</th>
+                  <th scope="col" className="px-5 py-3 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {lateRequests.filter((r) => r.status !== "Pending").map((req) => (
+                  <tr key={req.id} className={`hover:bg-gray-50 transition-colors ${req.status === "Approved" ? "bg-green-50/20" : "bg-red-50/20"}`}>
+                    <td className="px-5 py-3 font-medium text-gray-900 whitespace-nowrap">{req.empName || "—"}</td>
+                    <td className="px-5 py-3 text-gray-500 text-xs">{req.empId || "—"}</td>
+                    <td className="px-5 py-3 text-gray-600 whitespace-nowrap">{req.date}</td>
+                    <td className="px-5 py-3 text-gray-600">{req.clockInTime || "—"}</td>
+                    <td className="px-5 py-3 text-gray-600 max-w-[220px]">
+                      <span className="block truncate" title={req.reason}>{req.reason || "—"}</span>
+                    </td>
+                    <td className="px-5 py-3 text-gray-500 text-xs max-w-[160px]">
+                      <span className="block truncate" title={req.hrComment}>{req.hrComment || "—"}</span>
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${req.status === "Approved" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                        {req.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* ── Regularization Requests ── */}
       {regRequests.filter((r) => r.status === "Pending").length > 0 && (

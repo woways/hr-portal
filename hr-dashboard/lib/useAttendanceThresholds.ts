@@ -10,7 +10,12 @@ import {
 
 // Concrete (non-optional) thresholds returned to components so callers can use
 // halfDayThreshold as a plain number without null-guards.
-export interface ResolvedThresholds { minHours: number; halfDayThreshold: number; }
+export interface ResolvedThresholds {
+  minHours: number;
+  halfDayThreshold: number;
+  lateLoginCutoff: string; // "HH:MM" 24h
+  clockOutCutoff: string;  // "HH:MM" 24h — Clock-Out disabled after this same-day
+}
 
 /**
  * Live attendance thresholds (BUG-ATT-02). Reads Min Working Hours (full-day
@@ -24,11 +29,27 @@ export interface ResolvedThresholds { minHours: number; halfDayThreshold: number
  * three surfaces stay reconciled (BUG-06 / BUG-DASH-01). Returning the values as
  * component state makes the pages re-render when the settings change.
  */
+const DEFAULT_LATE_CUTOFF = DEFAULT_ATT_THRESHOLDS.lateLoginCutoff || "10:30";
+const DEFAULT_CO_CUTOFF   = DEFAULT_ATT_THRESHOLDS.clockOutCutoff  || "23:00";
+
+// Accept "HH:MM" (24h) or "H:MM" — Settings' <input type="time"> already emits
+// zero-padded HH:MM, but be lenient in case older docs stored the value.
+function normalizeCutoff(raw: unknown, fallback: string): string {
+  const s = String(raw ?? "").trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallback;
+  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+  const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
 export function useAttendanceThresholds(): ResolvedThresholds {
   const initial = getConfiguredThresholds();
   const [thresholds, setThresholds] = useState<ResolvedThresholds>({
     minHours: initial.minHours,
     halfDayThreshold: initial.halfDayThreshold ?? 0,
+    lateLoginCutoff: initial.lateLoginCutoff || DEFAULT_LATE_CUTOFF,
+    clockOutCutoff:  initial.clockOutCutoff  || DEFAULT_CO_CUTOFF,
   });
   useEffect(() => {
     const unsub = onSnapshot(
@@ -41,6 +62,8 @@ export function useAttendanceThresholds(): ResolvedThresholds {
         const next: ResolvedThresholds = {
           minHours: isNaN(mh) ? DEFAULT_ATT_THRESHOLDS.minHours : mh,
           halfDayThreshold: isNaN(hd) ? (DEFAULT_ATT_THRESHOLDS.halfDayThreshold ?? 0) : hd,
+          lateLoginCutoff: normalizeCutoff(data.lateLoginCutoff, DEFAULT_LATE_CUTOFF),
+          clockOutCutoff:  normalizeCutoff(data.clockOutCutoff,  DEFAULT_CO_CUTOFF),
         };
         setConfiguredThresholds(next); // keep effectiveStatus() in sync everywhere
         setThresholds(next);

@@ -340,6 +340,25 @@ export async function updateRegularizationStatus(regId: string, status: string, 
   await updateDoc(doc(db, "regularization", regId), { status, hrComment, updatedAt: new Date().toISOString() });
 }
 
+// ─── Late Login Requests ──────────────────────────────────────────────────────
+// Parallel to `regularization`, but scoped to the specific "clocked-in late"
+// workflow so HR can approve/reject the lateness itself (excusing → Present)
+// without touching the actual clockIn/clockOut/workingHours on the attendance
+// record. Doc id = `${empId}-${date}` so one employee raises at most one request
+// per day; a re-submit merges.
+export async function getLateLoginRequests(): Promise<Record<string, unknown>[]> {
+  const snap = await getDocs(collection(db, "lateLoginRequests"));
+  return snap.docs.map((d) => ({ ...d.data(), id: d.id })) as Record<string, unknown>[];
+}
+
+export async function upsertLateLoginRequest(reqId: string, data: Record<string, unknown>) {
+  await setDoc(doc(db, "lateLoginRequests", reqId), { ...data, updatedAt: new Date().toISOString() }, { merge: true });
+}
+
+export async function updateLateLoginRequestStatus(reqId: string, status: "Approved" | "Rejected", hrComment = "") {
+  await updateDoc(doc(db, "lateLoginRequests", reqId), { status, hrComment, updatedAt: new Date().toISOString() });
+}
+
 // ─── Clock Records ────────────────────────────────────────────────────────────
 export async function getClockRecord(empId: string, date: string) {
   const id = `${date}-${empId}`;

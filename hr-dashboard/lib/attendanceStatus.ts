@@ -5,6 +5,8 @@
 export interface AttThresholds {
   minHours: number;         // full-day minimum (>= this → Present)
   halfDayThreshold?: number; // retained for compatibility; not used by the current rule
+  lateLoginCutoff?: string;  // "HH:MM" 24h — clock-in after this = late (default "10:30")
+  clockOutCutoff?: string;   // "HH:MM" 24h — Clock-Out button disabled after this same-day (default "23:00")
 }
 
 export interface AttStatusRecord {
@@ -13,9 +15,12 @@ export interface AttStatusRecord {
   status?: string;
   workingHours?: string;
   statusManual?: boolean; // true when HR has manually set the status (override wins)
+  // Late-login-workflow fields (attached by the UI layer per-row, not persisted on
+  // attendance/{docId} — the source-of-truth request lives in lateLoginRequests/).
+  lateRequestStatus?: "Pending" | "Approved" | "Rejected";
 }
 
-export const DEFAULT_ATT_THRESHOLDS: AttThresholds = { minHours: 8, halfDayThreshold: 0 };
+export const DEFAULT_ATT_THRESHOLDS: AttThresholds = { minHours: 8, halfDayThreshold: 0, lateLoginCutoff: "10:30", clockOutCutoff: "23:00" };
 
 // "Xh Ym" from two clock strings (accepts "hh:mm AM/PM" and 24h "HH:MM").
 export function computeHoursStr(clockIn = "", clockOut = ""): string {
@@ -54,10 +59,44 @@ export function parseWorkedHours(rec: AttStatusRecord): number {
 // useAttendanceThresholds(), which subscribes to settings/attendanceRules.
 let CONFIGURED_ATT_THRESHOLDS: AttThresholds = { ...DEFAULT_ATT_THRESHOLDS };
 export function setConfiguredThresholds(t: AttThresholds): void {
-  CONFIGURED_ATT_THRESHOLDS = { minHours: t.minHours, halfDayThreshold: t.halfDayThreshold ?? 0 };
+  CONFIGURED_ATT_THRESHOLDS = {
+    minHours: t.minHours,
+    halfDayThreshold: t.halfDayThreshold ?? 0,
+    lateLoginCutoff: t.lateLoginCutoff || DEFAULT_ATT_THRESHOLDS.lateLoginCutoff,
+    clockOutCutoff:  t.clockOutCutoff  || DEFAULT_ATT_THRESHOLDS.clockOutCutoff,
+  };
 }
 export function getConfiguredThresholds(): AttThresholds {
   return CONFIGURED_ATT_THRESHOLDS;
+}
+
+// Parse an "HH:MM" 24h string (from Settings) or "hh:mm AM/PM" (from a clock-in
+// record) into minutes-since-midnight. Returns null when unparseable.
+function parseTimeToMins(t: string | undefined | null): number | null {
+  if (!t) return null;
+  const s = String(t).trim();
+  if (!s || s === "—" || s === "--:--") return null;
+  const m12 = s.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (m12) {
+    let h = parseInt(m12[1], 10); const min = parseInt(m12[2], 10);
+    if (/PM/i.test(m12[3]) && h !== 12) h += 12;
+    if (/AM/i.test(m12[3]) && h === 12) h = 0;
+    return h * 60 + min;
+  }
+  const m24 = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) return parseInt(m24[1], 10) * 60 + parseInt(m24[2], 10);
+  return null;
+}
+
+// True when the clock-in time is strictly after the configured late cutoff.
+// Uses the configured cutoff (from Settings → Attendance Rules); pass an explicit
+// cutoff string to override. Returns false when either value is unparseable so a
+// missing/bad config never flags a normal login as late.
+export function isLateClockIn(clockIn: string | undefined | null, cutoff?: string): number | null {
+  const inMins = parseTimeToMins(clockIn);
+  const cutMins = parseTimeToMins(cutoff || CONFIGURED_ATT_THRESHOLDS.lateLoginCutoff || DEFAULT_ATT_THRESHOLDS.lateLoginCutoff);
+  if (inMins == null || cutMins == null) return null;
+  return inMins > cutMins ? inMins - cutMins : 0; // returns 0 = on-time, N minutes late otherwise
 }
 
 // Convenience wrapper — uses the CONFIGURED thresholds (from Settings). Prefer this
@@ -69,15 +108,20 @@ export function effectiveStatus(rec: AttStatusRecord): string {
 }
 
 // Derive the effective attendance status. Shared by the HR Attendance module,
-// Dashboard, Reports and the employee view:
-//  • HR manual override (statusManual) → whatever HR set (Present / Absent /
-//    Half Day / Leave / Week Off) — the dropdown is editable, so this always wins.
-//  • Leave / Week Off (system-managed) → unchanged.
-//  • No clock-in → Absent.
-//  • Clocked in but clocked out with 0 working hours (same in/out) → Absent.
-//  • Otherwise clocked in (open shift or real hours) → Present.
-// The optional thresholds argument is accepted for compatibility but ignored.
-export function deriveAttendanceStatus(rec: AttStatusRecord, _t?: AttThresholds): string {
+// Dashboard, Reports and the employee view. Precedence:
+//   1. HR manual override (statusManual) always wins.
+//   2. Leave / Week Off — system-managed, unchanged.
+//   3. No clock-in → Absent.
+//   4. Clocked in-and-out with 0 working hours → Absent.
+//   5. Late-clock-in (past configured cutoff) →
+//        Approved late request  → "Present"   (HR excused the lateness)
+//        Rejected late request  → "Late"      (kept as Late for the record)
+//        Pending late request   → "Late (Pending Review)"
+//        No request raised      → "Late"
+//   6. Otherwise → Present.
+// The optional thresholds argument is accepted for compatibility; when omitted
+// the configured (Settings-driven) cutoff is used.
+export function deriveAttendanceStatus(rec: AttStatusRecord, t?: AttThresholds): string {
   const status = rec.status ?? "";
   if (rec.statusManual) return status || "Absent";          // HR override wins
   if (status === "Leave" || status === "Week Off") return status; // system-managed
@@ -87,5 +131,19 @@ export function deriveAttendanceStatus(rec: AttStatusRecord, _t?: AttThresholds)
   const clockOut = rec.clockOut ?? "";
   const clockedOut = !!clockOut && clockOut !== "Ongoing" && clockOut !== "—" && clockOut !== "" && clockOut !== "--:--";
   if (clockedOut && parseWorkedHours(rec) <= 0) return "Absent"; // 0 hours worked → not Present
+
+  // Late-login handling — clockIn strictly after configured cutoff is "Late".
+  // An HR-approved late-login request excuses the lateness (Present); pending
+  // request surfaces as "Late (Pending Review)" so both employee and HR can see
+  // the review is in flight without losing the original Late signal.
+  const cutoff = (t?.lateLoginCutoff ?? CONFIGURED_ATT_THRESHOLDS.lateLoginCutoff);
+  const lateMins = isLateClockIn(clockIn, cutoff);
+  if (lateMins != null && lateMins > 0) {
+    const req = rec.lateRequestStatus;
+    if (req === "Approved") return "Present";
+    if (req === "Pending")  return "Late (Pending Review)";
+    return "Late";
+  }
+
   return "Present";
 }

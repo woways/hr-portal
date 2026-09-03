@@ -36,7 +36,7 @@ const DEFAULT_HOLIDAYS = [
 ];
 
 const DEFAULT_WORK_TIMINGS = { start: "09:00", end: "18:00", lateThreshold: "09:30", weekOff: "Saturday & Sunday" };
-const DEFAULT_ATT_RULES    = { minHours: "8", halfDayThreshold: "0", gracePeriod: "15", autoAbsentAfter: "30", autoMarkEnabled: false, lateNotif: true, absentNotif: true };
+const DEFAULT_ATT_RULES    = { minHours: "8", halfDayThreshold: "0", gracePeriod: "15", autoAbsentAfter: "30", lateLoginCutoff: "10:30", clockOutCutoff: "23:00", autoMarkEnabled: false, lateNotif: true, absentNotif: true };
 const DEFAULT_COMPANY      = { name: "", industry: "", website: "", address: "" };
 
 const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -276,6 +276,8 @@ export default function SettingsPage() {
             halfDayThreshold: (data.halfDayThreshold as string)  ?? DEFAULT_ATT_RULES.halfDayThreshold,
             gracePeriod:      (data.gracePeriod      as string)  ?? DEFAULT_ATT_RULES.gracePeriod,
             autoAbsentAfter:  (data.autoAbsentAfter  as string)  ?? DEFAULT_ATT_RULES.autoAbsentAfter,
+            lateLoginCutoff:  (data.lateLoginCutoff  as string)  ?? DEFAULT_ATT_RULES.lateLoginCutoff,
+            clockOutCutoff:   (data.clockOutCutoff   as string)  ?? DEFAULT_ATT_RULES.clockOutCutoff,
             autoMarkEnabled:  Boolean(data.autoMarkEnabled),
             lateNotif:        data.lateNotif  !== undefined ? Boolean(data.lateNotif)  : true,
             absentNotif:      data.absentNotif !== undefined ? Boolean(data.absentNotif) : true,
@@ -630,6 +632,36 @@ export default function SettingsPage() {
                         </div>
                       </div>
                     ))}
+                    <div>
+                      <label htmlFor="late-login-cutoff" className="text-xs font-medium text-gray-600 block mb-1">Late Login Cutoff</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          id="late-login-cutoff"
+                          type="time"
+                          value={attRules.lateLoginCutoff}
+                          onChange={(e) => setAttRules({ ...attRules, lateLoginCutoff: e.target.value })}
+                          aria-describedby="late-login-cutoff-help"
+                          className={inputCls}
+                        />
+                        <span className="text-sm text-gray-500 shrink-0">HH:MM</span>
+                      </div>
+                      <p id="late-login-cutoff-help" className="text-[11px] text-gray-500 mt-1">Employees clocking in after this time are marked <b>Late</b> and can raise a Late Login Request for HR review.</p>
+                    </div>
+                    <div>
+                      <label htmlFor="clock-out-cutoff" className="text-xs font-medium text-gray-600 block mb-1">Clock-Out Cutoff</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          id="clock-out-cutoff"
+                          type="time"
+                          value={attRules.clockOutCutoff}
+                          onChange={(e) => setAttRules({ ...attRules, clockOutCutoff: e.target.value })}
+                          aria-describedby="clock-out-cutoff-help"
+                          className={inputCls}
+                        />
+                        <span className="text-sm text-gray-500 shrink-0">HH:MM</span>
+                      </div>
+                      <p id="clock-out-cutoff-help" className="text-[11px] text-gray-500 mt-1">Employees can press <b>Clock Out</b> only until this time. After it, they must raise a Regularization Request to correct their clock-out.</p>
+                    </div>
                   </div>
                   <div className="space-y-3 pt-2">
                     {([
