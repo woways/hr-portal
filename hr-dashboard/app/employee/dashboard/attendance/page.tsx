@@ -1061,7 +1061,47 @@ export default function AttendancePage() {
         const isCurrentMonth = historyYear === now.getFullYear() && historyMonthIdx === now.getMonth();
         const canGoNext = !(historyYear === now.getFullYear() && historyMonthIdx >= now.getMonth());
         const mStr = SHORT_MONTHS[historyMonthIdx];
-        const monthEntries = fullLog.filter(e => e.date.startsWith(mStr) && e.date.endsWith(String(historyYear)));
+        // Build a COMPLETE list of days for the selected month so history is not
+        // limited to only days that have a Firestore attendance doc. For any day
+        // without an entry we synthesize a neutral row (Week Off for Sat/Sun,
+        // otherwise Absent — same treatment as the rest of the page). Existing
+        // entries from fullLog override the synthesized row.
+        const monthEntries = (() => {
+          const dojD   = doj ? new Date(doj + "T00:00:00") : null;
+          const dojKey = dojD ? dojD.getFullYear() * 12 + dojD.getMonth() : null;
+          const monKey = historyYear * 12 + historyMonthIdx;
+          // Nothing to show for months before joining.
+          if (dojKey !== null && monKey < dojKey) return [] as AttEntry[];
+          const daysInMonth = new Date(historyYear, historyMonthIdx + 1, 0).getDate();
+          const todayIso = todayISO();
+          const existingByLabel = new Map(fullLog.map((e) => [e.date, e]));
+          const rows: AttEntry[] = [];
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dt = new Date(historyYear, historyMonthIdx, d);
+            const iso = `${historyYear}-${String(historyMonthIdx + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+            // Skip days before DOJ and days after today.
+            if (dojD && dt < new Date(dojD.getFullYear(), dojD.getMonth(), dojD.getDate())) continue;
+            if (iso > todayIso) continue;
+            const label = `${mStr} ${String(d).padStart(2, "0")}, ${historyYear}`;
+            const existing = existingByLabel.get(label);
+            if (existing) { rows.push(existing); continue; }
+            const dayIdx = dt.getDay();
+            const isWeekend = dayIdx === 0 || dayIdx === 6;
+            rows.push({
+              date: label,
+              day: DAY_ABBR[dayIdx],
+              clockIn: "—",
+              clockOut: "—",
+              hours: "—",
+              hoursVal: 0,
+              status: (isWeekend ? "Week Off" : "Absent") as AttStatus,
+              late: false,
+              isWeekend,
+            });
+          }
+          // Newest date first — matches how fullLog is sorted elsewhere.
+          return rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        })();
 
 
         return (
