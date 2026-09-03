@@ -17,7 +17,7 @@ import { collection, onSnapshot, query, where, getDocs, doc, getDoc } from "fire
 import { db } from "@/lib/firebase";
 import { backfillAllEmployees, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 
-type AttendanceStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
+type AttendanceStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Incomplete";
 type WorkLocation = "Office" | "WFH" | "Client Site";
 
 interface AttendanceRecord {
@@ -42,6 +42,7 @@ const statusColor: Record<AttendanceStatus, string> = {
   "Half Day": "bg-yellow-100 text-yellow-700",
   Leave: "bg-purple-100 text-purple-700",
   "Week Off": "bg-gray-100 text-gray-600",
+  Incomplete: "bg-orange-100 text-orange-700",
 };
 
 function heatColor(pct: number) {
@@ -1578,12 +1579,20 @@ export default function AttendancePage() {
                   </td>
                   <td className="px-4 py-3 text-gray-600">{r.clockIn || "—"}</td>
                   <td className="px-4 py-3 text-gray-600">
-                    {r.clockOut === "Ongoing"
-                      ? <span className="text-green-600 font-medium animate-pulse">● Ongoing</span>
-                      : (r.clockOut || "—")}
+                    {(() => {
+                      const isMissed = !!r.clockIn && !r.clockOut && r.date !== TODAY;
+                      if (r.clockOut === "Ongoing") return <span className="text-green-600 font-medium animate-pulse">● Ongoing</span>;
+                      if (isMissed) return <span className="text-red-600 font-medium">Missed</span>;
+                      return r.clockOut || "—";
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-gray-700 font-medium tabular-nums">
-                    {r.clockOut === "Ongoing" ? fmtHours(liveSeconds) : (r.workingHours || computeHours(r.clockIn, r.clockOut) || "—")}
+                    {(() => {
+                      const isMissed = !!r.clockIn && !r.clockOut && r.date !== TODAY;
+                      if (r.clockOut === "Ongoing") return fmtHours(liveSeconds);
+                      if (isMissed) return "—";
+                      return r.workingHours || computeHours(r.clockIn, r.clockOut) || "—";
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     {r.overtimeHours !== "-"
@@ -1591,7 +1600,14 @@ export default function AttendancePage() {
                       : <span className="text-xs text-gray-300">—</span>}
                   </td>
                   <td className="px-4 py-3">
-                    {(() => { const eff = effectiveStatus(r) as AttendanceStatus; return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[eff] ?? statusColor[r.status]}`}>{eff}</span>; })()}
+                    {(() => {
+                      // Missed-clock-out on a past day surfaces as "Incomplete" (neutral —
+                      // never counted as Present or Absent). Actual clock-in preserved.
+                      const isMissed = !!r.clockIn && !r.clockOut && r.date !== TODAY;
+                      const rec = isMissed ? { ...r, status: "Incomplete" as AttendanceStatus } : r;
+                      const eff = effectiveStatus(rec) as AttendanceStatus;
+                      return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[eff] ?? statusColor[r.status]}`}>{eff}</span>;
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     {(() => {

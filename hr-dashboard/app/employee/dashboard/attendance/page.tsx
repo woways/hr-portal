@@ -11,7 +11,7 @@ import { backfillEmployee, deletePreStartAttendance } from "@/lib/attendanceBack
 import { markEmpNotifRead } from "@/lib/firebaseService";
 import { effectiveStatus } from "@/lib/attendanceStatus";
 
-type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
+type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Incomplete";
 
 interface AttEntry {
   date: string;
@@ -88,6 +88,7 @@ function StatusBadge({ status }: { status: AttStatus }) {
     "Half Day":{ cls: "bg-yellow-100 text-yellow-700", icon: <AlertCircle size={11} />,  label: "Half Day" },
     Leave:     { cls: "bg-blue-100 text-blue-700",     icon: <Clock size={11} />,        label: "Leave"    },
     "Week Off":{ cls: "bg-gray-100 text-gray-500",     icon: null,                       label: "Week Off" },
+    Incomplete:{ cls: "bg-orange-100 text-orange-700", icon: <AlertCircle size={11} />,  label: "Incomplete" },
   };
   const { cls, icon, label } = map[status];
   return (
@@ -194,14 +195,22 @@ export default function AttendancePage() {
           const isWeekend = dayIdx === 0 || dayIdx === 6;
           const hoursMatch = ((rec.workingHours as string) ?? "").match(/(\d+)h\s*(\d+)m/);
           const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
+          const clockInRaw  = (rec.clockIn  as string) || "";
+          const clockOutRaw = (rec.clockOut as string) || "";
+          // Missed clock-out: past day, employee clocked in but never clocked out.
+          // Show as "Incomplete" (neutral status) so it's not counted as Present
+          // or Absent. Actual clock-in and any other data stay untouched.
+          const isMissedClockOut = !!clockInRaw && !clockOutRaw && !isWeekend;
+          const rawStatus = (rec.status as string) || (isWeekend ? "Week Off" : "Absent");
+          const status = (isMissedClockOut ? "Incomplete" : rawStatus) as AttStatus;
           return {
             date:     `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, "0")}, ${d.getFullYear()}`,
             day:      DAY_ABBR[dayIdx],
-            clockIn:  (rec.clockIn as string) || "—",
-            clockOut: (rec.clockOut as string) || "—",
-            hours:    (rec.workingHours as string) || "—",
-            hoursVal,
-            status:   ((rec.status as string) || (isWeekend ? "Week Off" : "Absent")) as AttStatus,
+            clockIn:  clockInRaw  || "—",
+            clockOut: isMissedClockOut ? "Missed" : (clockOutRaw || "—"),
+            hours:    isMissedClockOut ? "—" : ((rec.workingHours as string) || "—"),
+            hoursVal: isMissedClockOut ? 0 : hoursVal,
+            status,
             late:     (rec.late as boolean) ?? false,
             isWeekend,
           } as AttEntry;
@@ -385,7 +394,17 @@ export default function AttendancePage() {
             });
           }
 
-          const finalPast = past.map(({ isoDate: _iso, ...e }) => e as AttEntry);
+          // Missed-clock-out pass (runs AFTER clockRecords backfill so we only
+          // flag genuinely-missed punches, not race conditions). Actual clockIn
+          // is preserved; clockOut column shows "Missed" and hours blank.
+          const finalPast = past.map(({ isoDate: _iso, ...e }) => {
+            const isMissed = !e.isWeekend
+              && e.clockIn && e.clockIn !== "—"
+              && (!e.clockOut || e.clockOut === "—")
+              && (!e.hours || e.hours === "—");
+            if (!isMissed) return e as AttEntry;
+            return { ...e, clockOut: "Missed", hours: "—", hoursVal: 0, status: "Incomplete" as AttStatus };
+          });
           PAST_LOG = finalPast;
           setPastLog(finalPast);
         } catch { /* ignore */ }
@@ -1124,7 +1143,7 @@ export default function AttendancePage() {
                           <p className="text-xs text-gray-400">{row.day}</p>
                         </td>
                         <td className={`px-6 py-4 text-sm ${row.late ? "text-orange-600 font-medium" : "text-gray-700"}`}>{row.clockIn}</td>
-                        <td className="px-6 py-4 text-sm text-gray-700">{row.clockOut}</td>
+                        <td className={`px-6 py-4 text-sm ${row.clockOut === "Missed" ? "text-red-600 font-medium" : "text-gray-700"}`}>{row.clockOut}</td>
                         <td className="px-6 py-4 text-sm text-gray-700 tabular-nums">{row.hours}</td>
                         <td className="px-6 py-4"><StatusBadge status={row.status} /></td>
                         <td className="px-6 py-4">
