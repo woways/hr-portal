@@ -1121,14 +1121,35 @@ export default function AttendancePage() {
             if (iso > todayIso) continue;
             const label = `${mStr} ${String(d).padStart(2, "0")}, ${historyYear}`;
             const existing = existingByLabel.get(label);
-            if (existing) { rows.push(existing); continue; }
             const dayIdx = dt.getDay();
             const isWeekend = dayIdx === 0 || dayIdx === 6;
-            // Fallback: if the attendance/ mirror never landed for this day but
-            // the raw clockRecords/ punch log has it (common on weekends where
-            // the mirror race can drop the write), reconstruct the row from the
-            // punch log so the day still shows in history with real times.
             const punch = crBackup[iso];
+            // Existing attendance/ row usually wins — BUT the nightly backfill
+            // seeds every workday with an empty "Absent" stub, and if the
+            // employee later clocked in/out but the mirror write did not land
+            // (network race, auth refresh), that stub sticks with clockIn="—".
+            // The raw clockRecords/ punch log is the source of truth for what
+            // was actually punched, so merge it in when the mirror is empty.
+            if (existing) {
+              const mirrorEmpty = !existing.clockIn || existing.clockIn === "—";
+              if (mirrorEmpty && punch && (punch.clockIn || punch.clockOut)) {
+                const h = Math.floor(punch.totalSeconds / 3600);
+                const m = Math.floor((punch.totalSeconds % 3600) / 60);
+                const hoursStr = punch.totalSeconds > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : "—";
+                rows.push({
+                  ...existing,
+                  clockIn:  punch.clockIn  || "—",
+                  clockOut: punch.clockOut || "—",
+                  hours:    hoursStr,
+                  hoursVal: punch.totalSeconds > 0 ? punch.totalSeconds / 3600 : 0,
+                  status:   (isWeekend ? "Week Off" : (punch.clockOut ? "Present" : "Incomplete")) as AttStatus,
+                });
+                continue;
+              }
+              rows.push(existing);
+              continue;
+            }
+            // No attendance/ mirror at all — reconstruct from clockRecords if any.
             if (punch && (punch.clockIn || punch.clockOut)) {
               const h = Math.floor(punch.totalSeconds / 3600);
               const m = Math.floor((punch.totalSeconds % 3600) / 60);
