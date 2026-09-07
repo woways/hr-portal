@@ -124,7 +124,7 @@ export function effectiveStatus(rec: AttStatusRecord): string {
 export function deriveAttendanceStatus(rec: AttStatusRecord, t?: AttThresholds): string {
   const status = rec.status ?? "";
   if (rec.statusManual) return status || "Absent";          // HR override wins
-  if (status === "Leave" || status === "Week Off" || status === "Incomplete") return status; // system-managed / neutral
+  if (status === "Leave" || status === "Week Off" || status === "Incomplete" || status === "Half Day") return status; // system-managed / neutral
   const clockIn = rec.clockIn ?? "";
   const hasClockIn = !!clockIn && clockIn !== "—" && clockIn !== "" && clockIn !== "--:--";
   if (!hasClockIn) return "Absent";

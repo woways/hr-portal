@@ -707,40 +707,49 @@ export default function AttendancePage() {
               <span>Want to correct your attendance for any day in the <strong>past 7 working days</strong>? Select the date, enter your actual arrival time, and describe the reason.</span>
             </div>
 
-            {/* Date selector — shows past 7 days */}
+            {/* Date — read-only when opened from a row (any past day allowed) */}
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Select Date</label>
-              <select
-                value={reqForm.selectedDate}
-                onChange={(e) => {
-                  const iso = e.target.value;
-                  // fullLog uses "Jun 10, 2026" format — match via logDateToISO
-                  const selected = fullLog.find((d) => logDateToISO(d.date) === iso) ?? null;
-                  setReqTarget(selected);
-                  setReqForm({ ...reqForm, selectedDate: iso });
-                }}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
-              >
-                <option value="">— Select a date —</option>
-                {(() => {
-                  const days: { date: string; label: string; status: string }[] = [];
-                  for (let i = 0; i <= 7; i++) {
-                    const d = new Date();
-                    d.setDate(d.getDate() - i);
-                    const dayName = d.toLocaleDateString("en-IN", { weekday: "short" });
-                    if (dayName === "Sun" || dayName === "Sat") continue;
-                    const iso = d.toISOString().slice(0, 10);
-                    const label = `${d.toLocaleDateString("en-IN", { weekday: "short" })}, ${d.toLocaleDateString("en-IN", { day: "2-digit" })} ${d.toLocaleDateString("en-IN", { month: "short" })} ${d.getFullYear()}`;
-                    const logEntry = fullLog.find((e) => e.date === iso);
-                    const status = logEntry?.status ?? "Absent";
-                    if (getRequestForDate(iso)) continue;
-                    days.push({ date: iso, label: label, status });
-                  }
-                  return days.map((d) => (
-                    <option key={d.date} value={d.date}>{d.label}</option>
-                  ));
-                })()}
-              </select>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Date</label>
+              {reqTarget ? (
+                <div
+                  className="w-full px-3 py-2 rounded-xl bg-gray-50 border border-gray-100 text-sm text-gray-900"
+                  aria-label={`Regularization request for ${reqTarget.date}`}
+                >
+                  {reqTarget.date} · {reqTarget.day}
+                </div>
+              ) : (
+                <select
+                  value={reqForm.selectedDate}
+                  onChange={(e) => {
+                    const iso = e.target.value;
+                    const selected = fullLog.find((d) => logDateToISO(d.date) === iso) ?? null;
+                    setReqTarget(selected);
+                    setReqForm({ ...reqForm, selectedDate: iso });
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
+                  aria-label="Select date for regularization request"
+                >
+                  <option value="">— Select a date —</option>
+                  {(() => {
+                    const days: { date: string; label: string; status: string }[] = [];
+                    for (let i = 0; i <= 7; i++) {
+                      const d = new Date();
+                      d.setDate(d.getDate() - i);
+                      const dayName = d.toLocaleDateString("en-IN", { weekday: "short" });
+                      if (dayName === "Sun" || dayName === "Sat") continue;
+                      const iso = d.toISOString().slice(0, 10);
+                      const label = `${d.toLocaleDateString("en-IN", { weekday: "short" })}, ${d.toLocaleDateString("en-IN", { day: "2-digit" })} ${d.toLocaleDateString("en-IN", { month: "short" })} ${d.getFullYear()}`;
+                      const logEntry = fullLog.find((e) => e.date === iso);
+                      const status = logEntry?.status ?? "Absent";
+                      if (getRequestForDate(iso)) continue;
+                      days.push({ date: iso, label: label, status });
+                    }
+                    return days.map((d) => (
+                      <option key={d.date} value={d.date}>{d.label}</option>
+                    ));
+                  })()}
+                </select>
+              )}
             </div>
 
             <div>
@@ -1185,7 +1194,20 @@ export default function AttendancePage() {
                         <td className={`px-6 py-4 text-sm ${row.late ? "text-orange-600 font-medium" : "text-gray-700"}`}>{row.clockIn}</td>
                         <td className={`px-6 py-4 text-sm ${row.clockOut === "Missed" ? "text-red-600 font-medium" : "text-gray-700"}`}>{row.clockOut}</td>
                         <td className="px-6 py-4 text-sm text-gray-700 tabular-nums">{row.hours}</td>
-                        <td className="px-6 py-4"><StatusBadge status={row.status} /></td>
+                        <td className="px-6 py-4">
+                          {(() => {
+                            // Derive from actual clockIn/clockOut so a stale stored
+                            // "Absent" status on a day the employee clearly worked
+                            // (both clock times present) is corrected in the display.
+                            const derived = effectiveStatus({
+                              clockIn: row.clockIn === "—" ? "" : row.clockIn,
+                              clockOut: row.clockOut === "—" || row.clockOut === "Missed" ? "" : row.clockOut,
+                              workingHours: row.hours === "—" ? "" : row.hours,
+                              status: row.status,
+                            }) as AttStatus;
+                            return <StatusBadge status={derived} />;
+                          })()}
+                        </td>
                         <td className="px-6 py-4">
                           {row.late ? <span className="inline-flex px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-medium">Yes</span>
                                     : <span className="inline-flex px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">No</span>}
