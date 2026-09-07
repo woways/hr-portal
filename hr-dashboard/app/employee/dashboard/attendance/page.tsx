@@ -180,6 +180,30 @@ export default function AttendancePage() {
   // Auto-mark unread attendance notifications as read when employee opens this page
   useEffect(() => { if (empId) markEmpNotifRead("attendance", empId); }, [empId]);
 
+  // Backup listener on clockRecords — a Sunday clock-in that never mirrored to
+  // attendance/ (e.g. write raced with an auth refresh) still surfaces from here
+  // so the day is not silently missing from history.
+  const [crBackup, setCrBackup] = useState<Record<string, { clockIn: string; clockOut: string; totalSeconds: number }>>({});
+  useEffect(() => {
+    if (!empId) return;
+    const q2 = query(collection(db, "clockRecords"), where("empId", "==", empId));
+    const unsub = onSnapshot(q2, (snap) => {
+      const map: Record<string, { clockIn: string; clockOut: string; totalSeconds: number }> = {};
+      snap.docs.forEach((d) => {
+        const r = d.data() as Record<string, unknown>;
+        const date = String(r.date ?? "");
+        if (!date) return;
+        map[date] = {
+          clockIn:      String(r.clockInStr  ?? ""),
+          clockOut:     String(r.clockOutStr ?? ""),
+          totalSeconds: Number(r.totalSeconds ?? 0),
+        };
+      });
+      setCrBackup(map);
+    }, () => {});
+    return () => unsub();
+  }, [empId]);
+
   // Live listener for attendance history — HR changes reflect instantly without page refresh
   useEffect(() => {
     if (!empId) return;
@@ -485,7 +509,10 @@ export default function AttendancePage() {
       setLateReqError("");
       setReqToast("Late Login Request submitted to HR.");
       setTimeout(() => setReqToast(null), 4000);
-    } catch {
+    } catch (err) {
+      // Surface the real Firestore/network error to devtools so future failures
+      // can be diagnosed instead of blind-caught. The banner stays user-friendly.
+      console.error("Late Login submit failed", err);
       setLateReqError("Failed to submit. Please check your connection and try again.");
       lateReasonRef.current?.focus();
     }
@@ -821,7 +848,8 @@ export default function AttendancePage() {
               <div>
                 <div className="text-xs font-medium text-gray-600 mb-1">Date</div>
                 <div className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-100 text-sm text-gray-900">
-                  {lateReqForm.selectedDate || "—"}
+                  {lateReqTarget?.date || lateReqForm.selectedDate || "—"}
+                  {lateReqTarget?.day ? <span className="text-gray-400"> · {lateReqTarget.day}</span> : null}
                 </div>
               </div>
               <div>
@@ -1096,6 +1124,28 @@ export default function AttendancePage() {
             if (existing) { rows.push(existing); continue; }
             const dayIdx = dt.getDay();
             const isWeekend = dayIdx === 0 || dayIdx === 6;
+            // Fallback: if the attendance/ mirror never landed for this day but
+            // the raw clockRecords/ punch log has it (common on weekends where
+            // the mirror race can drop the write), reconstruct the row from the
+            // punch log so the day still shows in history with real times.
+            const punch = crBackup[iso];
+            if (punch && (punch.clockIn || punch.clockOut)) {
+              const h = Math.floor(punch.totalSeconds / 3600);
+              const m = Math.floor((punch.totalSeconds % 3600) / 60);
+              const hoursStr = punch.totalSeconds > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : "—";
+              rows.push({
+                date: label,
+                day: DAY_ABBR[dayIdx],
+                clockIn:  punch.clockIn  || "—",
+                clockOut: punch.clockOut || (punch.clockIn ? "—" : "—"),
+                hours:    hoursStr,
+                hoursVal: punch.totalSeconds > 0 ? punch.totalSeconds / 3600 : 0,
+                status:   (isWeekend ? "Week Off" : (punch.clockOut ? "Present" : "Incomplete")) as AttStatus,
+                late:     false,
+                isWeekend,
+              });
+              continue;
+            }
             rows.push({
               date: label,
               day: DAY_ABBR[dayIdx],
