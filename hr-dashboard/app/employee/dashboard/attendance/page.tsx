@@ -731,51 +731,33 @@ export default function AttendancePage() {
           <div className="p-6 space-y-4">
             <div className="bg-orange-50 rounded-xl px-4 py-3 text-sm text-orange-700 flex items-start gap-2">
               <AlertCircle size={15} className="mt-0.5 shrink-0" />
-              <span>Want to correct your attendance for any day in the <strong>past 7 working days</strong>? Select the date, enter your actual arrival time, and describe the reason.</span>
+              <span>Want to correct your attendance for any past working day? The date is pre-filled from the row you clicked — you can change it below if needed.</span>
             </div>
 
-            {/* Date — read-only when opened from a row (any past day allowed) */}
+            {/* Date — editable date input. Pre-filled from the row that opened
+                the modal (if any); the user can still change it to any past
+                day up to today. min = employee's joining date, max = today. */}
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Date</label>
-              {reqTarget ? (
-                <div
-                  className="w-full px-3 py-2 rounded-xl bg-gray-50 border border-gray-100 text-sm text-gray-900"
-                  aria-label={`Regularization request for ${reqTarget.date}`}
-                >
-                  {reqTarget.date} · {reqTarget.day}
-                </div>
-              ) : (
-                <select
-                  value={reqForm.selectedDate}
-                  onChange={(e) => {
-                    const iso = e.target.value;
-                    const selected = fullLog.find((d) => logDateToISO(d.date) === iso) ?? null;
-                    setReqTarget(selected);
-                    setReqForm({ ...reqForm, selectedDate: iso });
-                  }}
-                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
-                  aria-label="Select date for regularization request"
-                >
-                  <option value="">— Select a date —</option>
-                  {(() => {
-                    const days: { date: string; label: string; status: string }[] = [];
-                    for (let i = 0; i <= 7; i++) {
-                      const d = new Date();
-                      d.setDate(d.getDate() - i);
-                      const dayName = d.toLocaleDateString("en-IN", { weekday: "short" });
-                      if (dayName === "Sun" || dayName === "Sat") continue;
-                      const iso = d.toISOString().slice(0, 10);
-                      const label = `${d.toLocaleDateString("en-IN", { weekday: "short" })}, ${d.toLocaleDateString("en-IN", { day: "2-digit" })} ${d.toLocaleDateString("en-IN", { month: "short" })} ${d.getFullYear()}`;
-                      const logEntry = fullLog.find((e) => e.date === iso);
-                      const status = logEntry?.status ?? "Absent";
-                      if (getRequestForDate(iso)) continue;
-                      days.push({ date: iso, label: label, status });
-                    }
-                    return days.map((d) => (
-                      <option key={d.date} value={d.date}>{d.label}</option>
-                    ));
-                  })()}
-                </select>
+              <label htmlFor="reg-req-date" className="text-xs font-medium text-gray-600 block mb-1">Date</label>
+              <input
+                id="reg-req-date"
+                type="date"
+                value={reqForm.selectedDate}
+                min={doj || undefined}
+                max={todayISO()}
+                onChange={(e) => {
+                  const iso = e.target.value;
+                  // If the picked date matches an existing log row, sync reqTarget
+                  // so the day label and clock-in context still surface correctly.
+                  const selected = fullLog.find((d) => logDateToISO(d.date) === iso) ?? null;
+                  setReqTarget(selected);
+                  setReqForm({ ...reqForm, selectedDate: iso });
+                }}
+                aria-describedby="reg-req-date-help"
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
+              />
+              {reqTarget?.day && (
+                <p id="reg-req-date-help" className="mt-1 text-xs text-gray-400">{reqTarget.day} · {reqTarget.date}</p>
               )}
             </div>
 
