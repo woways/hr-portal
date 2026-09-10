@@ -128,6 +128,17 @@ export default function AttendancePage() {
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [clockInTime, setClockInTime] = useState<string | null>(null);
   const [clockOutTime, setClockOutTime] = useState<string | null>(null);
+  // Accumulated seconds from CLOSED sessions on the current day. The live tick
+  // adds the currently-open session's elapsed time on top of this so a user who
+  // clocks out and back in on the same day sees the running total, not just
+  // this session — and history keeps the FIRST clock-in / LAST clock-out.
+  const [priorSessionsSeconds, setPriorSessionsSeconds] = useState(0);
+  // Blocking message shown under the button when a stale open session is
+  // detected on another device/tab. role="alert" (Finding 2: no aria-live).
+  const [openSessionWarning, setOpenSessionWarning] = useState<string | null>(null);
+  // Screen-reader-only summary announced ONLY at session-close boundaries
+  // (Finding 1: keep the ticking counter itself out of a live region).
+  const [srClockAnnouncement, setSrClockAnnouncement] = useState("");
   const [clockInTimestamp, setClockInTimestamp] = useState<number | null>(null);
   const [workingSeconds, setWorkingSeconds] = useState(0);
   const [finalSeconds, setFinalSeconds] = useState<number | null>(null);
@@ -264,14 +275,35 @@ export default function AttendancePage() {
         if (!snap.exists()) return;
         const rec = snap.data() as Record<string, unknown>;
         if (rec.date !== todayISO()) return;
+        // First clock-in of the day is what's displayed (multi-session preserves it).
         setClockInTime(rec.clockInStr as string);
-        setClockInTimestamp(rec.clockInTs as number);
         setIsLate((rec.isLate as boolean) ?? false);
-        if (rec.status === "clocked-in") {
+
+        // Reconstruct today's session state from the sessions[] array so we
+        // know both (a) accumulated seconds from closed sessions and (b) the
+        // start timestamp of the currently-open session (if any) for the live
+        // tick. Falls back to legacy clockInTs/clockOutTs for pre-refactor docs.
+        interface Session { clockInTs: number; clockOutTs: number | null; seconds: number }
+        const sessions = Array.isArray(rec.sessions) ? (rec.sessions as Session[]) : [];
+        const openSession = sessions.length > 0 && sessions[sessions.length - 1].clockOutTs == null
+          ? sessions[sessions.length - 1]
+          : null;
+        const priorSecs = sessions
+          .filter((s) => s.clockOutTs != null)
+          .reduce((sum, s) => sum + (s.seconds || 0), 0);
+        setPriorSessionsSeconds(priorSecs);
+
+        if (openSession) {
+          setClockInTimestamp(openSession.clockInTs);
           setIsClockedIn(true);
-        } else if (rec.status === "clocked-out") {
+          setClockOutTime(null);
+        } else if (rec.status === "clocked-in" && !sessions.length) {
+          // Legacy pre-refactor doc: still clocked in, no sessions array yet.
+          setClockInTimestamp(rec.clockInTs as number);
+          setIsClockedIn(true);
+        } else {
           setClockOutTime((rec.clockOutStr as string) ?? null);
-          setFinalSeconds((rec.totalSeconds as number) ?? null);
+          setFinalSeconds((rec.totalSeconds as number) ?? priorSecs ?? null);
           setIsClockedIn(false);
         }
       })
@@ -572,13 +604,14 @@ export default function AttendancePage() {
       setCurrentTime(now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }));
       setCurrentDate(now.toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" }));
       if (clockInTimestamp && isClockedIn) {
-        setWorkingSeconds(Math.floor((Date.now() - clockInTimestamp) / 1000));
+        // Live total = prior CLOSED sessions on this day + current open session.
+        setWorkingSeconds(priorSessionsSeconds + Math.floor((Date.now() - clockInTimestamp) / 1000));
       }
     };
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [clockInTimestamp, isClockedIn]);
+  }, [clockInTimestamp, isClockedIn, priorSessionsSeconds]);
 
   async function handleClockToggle() {
     const now = new Date();
@@ -598,35 +631,105 @@ export default function AttendancePage() {
       if (nowMins >= cutMins) return;
     }
 
+    // Read the current day's punch log so we can APPEND a new session instead
+    // of overwriting the morning clock-in (data-loss bug: pre-multi-session,
+    // a second clock-in in the evening wiped the first clock-in of the day).
+    interface Session { clockInTs: number; clockOutTs: number | null; seconds: number }
+    let existingSessions: Session[] = [];
+    let firstClockInTs = ts;
+    let firstClockInStr = timeStr;
+    let firstDayLate = false;
+    try {
+      const snap = await getDoc(doc(db, "clockRecords", clockId));
+      if (snap.exists()) {
+        const data = snap.data() as Record<string, unknown>;
+        existingSessions = Array.isArray(data.sessions) ? (data.sessions as Session[]) : [];
+        if (typeof data.clockInTs === "number") firstClockInTs = data.clockInTs;
+        if (typeof data.clockInStr === "string" && data.clockInStr) firstClockInStr = data.clockInStr;
+        if (typeof data.isLate === "boolean") firstDayLate = data.isLate;
+        // Backward-compat: an old doc has no sessions[] but does have
+        // clockInTs/clockOutTs from the pre-refactor schema — hydrate one
+        // completed session so its time counts toward today's total.
+        if (existingSessions.length === 0 && typeof data.clockInTs === "number") {
+          const cot = typeof data.clockOutTs === "number" ? data.clockOutTs : null;
+          const secs = cot ? Math.max(0, Math.floor((cot - data.clockInTs) / 1000)) : 0;
+          existingSessions = [{ clockInTs: data.clockInTs, clockOutTs: cot, seconds: secs }];
+        }
+      }
+    } catch (err) {
+      console.error("Failed to read clockRecords for multi-session merge", err);
+    }
+
     if (!isClockedIn) {
+      // Refuse to open a NEW session if the last one on record is still open
+      // (another tab/device already clocked in). Prevents duplicate sessions
+      // and the confusing display that would follow.
+      const lastOpen = existingSessions[existingSessions.length - 1];
+      if (lastOpen && lastOpen.clockOutTs == null) {
+        setOpenSessionWarning("You already have an open session (from another tab or device). Please Clock Out first, then Clock In again.");
+        return;
+      }
       const late = now.getHours() > lateHour || (now.getHours() === lateHour && now.getMinutes() > lateMinute);
-      setClockInTime(timeStr);
+      // First clock-in of the day sets firstClockInTs / firstDayLate;
+      // subsequent clock-ins keep the original (so history remains stable).
+      if (existingSessions.length === 0) {
+        firstClockInTs = ts;
+        firstClockInStr = timeStr;
+        firstDayLate = late;
+      }
+      const nextSessions: Session[] = [...existingSessions, { clockInTs: ts, clockOutTs: null, seconds: 0 }];
+      const prior = existingSessions.reduce((sum, s) => sum + (s.seconds || 0), 0);
+
+      setOpenSessionWarning(null);
+      setClockInTime(firstClockInStr);
       setClockInTimestamp(ts);
       setClockOutTime(null);
       setFinalSeconds(null);
-      setWorkingSeconds(0);
-      setIsLate(late);
+      setPriorSessionsSeconds(prior);
+      setWorkingSeconds(prior);
+      setIsLate(firstDayLate);
       setIsClockedIn(true);
 
-      // Write clock record directly to Firestore (authenticated client — no API route needed)
       Promise.all([
         setDoc(doc(db, "clockRecords", clockId), {
           empId, empName, department: empDept,
-          date, clockInTs: ts, clockInStr: timeStr,
-          clockOutTs: null, clockOutStr: null, totalSeconds: null,
-          isLate: late, status: "clocked-in", updatedAt: now2,
+          date,
+          sessions:    nextSessions,
+          clockInTs:   firstClockInTs,
+          clockInStr:  firstClockInStr,
+          clockOutTs:  null,
+          clockOutStr: null,
+          totalSeconds: prior,
+          isLate:      firstDayLate,
+          status:      "clocked-in",
+          updatedAt:   now2,
         }, { merge: true }),
-        // Mirror into attendance collection so HR dashboard sees this immediately
         setDoc(doc(db, "attendance", clockId), {
           empId, name: empName, dept: empDept,
-          date, clockIn: timeStr, clockOut: "",
-          workingHours: "", overtimeHours: "-",
-          status: "Present", late, updatedAt: now2,
+          date,
+          clockIn:       firstClockInStr,
+          clockOut:      "",
+          workingHours:  "",
+          overtimeHours: "-",
+          status:        "Present",
+          late:          firstDayLate,
+          updatedAt:     now2,
         }, { merge: true }),
-      ]).catch(() => {});
+      ]).catch((err) => { console.error("clock-in write failed", err); });
 
     } else {
-      const total = workingSeconds;
+      // Close the currently-open session (last entry in the array).
+      const lastIdx = existingSessions.length - 1;
+      const openSession = existingSessions[lastIdx];
+      if (!openSession || openSession.clockOutTs != null) {
+        // Nothing to close on the server (someone else already closed it).
+        setIsClockedIn(false);
+        setClockInTimestamp(null);
+        return;
+      }
+      const sessionSecs = Math.max(0, Math.floor((ts - openSession.clockInTs) / 1000));
+      const updatedSessions: Session[] = existingSessions.map((s, i) => i === lastIdx ? { ...s, clockOutTs: ts, seconds: sessionSecs } : s);
+      const total = updatedSessions.reduce((sum, s) => sum + (s.seconds || 0), 0);
       const h = Math.floor(total / 3600);
       const m = Math.floor((total % 3600) / 60);
       const workingHoursStr = `${h}h ${String(m).padStart(2, "0")}m`;
@@ -635,18 +738,27 @@ export default function AttendancePage() {
       setFinalSeconds(total);
       setClockInTimestamp(null);
       setIsClockedIn(false);
+      setPriorSessionsSeconds(total);
+      setWorkingSeconds(total);
+      // Screen-reader announcement on session close ONLY (Finding 1).
+      setSrClockAnnouncement(`Clocked out at ${timeStr}. Today's total worked: ${h} hours ${m} minutes.`);
 
-      // Update clock record and attendance record directly in Firestore
       Promise.all([
         setDoc(doc(db, "clockRecords", clockId), {
-          clockOutTs: ts, clockOutStr: timeStr,
-          totalSeconds: total, status: "clocked-out", updatedAt: now2,
+          sessions:     updatedSessions,
+          clockOutTs:   ts,
+          clockOutStr:  timeStr,
+          totalSeconds: total,
+          status:       "clocked-out",
+          updatedAt:    now2,
         }, { merge: true }),
         setDoc(doc(db, "attendance", clockId), {
-          clockOut: timeStr, workingHours: workingHoursStr,
-          status: statusFromHours(total, [0, 6].includes(new Date(date + "T00:00:00").getDay())), updatedAt: now2,
+          clockOut:     timeStr,
+          workingHours: workingHoursStr,
+          status:       statusFromHours(total, [0, 6].includes(new Date(date + "T00:00:00").getDay())),
+          updatedAt:    now2,
         }, { merge: true }),
-      ]).catch(() => {});
+      ]).catch((err) => { console.error("clock-out write failed", err); });
     }
   }
 
@@ -969,6 +1081,17 @@ export default function AttendancePage() {
             }`}>
               <CheckCircle size={12} aria-hidden="true" />
               {isClockedIn ? "Present" : clockOutTime ? "Clocked Out" : "Not Started"}
+            </span>
+            {openSessionWarning && (
+              <p role="alert" className="mt-2 max-w-xs text-xs text-orange-700 bg-orange-100 rounded-xl px-3 py-2">
+                {openSessionWarning}
+              </p>
+            )}
+            {/* Live region announces total worked ONLY at session-close boundaries;
+                the ticking counter itself is NOT wrapped in a live region (a11y
+                Finding 1: avoid per-second announcement spam). */}
+            <span className="sr-only" aria-live="polite" aria-atomic="true">
+              {srClockAnnouncement}
             </span>
           </div>
 
