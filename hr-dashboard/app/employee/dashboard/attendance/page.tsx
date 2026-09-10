@@ -11,7 +11,7 @@ import { backfillEmployee, deletePreStartAttendance } from "@/lib/attendanceBack
 import { markEmpNotifRead } from "@/lib/firebaseService";
 import { effectiveStatus } from "@/lib/attendanceStatus";
 
-type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Incomplete";
+type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Incomplete" | "Late" | "Late (Pending Review)";
 
 interface AttEntry {
   date: string;
@@ -88,9 +88,14 @@ function StatusBadge({ status }: { status: AttStatus }) {
     "Half Day":{ cls: "bg-yellow-100 text-yellow-700", icon: <AlertCircle size={11} />,  label: "Half Day" },
     Leave:     { cls: "bg-blue-100 text-blue-700",     icon: <Clock size={11} />,        label: "Leave"    },
     "Week Off":{ cls: "bg-gray-100 text-gray-500",     icon: null,                       label: "Week Off" },
-    Incomplete:{ cls: "bg-orange-100 text-orange-700", icon: <AlertCircle size={11} />,  label: "Incomplete" },
+    Incomplete:{ cls: "bg-orange-100 text-orange-700", icon: <AlertCircle size={11} aria-hidden="true" />,  label: "Incomplete" },
+    Late:      { cls: "bg-orange-100 text-orange-700", icon: <AlertCircle size={11} aria-hidden="true" />,  label: "Late" },
+    "Late (Pending Review)": { cls: "bg-yellow-100 text-yellow-700", icon: <Clock size={11} aria-hidden="true" />, label: "Late (Pending Review)" },
   };
-  const { cls, icon, label } = map[status];
+  // Defensive fallback so any future status label we don't yet know about
+  // renders a neutral badge instead of crashing the whole page (WCAG 4.1.1).
+  const entry = map[status] ?? { cls: "bg-gray-100 text-gray-500", icon: null, label: String(status) };
+  const { cls, icon, label } = entry;
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${cls}`}>
       {icon}{label}
