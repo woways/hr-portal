@@ -808,12 +808,38 @@ export default function AttendancePage() {
     const mStr = SHORT_MONTHS[d.getMonth()];
     return e.date.startsWith(mStr) && e.date.endsWith(String(d.getFullYear()));
   });
+  // Count mismatch fix: the History table renders from an enriched dataset
+  // that merges clockRecords/ punches into any attendance/ mirror row that's
+  // still empty (nightly-backfill stubs, race-lost mirror writes, etc.). The
+  // dashboard tiles were reading the raw mirror only, so the tables and the
+  // tiles disagreed. Same enrichment now feeds the counters so both surfaces
+  // reconcile — presentCount/absentCount reflect what the user actually sees.
+  const currentMonthEnriched = currentMonthEntries.map((e) => {
+    const iso = logDateToISO(e.date);
+    const punch = crBackup[iso];
+    const mirrorEmpty = !e.clockIn || e.clockIn === "—";
+    if (!mirrorEmpty || !punch || (!punch.clockIn && !punch.clockOut)) return e;
+    const h = Math.floor(punch.totalSeconds / 3600);
+    const m = Math.floor((punch.totalSeconds % 3600) / 60);
+    const hoursStr = punch.totalSeconds > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : "—";
+    // Preserve isWeekend; derive Present/Incomplete from whether the punch
+    // completed a session. Weekend-worked days keep "Week Off" so they aren't
+    // double-counted into Present Days (rule kept from the render path).
+    return {
+      ...e,
+      clockIn:  punch.clockIn  || "—",
+      clockOut: punch.clockOut || "—",
+      hours:    hoursStr,
+      hoursVal: punch.totalSeconds > 0 ? punch.totalSeconds / 3600 : 0,
+      status:   (e.isWeekend ? "Week Off" : (punch.clockOut ? "Present" : "Incomplete")) as AttStatus,
+    } as AttEntry;
+  });
   // BUG-06: derive status so employee tile matches HR dashboard/reports.
-  const cmDerived = currentMonthEntries.map(e => ({ e, eff: effectiveStatus(e) }));
+  const cmDerived = currentMonthEnriched.map(e => ({ e, eff: effectiveStatus(e) }));
   const presentCount  = cmDerived.filter(x => x.eff === "Present").length;
   const absentCount   = cmDerived.filter(x => !x.e.isWeekend && x.eff === "Absent").length;
   const halfDayCount  = cmDerived.filter(x => x.eff === "Half Day").length;
-  const lateCount     = currentMonthEntries.filter(e => e.late).length;
+  const lateCount     = currentMonthEnriched.filter(e => e.late).length;
   // Compute total working days for the current month dynamically
   const totalWorkDays = (() => {
     const now = new Date();
