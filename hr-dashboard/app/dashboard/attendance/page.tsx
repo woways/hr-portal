@@ -320,7 +320,10 @@ export default function AttendancePage() {
   // HR override to Absent) is never Late or On-Time; the column shows "—".
   function lateByThreshold(r: AttendanceRecord): boolean {
     const eff = effectiveStatus(r);
-    if (eff !== "Present" && eff !== "Half Day") return false; // not attended → not late
+    // Include the new "Late" variants — after the late-login workflow landed,
+    // effectiveStatus() returns "Late" / "Late (Pending Review)" for post-cutoff
+    // punches, and the HR Late tile was silently excluding those rows.
+    if (eff !== "Present" && eff !== "Half Day" && eff !== "Late" && eff !== "Late (Pending Review)") return false;
     const ci = r.clockIn;
     if (!ci || ci === "—" || ci === "" || ci === "Ongoing") return false; // no clock-in → not late
     if (r.date) { const dow = new Date(r.date + "T00:00:00").getDay(); if (dow === 0 || dow === 6) return false; }
