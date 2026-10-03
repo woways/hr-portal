@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection, query, where, getDocs, getDoc, doc,
@@ -48,7 +49,20 @@ type Tab = typeof TABS[number];
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+// Map a notification's type to the employee self-service page that handles it.
+function empNotifHref(type: NotifType): string {
+  switch (type) {
+    case "leave":      return "/employee/dashboard/leave";
+    case "attendance": return "/employee/dashboard/attendance";
+    case "goal":       return "/employee/dashboard/goals";
+    case "payroll":    return "/employee/dashboard/payslip";
+    case "system":
+    default:           return "/employee/dashboard";
+  }
+}
+
 export default function EmployeeNotificationsPage() {
+  const router = useRouter();
   const [notifs,    setNotifs]    = useState<AppNotification[]>([]);
   const [empId,     setEmpId]     = useState("");
   const [resolving, setResolving] = useState(true);
@@ -288,34 +302,50 @@ export default function EmployeeNotificationsPage() {
             const Icon = cfg.icon;
             return (
               <div key={n.id}
-                className={`relative bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 transition-all
+                className={`relative bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 transition-all overflow-hidden
                   ${n.read ? "border border-gray-100" : "border border-gray-100 border-l-4 border-l-[#4F3CC9] bg-[#FDFCFF]"}`}>
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${cfg.bg}`}>
-                  <Icon size={18} className={cfg.text} />
+                {/* Sibling-overlay click target — invisible button filling the
+                    card. Keeps action buttons as DOM siblings (not nested) so
+                    HTML stays valid and keyboard/SR behaviour is predictable. */}
+                <button
+                  type="button"
+                  onClick={() => { router.push(empNotifHref(n.type)); if (!n.read) markRead(n.id); }}
+                  aria-label={`Open ${n.title}`}
+                  className="absolute inset-0 w-full h-full z-0 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-inset rounded-2xl"
+                />
+                <div className={`relative z-10 pointer-events-none w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${cfg.bg}`}>
+                  <Icon size={18} className={cfg.text} aria-hidden="true" />
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="relative z-10 pointer-events-none flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-3">
                     <p className={`text-sm font-semibold flex items-center gap-1.5 ${n.read ? "text-gray-700" : "text-gray-900"}`}>
                       {n.title}
-                      {!n.read && <span className="w-2 h-2 rounded-full bg-[#4F3CC9] inline-block shrink-0" />}
+                      {!n.read && <span className="w-2 h-2 rounded-full bg-[#4F3CC9] inline-block shrink-0" aria-hidden="true" />}
                     </p>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="pointer-events-auto flex items-center gap-2 shrink-0">
                       {n.read ? (
                         <span className="flex items-center gap-1 text-xs text-green-500 font-medium whitespace-nowrap">
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                             <polyline points="20 6 9 17 4 12"/>
                           </svg>
                           Read
                         </span>
                       ) : (
-                        <button onClick={() => markRead(n.id)}
-                          className="text-xs font-medium text-[#4F3CC9] border border-[#4F3CC9] rounded-full px-3 py-1 hover:bg-[#EDE9FF] transition-colors whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); markRead(n.id); }}
+                          className="text-xs font-medium text-[#4F3CC9] border border-[#4F3CC9] rounded-full px-3 py-1 hover:bg-[#EDE9FF] transition-colors whitespace-nowrap"
+                        >
                           Mark as Read
                         </button>
                       )}
-                      <button onClick={() => dismiss(n.id)} title="Dismiss"
-                        className="w-6 h-6 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
-                        <X size={13} />
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); dismiss(n.id); }}
+                        aria-label="Dismiss notification"
+                        className="w-6 h-6 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      >
+                        <X size={13} aria-hidden="true" />
                       </button>
                     </div>
                   </div>

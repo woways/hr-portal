@@ -741,7 +741,12 @@ export default function AttendancePage() {
 
   const filtered = normalizedRecords.filter((r) => {
     const matchSearch = r.name.toLowerCase().includes(search.toLowerCase()) || r.empId.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === "All" || r.status === statusFilter;
+    const matchStatus =
+      statusFilter === "All" ||
+      // "Late" filter uses the derived cutoff rule so clicking the Late KPI
+      // tile surfaces every post-cutoff punch, not just rows whose stored
+      // status column happens to equal "Late".
+      (statusFilter === "Late" ? lateByThreshold(r) : r.status === statusFilter);
     const matchManager = managerFilter === "All" || r.manager === managerFilter;
     const matchLocation = locationFilter === "All" || r.location === locationFilter;
     return matchSearch && matchStatus && matchManager && matchLocation;
@@ -884,6 +889,16 @@ export default function AttendancePage() {
   const TABS = ["Overview", "Attendance Requests", "Daily Attendance", "Monthly Report"] as const;
   type Tab = typeof TABS[number];
   const [activeTab, setActiveTab] = useState<Tab>("Overview");
+  // Deep-link support: when the Notifications page sends HR here with
+  // `?tab=requests`, land on Attendance Requests directly so the HR admin
+  // sees the pending leave/attendance request they clicked.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const p = new URLSearchParams(window.location.search).get("tab");
+    if (p === "requests") setActiveTab("Attendance Requests");
+    else if (p === "daily") setActiveTab("Daily Attendance");
+    else if (p === "monthly") setActiveTab("Monthly Report");
+  }, []);
 
   function selectEmployee(empId: string, _name: string) {
     // Filter to the SPECIFIC employee by their unique ID (not the name) — otherwise
@@ -952,7 +967,7 @@ export default function AttendancePage() {
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-400">Status</label>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputCls}>
-              {["All","Present","Absent","Half Day","Leave","Week Off"].map(s => <option key={s}>{s}</option>)}
+              {["All","Present","Absent","Late","Half Day","Leave","Week Off"].map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
           <div className="flex flex-col gap-1" ref={searchContainerRef}>
@@ -1022,23 +1037,47 @@ export default function AttendancePage() {
       {/* Live data label */}
       {!loadingRecords && <p className="text-xs text-gray-400 -mt-2">Showing today&apos;s attendance for {records.length} active employees · auto-refreshes every 10s</p>}
 
-      {/* ── KPI Cards ── */}
+      {/* ── KPI Cards ── Clickable: filters Daily Attendance to the matching rows */}
       <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
         {[
-          { label: "Present",   val: presentCount,  icon: <Users size={16}/>,         bg: "bg-green-50",   text: "text-green-700"  },
-          { label: "Absent",    val: absentCount,   icon: <AlertTriangle size={16}/>,  bg: "bg-red-50",     text: "text-red-700"    },
-          { label: "Late",      val: lateCount,     icon: <Clock size={16}/>,          bg: "bg-orange-50",  text: "text-orange-700" },
-          { label: "Half Day",  val: halfDayCount,  icon: <TrendingUp size={16}/>,     bg: "bg-yellow-50",  text: "text-yellow-700" },
-          { label: "WFH",       val: wfhCount,      icon: <Wifi size={16}/>,           bg: "bg-blue-50",    text: "text-blue-700"   },
-          { label: "Overtime",  val: overtimeCount, icon: <Clock size={16}/>,          bg: "bg-purple-50",  text: "text-purple-700" },
+          { label: "Present",   val: presentCount,  statusKey: "Present",  icon: <Users size={16} aria-hidden="true" />,        bg: "bg-green-50",   text: "text-green-700",  ring: "focus-visible:ring-green-500"  },
+          { label: "Absent",    val: absentCount,   statusKey: "Absent",   icon: <AlertTriangle size={16} aria-hidden="true" />, bg: "bg-red-50",     text: "text-red-700",    ring: "focus-visible:ring-red-500"    },
+          { label: "Late",      val: lateCount,     statusKey: "Late",     icon: <Clock size={16} aria-hidden="true" />,         bg: "bg-orange-50",  text: "text-orange-700", ring: "focus-visible:ring-orange-500" },
+          { label: "Half Day",  val: halfDayCount,  statusKey: "Half Day", icon: <TrendingUp size={16} aria-hidden="true" />,    bg: "bg-yellow-50",  text: "text-yellow-700", ring: "focus-visible:ring-yellow-500" },
+          { label: "WFH",       val: wfhCount,      locKey:    "WFH",      icon: <Wifi size={16} aria-hidden="true" />,          bg: "bg-blue-50",    text: "text-blue-700",   ring: "focus-visible:ring-blue-500"   },
+          { label: "Overtime",  val: overtimeCount, statusKey: null,       icon: <Clock size={16} aria-hidden="true" />,         bg: "bg-purple-50",  text: "text-purple-700", ring: "focus-visible:ring-purple-500" },
         ].map((c) => (
-          <div key={c.label} className={`${c.bg} rounded-2xl p-4 flex items-center gap-3`}>
+          <button
+            key={c.label}
+            type="button"
+            onClick={() => {
+              // Reset the complementary filter so only the clicked dimension applies.
+              if ("locKey" in c && c.locKey) {
+                setStatusFilter("All");
+                setLocationFilter(c.locKey);
+              } else if (c.statusKey) {
+                setLocationFilter("All");
+                setStatusFilter(c.statusKey);
+              } else {
+                // Overtime: no dedicated filter; just surface the daily table.
+                setStatusFilter("All");
+                setLocationFilter("All");
+              }
+              setActiveTab("Daily Attendance");
+              // Give React a tick to render the daily table, then scroll it in view.
+              setTimeout(() => {
+                document.getElementById("daily-attendance-log")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 30);
+            }}
+            aria-label={`Show ${c.val} ${c.label.toLowerCase()} ${c.val === 1 ? "employee" : "employees"} in the Daily Attendance log`}
+            className={`${c.bg} rounded-2xl p-4 flex items-center gap-3 text-left transition-shadow hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${c.ring}`}
+          >
             <div className={`${c.text} opacity-70`}>{c.icon}</div>
             <div>
               <p className={`text-xl font-bold ${c.text}`}>{c.val}</p>
               <p className="text-xs text-gray-500 mt-0.5">{c.label}</p>
             </div>
-          </div>
+          </button>
         ))}
       </div>
 
@@ -1540,7 +1579,7 @@ export default function AttendancePage() {
         {/* ── Daily Attendance ── */}
         {activeTab === "Daily Attendance" && (
           <div className="p-6">
-      <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-gray-100">
+      <div id="daily-attendance-log" className="bg-white rounded-2xl shadow-sm overflow-hidden border border-gray-100">
         <div className="px-6 py-4 border-b flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-900">Daily Attendance Log</h2>
           <span className="text-xs text-gray-400">{filtered.length} records</span>

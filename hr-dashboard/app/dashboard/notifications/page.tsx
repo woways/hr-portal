@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection, query, where, onSnapshot,
@@ -64,7 +65,23 @@ interface EmpOption { empId: string; name: string; email: string; department: st
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+// Map a notification's type to the HR portal page that handles it.
+// Keeping this near the component so the mapping is self-documenting and so a
+// future notification type doesn't silently fall through — unknown types land
+// on the dashboard home.
+function hrNotifHref(type: NotifType): string {
+  switch (type) {
+    case "leave":      return "/dashboard/leave";
+    case "attendance": return "/dashboard/attendance?tab=requests";
+    case "goal":       return "/dashboard/goals";
+    case "payroll":    return "/dashboard/payroll";
+    case "system":
+    default:           return "/dashboard";
+  }
+}
+
 export default function HRNotificationsPage() {
+  const router = useRouter();
   const departments = useDepartments();
   const [notifs,      setNotifs]      = useState<LiveNotif[]>([]);
   const [ready,       setReady]       = useState(false);
@@ -403,30 +420,54 @@ export default function HRNotificationsPage() {
           filtered.map(n => {
             const Icon = typeIcon[n.type] ?? Bell;
             const cls  = typeBg[n.type]   ?? "bg-gray-50 text-gray-500";
+            const href = hrNotifHref(n.type);
+            const openNotif = () => {
+              router.push(href);
+              // Mark-read is fire-and-forget AFTER navigation starts so that a
+              // slow Firestore update can't swallow the route change.
+              if (!n.read) markRead(n.id);
+            };
             return (
+              // Sibling-overlay pattern (not nested button-in-button):
+              // the full-card <button> is a sibling of the Mark-read / Dismiss
+              // buttons. Action buttons sit on top via position:relative + z-10,
+              // so a click on them lands on them, not the overlay below.
               <div key={n.id}
-                className={`bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 transition-all relative
+                className={`bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 transition-all relative overflow-hidden
                   ${n.read ? "border border-gray-100" : "border border-gray-100 border-l-4 border-l-[#4F3CC9] bg-[#FDFCFF]"}`}>
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${cls}`}>
-                  <Icon size={18} />
+                <button
+                  type="button"
+                  onClick={openNotif}
+                  aria-label={`Open ${n.title}`}
+                  className="absolute inset-0 w-full h-full z-0 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-inset rounded-2xl"
+                />
+                <div className={`relative z-10 pointer-events-none w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${cls}`}>
+                  <Icon size={18} aria-hidden="true" />
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="relative z-10 pointer-events-none flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-3">
                     <p className={`text-sm font-semibold flex items-center gap-1.5 ${n.read ? "text-gray-700" : "text-gray-900"}`}>
                       {n.title}
-                      {!n.read && <span className="w-2 h-2 rounded-full bg-[#4F3CC9] inline-block shrink-0" />}
+                      {!n.read && <span className="w-2 h-2 rounded-full bg-[#4F3CC9] inline-block shrink-0" aria-hidden="true" />}
                     </p>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="pointer-events-auto flex items-center gap-2 shrink-0">
                       <span className="text-xs text-gray-400">{timeAgo(n.createdAt)}</span>
                       {!n.read && (
-                        <button onClick={() => markRead(n.id)}
-                          className="text-xs font-medium text-[#4F3CC9] border border-[#4F3CC9] rounded-full px-2.5 py-0.5 hover:bg-[#EDE9FF] transition-colors">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); markRead(n.id); }}
+                          className="text-xs font-medium text-[#4F3CC9] border border-[#4F3CC9] rounded-full px-2.5 py-0.5 hover:bg-[#EDE9FF] transition-colors"
+                        >
                           Mark read
                         </button>
                       )}
-                      <button onClick={() => dismiss(n.id)} title="Dismiss"
-                        className="w-6 h-6 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
-                        <X size={13} />
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); dismiss(n.id); }}
+                        aria-label="Dismiss notification"
+                        className="w-6 h-6 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      >
+                        <X size={13} aria-hidden="true" />
                       </button>
                     </div>
                   </div>
