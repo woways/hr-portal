@@ -7,7 +7,7 @@ import {
   onSnapshot, updateDoc, writeBatch, deleteDoc,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { Bell, Calendar, Clock, Target, CheckCheck, Megaphone, IndianRupee, Wifi, Loader2, X, Trash2 } from "lucide-react";
+import { Bell, Calendar, Clock, Target, CheckCheck, Megaphone, IndianRupee, Wifi, Loader2, X, Trash2, ChevronRight } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -302,7 +302,7 @@ export default function EmployeeNotificationsPage() {
             const Icon = cfg.icon;
             return (
               <div key={n.id}
-                className={`relative bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 transition-all overflow-hidden
+                className={`group relative bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 overflow-hidden cursor-pointer transition-shadow hover:shadow-md hover:border-[#4F3CC9]/40
                   ${n.read ? "border border-gray-100" : "border border-gray-100 border-l-4 border-l-[#4F3CC9] bg-[#FDFCFF]"}`}>
                 {/* Sibling-overlay click target — invisible button filling the
                     card. Keeps action buttons as DOM siblings (not nested) so
@@ -350,7 +350,13 @@ export default function EmployeeNotificationsPage() {
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 mt-0.5 leading-relaxed">{n.message}</p>
-                  <p className="text-xs text-gray-400 mt-1.5">{timeAgo(n.createdAt)}</p>
+                  <div className="mt-1.5 flex items-center justify-between gap-2">
+                    <p className="text-xs text-gray-400">{timeAgo(n.createdAt)}</p>
+                    {/* Visible affordance so sighted users see the card is clickable. */}
+                    <p className="flex items-center gap-1 text-xs font-medium text-[#4F3CC9]">
+                      View<ChevronRight size={13} aria-hidden="true" className="transition-transform group-hover:translate-x-0.5" />
+                    </p>
+                  </div>
                 </div>
               </div>
             );

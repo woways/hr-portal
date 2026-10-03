@@ -11,7 +11,7 @@ import { getEmployees } from "@/lib/firebaseService";
 import { useDepartments } from "@/lib/useDepartments";
 import {
   Plus, X, Bell, CalendarOff, Clock, IndianRupee,
-  Megaphone, Target, CheckCheck, Wifi, Loader2, Search, User, Check, Building2, Users, Trash2,
+  Megaphone, Target, CheckCheck, Wifi, Loader2, Search, User, Check, Building2, Users, Trash2, ChevronRight,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -433,7 +433,7 @@ export default function HRNotificationsPage() {
               // buttons. Action buttons sit on top via position:relative + z-10,
               // so a click on them lands on them, not the overlay below.
               <div key={n.id}
-                className={`bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 transition-all relative overflow-hidden
+                className={`group bg-white rounded-2xl shadow-sm flex items-start gap-4 px-6 py-4 relative overflow-hidden cursor-pointer transition-shadow hover:shadow-md hover:border-[#4F3CC9]/40
                   ${n.read ? "border border-gray-100" : "border border-gray-100 border-l-4 border-l-[#4F3CC9] bg-[#FDFCFF]"}`}>
                 <button
                   type="button"
@@ -472,6 +472,12 @@ export default function HRNotificationsPage() {
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 mt-0.5 leading-relaxed">{n.message}</p>
+                  {/* Visible affordance: whole card is clickable; this hints at
+                      the deep-link destination for sighted users. SR users
+                      already have the overlay button's aria-label. */}
+                  <p className="mt-2 flex items-center gap-1 text-xs font-medium text-[#4F3CC9]">
+                    View<ChevronRight size={13} aria-hidden="true" className="transition-transform group-hover:translate-x-0.5" />
+                  </p>
                 </div>
               </div>
             );
