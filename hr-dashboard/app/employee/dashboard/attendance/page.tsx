@@ -564,6 +564,10 @@ export default function AttendancePage() {
 
     try {
       // Write directly to Firestore from the authenticated client (bypasses server-side auth issue)
+      // Classify the request so HR sees at a glance whether this is a
+      // missing clock-out ("clockout") or a full-day correction ("arrival").
+      // Field is additive — existing HR panel still reads actualArrival.
+      const requestType = reqTarget?.status === "Incomplete" ? "clockout" : "arrival";
       await setDoc(doc(db, "regularization", reqId), {
         id:            reqId,
         empId,
@@ -572,6 +576,7 @@ export default function AttendancePage() {
         day:           reqTarget?.day ?? dayLabel,
         reason:        reqForm.reason.trim(),
         actualArrival: reqForm.actualArrival,
+        requestType,
         status:        "Pending",
         hrComment:     "",
         updatedAt:     now,
@@ -912,21 +917,41 @@ export default function AttendancePage() {
       </div>
     )}
 
-    {showReqModal && (
+    {showReqModal && (() => {
+      // Single source for the per-mode copy so visible label + aria-label can
+      // never drift (a11y note from review). An "Incomplete" row means the
+      // employee clocked in but forgot to clock out — only the clock-out time
+      // needs to be captured. Any other eligible row (Absent) still asks for
+      // the full arrival time.
+      const isIncomplete = reqTarget?.status === "Incomplete";
+      const modalTitle   = isIncomplete ? "Add Clock-Out Time" : "Request Attendance Correction";
+      const timeLabel    = isIncomplete ? "Actual Clock-Out Time" : "Actual Arrival Time";
+      const bannerText   = isIncomplete
+        ? "You clocked in on this day but forgot to clock out. Enter the actual time you left and HR will mark the day as Present."
+        : "Want to correct your attendance for any past working day? The date is pre-filled from the row you clicked — you can change it below if needed.";
+      const reasonPlaceholder = isIncomplete
+        ? "e.g. Had to leave in a rush, phone battery died before I could clock out..."
+        : "e.g. Heavy traffic on outer ring road, metro suspended, medical emergency...";
+      return (
       <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowReqModal(false)}>
         <div className="bg-white rounded-2xl w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div>
-              <h3 className="font-bold text-gray-900">Request Attendance Correction</h3>
+              <h3 className="font-bold text-gray-900">{modalTitle}</h3>
               <p className="text-xs text-gray-400 mt-0.5">Submit to HR for review</p>
             </div>
-            <button onClick={() => setShowReqModal(false)}><XCircle size={20} className="text-gray-400" /></button>
+            <button onClick={() => setShowReqModal(false)} aria-label="Close dialog"><XCircle size={20} className="text-gray-400" /></button>
           </div>
           <div className="p-6 space-y-4">
-            <div className="bg-orange-50 rounded-xl px-4 py-3 text-sm text-orange-700 flex items-start gap-2">
-              <AlertCircle size={15} className="mt-0.5 shrink-0" />
-              <span>Want to correct your attendance for any past working day? The date is pre-filled from the row you clicked — you can change it below if needed.</span>
-            </div>
+            <p role="note" className="bg-orange-50 rounded-xl px-4 py-3 text-sm text-orange-700 flex items-start gap-2">
+              <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{bannerText}</span>
+            </p>
+            {isIncomplete && reqTarget?.clockIn && reqTarget.clockIn !== "—" && (
+              <div className="rounded-xl bg-gray-50 border border-gray-100 px-4 py-2 text-xs text-gray-600">
+                Clock-In recorded: <strong className="text-gray-900">{reqTarget.clockIn}</strong>
+              </div>
+            )}
 
             {/* Date — editable date input. Pre-filled from the row that opened
                 the modal (if any); the user can still change it to any past
@@ -956,20 +981,23 @@ export default function AttendancePage() {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Actual Arrival Time</label>
+              <label htmlFor="reg-req-time" className="text-xs font-medium text-gray-600 block mb-1">{timeLabel}</label>
               <input
+                id="reg-req-time"
                 type="time"
                 value={reqForm.actualArrival}
                 onChange={(e) => setReqForm({ ...reqForm, actualArrival: e.target.value })}
+                aria-label={timeLabel}
                 className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
               />
             </div>
 
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Reason</label>
+              <label htmlFor="reg-req-reason" className="text-xs font-medium text-gray-600 block mb-1">Reason</label>
               <textarea
+                id="reg-req-reason"
                 rows={3}
-                placeholder="e.g. Heavy traffic on outer ring road, metro suspended, medical emergency..."
+                placeholder={reasonPlaceholder}
                 value={reqForm.reason}
                 onChange={(e) => setReqForm({ ...reqForm, reason: e.target.value })}
                 className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] resize-none"
@@ -989,7 +1017,8 @@ export default function AttendancePage() {
           </div>
         </div>
       </div>
-    )}
+      );
+    })()}
 
     {showLateModal && lateReqTarget && (
       <div
@@ -1471,9 +1500,17 @@ export default function AttendancePage() {
                                     : <span className="inline-flex px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">No</span>}
                         </td>
                         <td className="px-6 py-4">
-                          {row.status === "Absent" && (() => {
+                          {(row.status === "Absent" || row.status === "Incomplete") && (() => {
                             const req = getRequestForDate(row.date);
-                            if (!req) return <button onClick={() => { setReqTarget(row); setReqForm({ actualArrival: "", reason: "", selectedDate: logDateToISO(row.date) }); setShowReqModal(true); }} className="text-xs bg-orange-100 text-orange-700 hover:bg-orange-200 px-3 py-1.5 rounded-full font-medium whitespace-nowrap">Raise Request</button>;
+                            const label = row.status === "Incomplete" ? "Add Clock-Out" : "Raise Request";
+                            if (!req) return (
+                              <button
+                                type="button"
+                                onClick={() => { setReqTarget(row); setReqForm({ actualArrival: "", reason: "", selectedDate: logDateToISO(row.date) }); setShowReqModal(true); }}
+                                aria-label={`${label} for ${row.date}`}
+                                className="text-xs bg-orange-100 text-orange-700 hover:bg-orange-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 px-3 py-1.5 rounded-full font-medium whitespace-nowrap"
+                              >{label}</button>
+                            );
                             if (req.status === "Pending")  return <span className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request pending">⏳ Pending</span>;
                             if (req.status === "Approved") return <span className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request approved">✓ Approved</span>;
                             return <span className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request rejected">✗ Rejected</span>;
