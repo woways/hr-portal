@@ -6,6 +6,7 @@ import {
 } from "recharts";
 import { collection, query, where, onSnapshot, setDoc, addDoc, doc, getDoc, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useHolidays, isNonWorkingDay } from "@/lib/useHolidays";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
 import { backfillEmployee, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 import { markEmpNotifRead } from "@/lib/firebaseService";
@@ -61,7 +62,15 @@ function getTodayDateStr(): string {
   return `${SHORT_MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")}, ${d.getFullYear()}`;
 }
 function getTodayDayStr(): string { return DAY_ABBR[new Date().getDay()]; }
-function isTodayWeekend(): boolean { const day = new Date().getDay(); return day === 0 || day === 6; }
+// 6-day workweek: Saturday is working. Caller passes a holiday set so declared
+// public holidays also count as non-working.
+function isTodayWeekend(holidaySet?: Set<string>): boolean {
+  const d = new Date();
+  if (d.getDay() === 0) return true;
+  if (!holidaySet) return false;
+  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return holidaySet.has(iso);
+}
 // Converts "May 08, 2026" → "2026-05-08" for matching against ISO dates from the API
 function logDateToISO(logDate: string): string {
   const [mon, dayComma, year] = logDate.split(" ");
@@ -126,6 +135,11 @@ export default function AttendancePage() {
   const lateReasonRef = useRef<HTMLTextAreaElement | null>(null);
   const lateModalOpenerRef = useRef<HTMLButtonElement | null>(null);
   const [isClockedIn, setIsClockedIn] = useState(false);
+  // 6-day workweek — Sunday + declared public holidays are the only days
+  // treated as "Week Off". Saturday counts as a working day. Keyed off the
+  // live `settings/holidays` Firestore doc so an HR update propagates
+  // immediately into every count/row on this page.
+  const holidaySet = useHolidays();
   const [clockInTime, setClockInTime] = useState<string | null>(null);
   const [clockOutTime, setClockOutTime] = useState<string | null>(null);
   // Accumulated seconds from CLOSED sessions on the current day. The live tick
@@ -232,7 +246,10 @@ export default function AttendancePage() {
         .map((rec) => {
           const d = new Date((rec.date as string) + "T00:00:00");
           const dayIdx = d.getDay();
-          const isWeekend = dayIdx === 0 || dayIdx === 6;
+          // 6-day workweek: Saturday works; only Sunday + declared holidays
+          // are non-working. Field kept named `isWeekend` on AttEntry for shape
+          // compat — semantics widened to "is non-working day".
+          const isWeekend = isNonWorkingDay(rec.date as string, holidaySet);
           const hoursMatch = ((rec.workingHours as string) ?? "").match(/(\d+)h\s*(\d+)m/);
           const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
           const clockInRaw  = (rec.clockIn  as string) || "";
@@ -260,7 +277,7 @@ export default function AttendancePage() {
       setPastLog(past);
     }, () => {});
     return () => unsub();
-  }, [empId]);
+  }, [empId, holidaySet]);
 
   // Ref to track active clock session — prevents HR corrections from overwriting live state
   const isClockedInRef = useRef(false);
@@ -401,7 +418,7 @@ export default function AttendancePage() {
               const isoDate = rec.date as string;
               const d = new Date(isoDate + "T00:00:00");
               const dayIdx = d.getDay();
-              const isWeekend = dayIdx === 0 || dayIdx === 6;
+              const isWeekend = isNonWorkingDay(isoDate, holidaySet);
               const hoursMatch = ((rec.workingHours as string) ?? "").match(/(\d+)h\s*(\d+)m/);
               const hoursVal = hoursMatch ? parseInt(hoursMatch[1]) + parseInt(hoursMatch[2]) / 60 : 0;
               return {
@@ -760,7 +777,7 @@ export default function AttendancePage() {
         setDoc(doc(db, "attendance", clockId), {
           clockOut:     timeStr,
           workingHours: workingHoursStr,
-          status:       statusFromHours(total, [0, 6].includes(new Date(date + "T00:00:00").getDay())),
+          status:       statusFromHours(total, isNonWorkingDay(date, holidaySet)),
           updatedAt:    now2,
         }, { merge: true }),
       ]).catch((err) => { console.error("clock-out write failed", err); });
@@ -771,7 +788,7 @@ export default function AttendancePage() {
 
   // Today's entry — fully dynamic: uses real current date, day, and clock state
   const todayEntry = useMemo<AttEntry>(() => {
-    const weekend = isTodayWeekend();
+    const weekend = isTodayWeekend(holidaySet);
     // Prioritise clock-in over weekend: if the employee clocked in, mark as Present
     return {
       date:     getTodayDateStr(),
@@ -784,7 +801,7 @@ export default function AttendancePage() {
       late:     isLate && !!clockInTime,
       isWeekend: weekend && !clockInTime,
     };
-  }, [clockInTime, clockOutTime, isClockedIn, displayedSecs, isLate]);
+  }, [clockInTime, clockOutTime, isClockedIn, displayedSecs, isLate, holidaySet]);
 
   // Merge approved regularization requests into the log so status reflects HR decisions
   const fullLog = useMemo<AttEntry[]>(() => {
@@ -833,7 +850,7 @@ export default function AttendancePage() {
       const label = `${mStr} ${String(d).padStart(2, "0")}, ${yr}`;
       const existing = existingByLabel.get(label);
       const dayIdx = dt.getDay();
-      const isWeekend = dayIdx === 0 || dayIdx === 6;
+      const isWeekend = isNonWorkingDay(iso, holidaySet);
       const punch = crBackup[iso];
       if (existing) {
         const mirrorEmpty = !existing.clockIn || existing.clockIn === "—";
@@ -897,13 +914,16 @@ export default function AttendancePage() {
   // effectiveStatus, and the tile should agree with that.
   const lateCount     = cmDerived.filter(x => x.eff === "Late" || x.eff === "Late (Pending Review)").length;
   // Compute total working days for the current month dynamically
+  // 6-day workweek: count Monday–Saturday, subtract declared holidays.
   const totalWorkDays = (() => {
     const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const yr = now.getFullYear();
+    const mIdx = now.getMonth();
+    const daysInMonth = new Date(yr, mIdx + 1, 0).getDate();
     let count = 0;
     for (let d = 1; d <= daysInMonth; d++) {
-      const day = new Date(now.getFullYear(), now.getMonth(), d).getDay();
-      if (day !== 0 && day !== 6) count++;
+      const iso = `${yr}-${String(mIdx + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      if (!isNonWorkingDay(iso, holidaySet)) count++;
     }
     return count;
   })();
@@ -1338,7 +1358,7 @@ export default function AttendancePage() {
             const label = `${mStr} ${String(d).padStart(2, "0")}, ${historyYear}`;
             const existing = existingByLabel.get(label);
             const dayIdx = dt.getDay();
-            const isWeekend = dayIdx === 0 || dayIdx === 6;
+            const isWeekend = isNonWorkingDay(iso, holidaySet);
             const punch = crBackup[iso];
             // Existing attendance/ row usually wins — BUT the nightly backfill
             // seeds every workday with an empty "Absent" stub, and if the

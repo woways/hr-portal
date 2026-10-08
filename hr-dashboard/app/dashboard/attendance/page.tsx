@@ -15,6 +15,7 @@ import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { collection, onSnapshot, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useHolidays, isNonWorkingDay } from "@/lib/useHolidays";
 import { backfillAllEmployees, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 
 type AttendanceStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Incomplete";
@@ -30,7 +31,7 @@ interface AttendanceRecord {
 
 // No static initRecords — data loads from /api/attendance (real employees only)
 
-const heatmapDays = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const heatmapDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const PIE_COLORS = ["#4F3CC9", "#10B981", "#F59E0B", "#EF4444"];
 
@@ -71,6 +72,9 @@ interface RegRequest {
 const TODAY = new Date().toISOString().slice(0, 10);
 
 export default function AttendancePage() {
+  // 6-day workweek: live set of declared holidays. Sunday + these are the only
+  // non-working days; Saturday counts as a workday. Keyed off settings/holidays.
+  const holidaySet = useHolidays();
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loadingRecords, setLoadingRecords] = useState(true);
   // Configured Late Login Threshold (HH:MM, 24h) from Settings → Work Timings.
@@ -326,7 +330,7 @@ export default function AttendancePage() {
     if (eff !== "Present" && eff !== "Half Day" && eff !== "Late" && eff !== "Late (Pending Review)") return false;
     const ci = r.clockIn;
     if (!ci || ci === "—" || ci === "" || ci === "Ongoing") return false; // no clock-in → not late
-    if (r.date) { const dow = new Date(r.date + "T00:00:00").getDay(); if (dow === 0 || dow === 6) return false; }
+    if (r.date && isNonWorkingDay(r.date, holidaySet)) return false; // Sunday or declared holiday → never Late
     const m = ci.match(/(\d+):(\d+)\s*(AM|PM)?/i);
     if (!m) return false;
     let h = parseInt(m[1], 10); const min = parseInt(m[2], 10);
@@ -559,14 +563,17 @@ export default function AttendancePage() {
     for (const date of Object.keys(dayMap).sort()) {
       const d = new Date(date + "T00:00:00");
       const dow = d.getDay();
-      if (dow === 0 || dow === 6) continue;
+      // 6-day workweek: Saturday is a workday. Skip only Sunday + holidays.
+      if (isNonWorkingDay(date, holidaySet)) continue;
       const mon = new Date(d);
-      mon.setDate(d.getDate() - (dow - 1));
+      // Monday-based column index: Mon..Sat → 0..5. Clamp Sun safely (already skipped above).
+      const col = ((dow + 6) % 7); // Mon=0, Tue=1, ... Sat=5, Sun=6
+      mon.setDate(d.getDate() - col);
       const wk = `${String(mon.getDate()).padStart(2,"0")}/${String(mon.getMonth()+1).padStart(2,"0")}`;
-      if (!weekMap.has(wk)) weekMap.set(wk, [null,null,null,null,null]);
+      if (!weekMap.has(wk)) weekMap.set(wk, [null,null,null,null,null,null]);
       const row = weekMap.get(wk)!;
       const { present, total } = dayMap[date];
-      row[dow - 1] = total > 0 ? Math.round((present / total) * 100) : 0;
+      row[col] = total > 0 ? Math.round((present / total) * 100) : 0;
     }
     const weeks = Array.from(weekMap.keys());
     const data = weeks.map(w => weekMap.get(w)!.map(v => v ?? 0));

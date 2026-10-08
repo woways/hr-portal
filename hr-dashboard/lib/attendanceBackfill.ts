@@ -46,7 +46,8 @@ function buildWorkingDates(lookbackDays: number, holidays: Set<string>, minDate?
     const d = new Date(today);
     d.setDate(today.getDate() - i);
     const day = d.getDay();
-    if (day === 0 || day === 6) continue; // skip weekends
+    // 6-day workweek: Saturday is working. Skip only Sunday (holidays filtered below).
+    if (day === 0) continue;
     const iso = d.toISOString().slice(0, 10);
     if (holidays.has(iso)) continue;       // skip holidays
     if (iso < ATTENDANCE_START) continue;  // never create records before company go-live
