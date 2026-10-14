@@ -1,9 +1,9 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Eye, Pencil, Trash2, X, Plus, Search, Upload, Download, Rows3, Copy, CheckCircle2, FileText, Clock, CheckCircle } from "lucide-react";
+import { Eye, Pencil, Trash2, X, Plus, Search, Upload, Download, Rows3, Copy, CheckCircle2, FileText, Clock, CheckCircle, KeyRound, Loader2 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { initializeApp, deleteApp } from "firebase/app";
-import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
+import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
 import { firebaseConfig, db, storage } from "@/lib/firebase";
 import { createUserProfile } from "@/lib/authService";
 import { getEmployees, upsertEmployee, updateEmployee, deleteEmployee } from "@/lib/firebaseService";
@@ -1176,7 +1176,7 @@ function BulkImportModal({ onImport, onClose, nextIdStart, existingEmails }: {
   );
 }
 
-interface CreatedCreds { name: string; email: string; password: string; empId: string; }
+interface CreatedCreds { name: string; email: string; password: string; empId: string; authError?: string | null; }
 
 export default function EmployeesPage() {
   const departmentList = useDepartments();
@@ -1210,6 +1210,12 @@ export default function EmployeesPage() {
   const [addToast, setAddToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [editForm, setEditForm] = useState<FormState | null>(null);
   const [createdCreds, setCreatedCreds] = useState<CreatedCreds | null>(null);
+  // "Reset Credentials" row action — opens a labelled confirmation dialog,
+  // then calls Firebase sendPasswordResetEmail. Focus returns to the key-icon
+  // button that opened the dialog on close (ref map keyed by employee id).
+  const [resetTarget, setResetTarget] = useState<Employee | null>(null);
+  const [resetSending, setResetSending] = useState(false);
+  const resetBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [copiedField, setCopiedField] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
@@ -1494,6 +1500,7 @@ export default function EmployeesPage() {
     // Create Firebase Auth login if email was provided
     const tempPassword = savedEmail ? generateTempPassword() : "—";
     let authCreated = false;
+    let authError: string | null = null;
     if (savedEmail) {
       try {
         const secondaryApp = initializeApp(firebaseConfig, `emp-create-${Date.now()}`);
@@ -1511,19 +1518,72 @@ export default function EmployeesPage() {
         });
         await secondaryAuth.signOut();
         await deleteApp(secondaryApp);
-      } catch {
-        // Account may already exist — employee record was still saved to Firestore
+      } catch (err) {
+        // Previously this was `catch {}` which made the credentials popup
+        // silently claim success. Surface the real reason in the popup + logs.
+        const e = err as { code?: string; message?: string };
+        console.error("Auth account creation failed", e);
+        if (e?.code === "auth/email-already-in-use") {
+          authError = "An account with this email already exists. Send a password-reset link from the Employees list instead.";
+        } else if (e?.code === "auth/weak-password") {
+          authError = "Firebase rejected the generated password as too weak. Try again or contact admin.";
+        } else if (e?.code === "auth/invalid-email") {
+          authError = `Firebase did not accept the email "${savedEmail}". Double-check the address.`;
+        } else {
+          authError = `Login account was NOT created: ${e?.code || e?.message || "unknown error"}`;
+        }
       }
     }
 
     // Always show the credentials popup after a successful save
-    setCreatedCreds({ name: savedName, email: savedEmail, password: (savedEmail && authCreated) ? tempPassword : "— (use Password Reset to set credentials)", empId: newId });
+    setCreatedCreds({
+      name:      savedName,
+      email:     savedEmail,
+      password:  (savedEmail && authCreated) ? tempPassword : "— (use Reset Credentials to set a new one)",
+      empId:     newId,
+      authError,
+    });
     setSaving(false);
   }
 
   function showToast(msg: string, ok = true) {
     setAddToast({ msg, ok });
     setTimeout(() => setAddToast(null), 4000);
+  }
+
+  // Reset-credentials flow: Firebase sends the password reset link to the
+  // employee's email; the client SDK cannot set another user's password
+  // directly. Focus returns to the key-icon button that opened the dialog.
+  function closeResetDialog() {
+    const id = resetTarget?.id;
+    setResetTarget(null);
+    if (id) setTimeout(() => resetBtnRefs.current[id]?.focus(), 50);
+  }
+  async function sendResetLink() {
+    if (!resetTarget || resetSending) return;
+    const target = resetTarget;
+    const email = (target.email || "").trim();
+    if (!email) {
+      showToast("This employee has no email on file. Edit the record to add one first.", false);
+      return;
+    }
+    setResetSending(true);
+    try {
+      await sendPasswordResetEmail(getAuth(), email);
+      showToast(`Reset link sent to ${email}.`, true);
+      closeResetDialog();
+    } catch (err) {
+      const e = err as { code?: string; message?: string };
+      console.error("sendPasswordResetEmail failed", e);
+      const reason = e?.code === "auth/user-not-found"
+        ? "No Firebase account exists for this email. The employee may have never logged in — add them again from the Add Employee form."
+        : e?.code === "auth/invalid-email"
+          ? "Firebase rejected this email format."
+          : (e?.message || "Failed to send reset link.");
+      showToast(reason, false);
+    } finally {
+      setResetSending(false);
+    }
   }
 
   async function handleBulkImport(emps: Employee[]) {
@@ -1813,9 +1873,18 @@ export default function EmployeesPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
-                      <button onClick={() => openView(emp)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500"><Eye size={14} /></button>
-                      <button onClick={() => openEdit(emp)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500"><Pencil size={14} /></button>
-                      <button onClick={() => setDeleteEmp(emp)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"><Trash2 size={14} /></button>
+                      <button onClick={() => openView(emp)} aria-label={`View profile for ${emp.name}`} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"><Eye size={14} aria-hidden="true" /></button>
+                      <button onClick={() => openEdit(emp)} aria-label={`Edit ${emp.name}`} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-500"><Pencil size={14} aria-hidden="true" /></button>
+                      <button
+                        ref={(el) => { resetBtnRefs.current[emp.id] = el; }}
+                        onClick={() => setResetTarget(emp)}
+                        aria-label={`Reset credentials for ${emp.name}`}
+                        title="Reset credentials"
+                        className="p-1.5 rounded-lg hover:bg-purple-50 text-[#4F3CC9] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9]"
+                      >
+                        <KeyRound size={14} aria-hidden="true" />
+                      </button>
+                      <button onClick={() => setDeleteEmp(emp)} aria-label={`Delete ${emp.name}`} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400"><Trash2 size={14} aria-hidden="true" /></button>
                     </div>
                   </td>
                 </tr>
@@ -1896,6 +1965,52 @@ export default function EmployeesPage() {
         </div>
       )}
 
+      {/* ── Reset Credentials Confirmation Dialog ── */}
+      {resetTarget && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={closeResetDialog}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reset-cred-title"
+          onKeyDown={(e) => { if (e.key === "Escape") closeResetDialog(); }}
+        >
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-[#F5F3FF] text-[#4F3CC9] flex items-center justify-center shrink-0" aria-hidden="true">
+                <KeyRound size={18} />
+              </div>
+              <div>
+                <h2 id="reset-cred-title" className="text-base font-bold text-gray-900">Reset credentials for {resetTarget.name}?</h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  Firebase will email <span dir="ltr" className="font-medium text-gray-800">{resetTarget.email || "—"}</span> a password-reset link. The employee sets their own new password via that link.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={closeResetDialog}
+                disabled={resetSending}
+                className="flex-1 border border-gray-200 text-gray-700 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={sendResetLink}
+                disabled={resetSending || !resetTarget.email}
+                aria-busy={resetSending}
+                className="flex-1 bg-[#4F3CC9] text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-[#3d2fa8] disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
+              >
+                {resetSending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <KeyRound size={14} aria-hidden="true" />}
+                {resetSending ? "Sending…" : "Send Reset Link"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Employee Login Credentials Modal ── */}
       {createdCreds && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -1909,6 +2024,15 @@ export default function EmployeesPage() {
                 <p className="text-xs text-gray-400">{createdCreds.email ? "Share these login details with the employee" : "Employee saved to Firebase"}</p>
               </div>
             </div>
+
+            {createdCreds.authError && (
+              // role=alert implies aria-live=assertive — do NOT add aria-live here
+              // (a11y note). Inserted BEFORE the credentials block so SR users
+              // encounter the warning before reading the (now-partial) data.
+              <div role="alert" className="mb-3 bg-red-50 border border-red-200 text-red-700 rounded-xl px-3 py-2 text-xs">
+                <strong className="font-semibold">⚠ Login not created.</strong> {createdCreds.authError}
+              </div>
+            )}
 
             <div className="bg-[#F5F3FF] rounded-xl p-4 space-y-3 mb-4">
               <div>
