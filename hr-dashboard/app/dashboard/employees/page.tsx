@@ -1722,14 +1722,33 @@ export default function EmployeesPage() {
     }, 50);
   }
 
-  async function copyBulkRow(r: BulkImportResult) {
-    if (!r.password) return;
+  // Field-tagged copy: works for the whole row (combined) and per-field
+  // (email / password) using the same transient-indicator state. A trailing
+  // non-breaking space is toggled per announcement so repeated identical
+  // messages still fire into the live region (SR-debounce trick).
+  const liveNonce = useRef(0);
+  async function copyBulkField(r: BulkImportResult, field: "combined" | "email" | "password") {
+    const value =
+      field === "email"    ? r.email    :
+      field === "password" ? r.password :
+                             (r.password ? `${r.name}\nEmail: ${r.email}\nPassword: ${r.password}` : r.email);
+    if (!value) return;
+    const tag = `${r.empId}:${field}`;
     try {
-      await navigator.clipboard.writeText(`${r.name}\nEmail: ${r.email}\nPassword: ${r.password}`);
-      setCopiedBulkRow(r.empId);
-      setBulkLive(`Password copied for ${r.name}.`);
+      await navigator.clipboard.writeText(value);
+      setCopiedBulkRow(tag);
+      const label =
+        field === "email"    ? "Email" :
+        field === "password" ? "Password" :
+                               "Credentials";
+      liveNonce.current = (liveNonce.current + 1) % 2;
+      setBulkLive(`${label} copied for ${r.name}.${liveNonce.current ? " " : ""}`);
       setTimeout(() => setCopiedBulkRow(""), 2000);
-    } catch { /* ignore clipboard denial */ }
+    } catch {
+      // Fallback — clipboard denied (insecure context / permissions blocked).
+      liveNonce.current = (liveNonce.current + 1) % 2;
+      setBulkLive(`Could not copy ${field === "combined" ? "credentials" : field} for ${r.name} — select the text manually.${liveNonce.current ? " " : ""}`);
+    }
   }
 
   async function handleDelete() {
@@ -2144,11 +2163,44 @@ export default function EmployeesPage() {
                       <tr key={r.empId} className="hover:bg-gray-50">
                         <td className="px-3 py-2 text-gray-900 font-medium">{r.name}</td>
                         <td className="px-3 py-2 text-gray-500 font-mono text-xs">{r.empId}</td>
-                        <td className="px-3 py-2 text-gray-600 text-xs break-all">{r.email || "—"}</td>
                         <td className="px-3 py-2">
-                          {r.password
-                            ? <code className="text-xs bg-gray-50 px-2 py-1 rounded border border-gray-100">{r.password}</code>
-                            : <span className="text-xs text-gray-400">—</span>}
+                          {r.email ? (
+                            <div className="inline-flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs text-gray-600 break-all">{r.email}</span>
+                              <button
+                                type="button"
+                                onClick={() => copyBulkField(r, "email")}
+                                aria-label={`Copy email for ${r.name}`}
+                                className="w-6 h-6 inline-flex items-center justify-center rounded text-[#4F3CC9] hover:bg-[#F5F3FF] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9]"
+                              >
+                                {copiedBulkRow === `${r.empId}:email`
+                                  ? <CheckCircle2 size={12} className="text-green-500" aria-hidden="true" />
+                                  : <Copy size={12} aria-hidden="true" />}
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.password ? (
+                            <div className="inline-flex items-center gap-1.5 flex-wrap">
+                              <code className="text-xs bg-gray-50 px-2 py-1 rounded border border-gray-100">{r.password}</code>
+                              <button
+                                type="button"
+                                onClick={() => copyBulkField(r, "password")}
+                                // Password text intentionally NOT in aria-label (SR etiquette).
+                                aria-label={`Copy password for ${r.name}`}
+                                className="w-6 h-6 inline-flex items-center justify-center rounded text-[#4F3CC9] hover:bg-[#F5F3FF] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9]"
+                              >
+                                {copiedBulkRow === `${r.empId}:password`
+                                  ? <CheckCircle2 size={12} className="text-green-500" aria-hidden="true" />
+                                  : <Copy size={12} aria-hidden="true" />}
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
                         </td>
                         <td className="px-3 py-2">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusCls}`}>
@@ -2160,14 +2212,14 @@ export default function EmployeesPage() {
                           {r.password && (
                             <button
                               type="button"
-                              onClick={() => copyBulkRow(r)}
-                              // Password NOT in aria-label (a11y note #1) — the
-                              // SR-friendly label just names the row.
-                              aria-label={`Copy credentials for ${r.name} (${r.empId})`}
-                              className="text-xs font-medium text-[#4F3CC9] inline-flex items-center gap-1 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] rounded px-1"
+                              onClick={() => copyBulkField(r, "combined")}
+                              aria-label={`Copy name, email and password for ${r.name} (${r.empId})`}
+                              className="text-xs font-medium text-[#4F3CC9] inline-flex items-center gap-1 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] rounded px-2 py-1 min-h-[24px]"
                             >
-                              {copiedBulkRow === r.empId ? <CheckCircle2 size={12} className="text-green-500" aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-                              {copiedBulkRow === r.empId ? "Copied" : "Copy"}
+                              {copiedBulkRow === `${r.empId}:combined`
+                                ? <CheckCircle2 size={12} className="text-green-500" aria-hidden="true" />
+                                : <Copy size={12} aria-hidden="true" />}
+                              {copiedBulkRow === `${r.empId}:combined` ? "Copied all" : "Copy all"}
                             </button>
                           )}
                         </td>
