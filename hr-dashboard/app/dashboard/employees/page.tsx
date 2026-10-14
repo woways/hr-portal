@@ -1731,7 +1731,7 @@ export default function EmployeesPage() {
     const value =
       field === "email"    ? r.email    :
       field === "password" ? r.password :
-                             (r.password ? `${r.name}\nEmail: ${r.email}\nPassword: ${r.password}` : r.email);
+                             (r.password ? `Email: ${r.email}\nPassword: ${r.password}` : r.email);
     if (!value) return;
     const tag = `${r.empId}:${field}`;
     try {
@@ -1740,7 +1740,7 @@ export default function EmployeesPage() {
       const label =
         field === "email"    ? "Email" :
         field === "password" ? "Password" :
-                               "Credentials";
+                               "Email and password";
       liveNonce.current = (liveNonce.current + 1) % 2;
       setBulkLive(`${label} copied for ${r.name}.${liveNonce.current ? " " : ""}`);
       setTimeout(() => setCopiedBulkRow(""), 2000);
@@ -2213,13 +2213,13 @@ export default function EmployeesPage() {
                             <button
                               type="button"
                               onClick={() => copyBulkField(r, "combined")}
-                              aria-label={`Copy name, email and password for ${r.name} (${r.empId})`}
+                              aria-label={`Copy email and password for ${r.name}`}
                               className="text-xs font-medium text-[#4F3CC9] inline-flex items-center gap-1 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] rounded px-2 py-1 min-h-[24px]"
                             >
                               {copiedBulkRow === `${r.empId}:combined`
                                 ? <CheckCircle2 size={12} className="text-green-500" aria-hidden="true" />
                                 : <Copy size={12} aria-hidden="true" />}
-                              {copiedBulkRow === `${r.empId}:combined` ? "Copied all" : "Copy all"}
+                              {copiedBulkRow === `${r.empId}:combined` ? "Copied" : "Copy Email & Password"}
                             </button>
                           )}
                         </td>
