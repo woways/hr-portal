@@ -1216,6 +1216,15 @@ export default function EmployeesPage() {
   const [resetTarget, setResetTarget] = useState<Employee | null>(null);
   const [resetSending, setResetSending] = useState(false);
   const resetBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // Bulk-import results modal — rendered after a bulk CSV / multi-row import so
+  // HR sees per-row outcome AND the newly-generated login credentials for every
+  // row that got a Firebase Auth account. Password stays visible on-screen
+  // for copy; it is NEVER included in the row's accessible name (SR etiquette).
+  interface BulkImportResult { name: string; empId: string; email: string; status: "created" | "existing" | "no-email" | "failed"; password?: string; reason?: string }
+  const [bulkResults, setBulkResults] = useState<BulkImportResult[] | null>(null);
+  const [bulkLive, setBulkLive] = useState<string>("");
+  const bulkImportBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [copiedBulkRow, setCopiedBulkRow] = useState<string>("");
   const [copiedField, setCopiedField] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
@@ -1596,39 +1605,131 @@ export default function EmployeesPage() {
       if (k) seen.add(k);
     }
     const toImport: Employee[] = [];
-    let duplicates = 0;
+    const existingDuplicates: Employee[] = [];
     for (const emp of emps) {
       const key = (emp.email || "").trim().toLowerCase();
-      if (key && seen.has(key)) { duplicates++; continue; }
+      if (key && seen.has(key)) { existingDuplicates.push(emp); continue; }
       if (key) seen.add(key);
       toImport.push(emp);
     }
 
-    const dupNote = duplicates > 0 ? ` ${duplicates} duplicate${duplicates !== 1 ? "s" : ""} skipped.` : "";
-    if (toImport.length === 0) {
-      showToast(`No new employees to import — all ${emps.length} row${emps.length !== 1 ? "s" : ""} already exist.`, false);
+    if (toImport.length === 0 && existingDuplicates.length === 0) {
+      showToast(`No rows to import.`, false);
       setShowBulk(false);
       return;
     }
 
-    const results = await Promise.allSettled(toImport.map((emp) => {
-      const { id, ...rest } = emp;
-      return upsertEmployee(id, { ...rest, employeeId: id });
-    }));
-    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-    const succeeded = toImport.length - rejected.length;
-    if (rejected.length > 0) {
-      const reason = rejected[0].reason as { code?: string; message?: string };
-      const detail = reason?.code === "permission-denied"
-        ? "permission denied — please sign out and sign in again"
-        : (reason?.message || reason?.code || "unknown error");
-      showToast(`${succeeded} imported, ${rejected.length} failed: ${detail}.${dupNote}`, false);
-    } else {
-      showToast(`${succeeded} employee${succeeded !== 1 ? "s" : ""} imported.${dupNote}`);
+    // Per-row pipeline: Firestore write + Firebase Auth create. One row failing
+    // never tanks the batch; every outcome is captured for the results modal
+    // so HR can download credentials for the newly-created logins.
+    const perRow: BulkImportResult[] = [];
+    for (const emp of toImport) {
+      const email = (emp.email || "").trim();
+      try {
+        const { id, ...rest } = emp;
+        await upsertEmployee(id, { ...rest, employeeId: id });
+      } catch (err) {
+        const e = err as { code?: string; message?: string };
+        perRow.push({ name: emp.name, empId: emp.id, email, status: "failed", reason: e?.code === "permission-denied" ? "Permission denied" : (e?.message || e?.code || "Firestore write failed") });
+        continue;
+      }
+      if (!email) {
+        perRow.push({ name: emp.name, empId: emp.id, email: "", status: "no-email", reason: "No email provided — login not created" });
+        continue;
+      }
+      const tempPassword = generateTempPassword();
+      try {
+        const secondaryApp = initializeApp(firebaseConfig, `bulk-${emp.id}-${Date.now()}`);
+        const secondaryAuth = getAuth(secondaryApp);
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
+        await createUserProfile({
+          uid: cred.user.uid,
+          email,
+          name: emp.name,
+          role: "employee",
+          employeeId: emp.id,
+          department: emp.department,
+          createdAt: new Date().toISOString(),
+        });
+        await secondaryAuth.signOut();
+        await deleteApp(secondaryApp);
+        perRow.push({ name: emp.name, empId: emp.id, email, status: "created", password: tempPassword });
+      } catch (err) {
+        const e = err as { code?: string; message?: string };
+        console.error(`Auth create failed for ${email}`, e);
+        if (e?.code === "auth/email-already-in-use") {
+          perRow.push({ name: emp.name, empId: emp.id, email, status: "existing", reason: "Account already exists — use Reset Credentials on the row to send a reset link" });
+        } else {
+          perRow.push({ name: emp.name, empId: emp.id, email, status: "failed", reason: e?.code || e?.message || "Auth create failed" });
+        }
+      }
     }
+    for (const emp of existingDuplicates) {
+      perRow.push({ name: emp.name, empId: emp.id, email: (emp.email || "").trim(), status: "existing", reason: "Email already exists in Employees list" });
+    }
+
+    const created  = perRow.filter(r => r.status === "created").length;
+    const existing = perRow.filter(r => r.status === "existing").length;
+    const failed   = perRow.filter(r => r.status === "failed").length;
+    const noEmail  = perRow.filter(r => r.status === "no-email").length;
+
+    showToast(`${created} created · ${existing} existing · ${noEmail} no-email · ${failed} failed — see results modal`, failed === 0);
+    setBulkResults(perRow);
+    // Live-region text is set AFTER the modal mounts (useEffect below picks this
+    // up on next tick), so SR users actually hear the announcement.
+    setBulkLive("");
+    setTimeout(() => {
+      setBulkLive(`Import finished. ${created} login account${created !== 1 ? "s" : ""} created, ${existing} already existed, ${noEmail} had no email, ${failed} failed.`);
+    }, 100);
     invalidateEmployees();
     await loadEmployees();
     setShowBulk(false);
+  }
+
+  // Trigger CSV download of bulk-import results so HR has every new credential
+  // in one file. Announces via the modal's live region on completion.
+  function downloadBulkResultsCsv() {
+    if (!bulkResults) return;
+    const header = ["Name", "Employee ID", "Email", "Password", "Status", "Notes"];
+    const esc = (v: string) => `"${(v || "").replace(/"/g, '""')}"`;
+    const lines = [header.map(esc).join(",")];
+    for (const r of bulkResults) {
+      lines.push([r.name, r.empId, r.email, r.password || "", r.status, r.reason || ""].map(esc).join(","));
+    }
+    const csv = "﻿" + lines.join("\r\n"); // BOM so Excel reads UTF-8 right
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bulk-import-credentials-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setBulkLive(`Credentials CSV downloaded with ${bulkResults.length} row${bulkResults.length !== 1 ? "s" : ""}.`);
+  }
+
+  function closeBulkResults() {
+    setBulkResults(null);
+    setBulkLive("");
+    // Focus restoration with fallbacks (a11y note #4): ref -> query -> main.
+    setTimeout(() => {
+      if (bulkImportBtnRef.current) { bulkImportBtnRef.current.focus(); return; }
+      const btn = document.querySelector<HTMLButtonElement>('[data-bulk-import-trigger]');
+      if (btn) { btn.focus(); return; }
+      const main = document.querySelector<HTMLElement>("main");
+      if (main) { main.setAttribute("tabindex", "-1"); main.focus(); }
+    }, 50);
+  }
+
+  async function copyBulkRow(r: BulkImportResult) {
+    if (!r.password) return;
+    try {
+      await navigator.clipboard.writeText(`${r.name}\nEmail: ${r.email}\nPassword: ${r.password}`);
+      setCopiedBulkRow(r.empId);
+      setBulkLive(`Password copied for ${r.name}.`);
+      setTimeout(() => setCopiedBulkRow(""), 2000);
+    } catch { /* ignore clipboard denial */ }
   }
 
   async function handleDelete() {
@@ -1794,8 +1895,13 @@ export default function EmployeesPage() {
           <button onClick={exportEmployees} className="flex items-center gap-2 border border-gray-200 text-gray-600 rounded-xl px-4 py-2 text-sm font-medium hover:bg-gray-50 transition">
             <Download size={16} /> Export Excel
           </button>
-          <button onClick={() => setShowBulk(true)} className="flex items-center gap-2 border border-[#4F3CC9] text-[#4F3CC9] rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#EDE9FF] transition">
-            <Upload size={16} /> Bulk Import
+          <button
+            ref={bulkImportBtnRef}
+            data-bulk-import-trigger
+            onClick={() => setShowBulk(true)}
+            className="flex items-center gap-2 border border-[#4F3CC9] text-[#4F3CC9] rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#EDE9FF] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
+          >
+            <Upload size={16} aria-hidden="true" /> Bulk Import
           </button>
           <button onClick={async () => { setAddEmpId(nextAddId); setShowAdd(true); const id = await computeNextEmployeeId(); setAddEmpId(id); }} className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-[#3d2fa8] transition">
             <Plus size={16} /> Add Employee
@@ -1959,6 +2065,126 @@ export default function EmployeesPage() {
               </button>
               <button onClick={handleDelete} disabled={deleting} className="flex-1 bg-red-500 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-600 transition disabled:opacity-60 flex items-center justify-center gap-2">
                 {deleting ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Deleting…</> : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk Import Results Modal ── */}
+      {bulkResults && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={closeBulkResults}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-results-title"
+          onKeyDown={(e) => { if (e.key === "Escape") closeBulkResults(); }}
+        >
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] shadow-xl p-6 flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 id="bulk-results-title" className="text-base font-bold text-gray-900">Bulk Import Results</h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {bulkResults.filter(r => r.status === "created").length} login{bulkResults.filter(r => r.status === "created").length !== 1 ? "s" : ""} created ·
+                  {" "}{bulkResults.filter(r => r.status === "existing").length} existing ·
+                  {" "}{bulkResults.filter(r => r.status === "no-email").length} no-email ·
+                  {" "}{bulkResults.filter(r => r.status === "failed").length} failed
+                </p>
+              </div>
+              <button type="button" onClick={closeBulkResults} aria-label="Close results dialog" className="text-gray-400 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 rounded">
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* Single live region for the whole modal — one-shot summary + per-action feedback. */}
+            <div aria-live="polite" className="sr-only">{bulkLive}</div>
+
+            <div className="flex gap-2 mb-3">
+              <button
+                type="button"
+                onClick={downloadBulkResultsCsv}
+                aria-label="Download credentials for all imported employees as a CSV file"
+                className="flex items-center gap-2 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-semibold hover:bg-[#3d2fa8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
+              >
+                <Download size={14} aria-hidden="true" /> Download credentials CSV
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs px-3 py-2 mb-3">
+              ⚠ Passwords are shown only here (and in the downloaded CSV). Save the file somewhere safe or share each password with the employee now — the portal cannot recover them later. Use the 🔑 Reset Credentials row action on any row later if needed.
+            </div>
+
+            <div className="overflow-auto flex-1 border border-gray-100 rounded-xl">
+              <table className="w-full text-sm">
+                <caption className="sr-only">Per-row results of the bulk import</caption>
+                <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                  <tr>
+                    <th scope="col" className="text-left px-3 py-2">Name</th>
+                    <th scope="col" className="text-left px-3 py-2">Emp ID</th>
+                    <th scope="col" className="text-left px-3 py-2">Email</th>
+                    <th scope="col" className="text-left px-3 py-2">Password</th>
+                    <th scope="col" className="text-left px-3 py-2">Status</th>
+                    <th scope="col" className="text-left px-3 py-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {bulkResults.map((r) => {
+                    const statusCls =
+                      r.status === "created"  ? "bg-green-100 text-green-700" :
+                      r.status === "existing" ? "bg-amber-100 text-amber-700" :
+                      r.status === "no-email" ? "bg-gray-100 text-gray-600" :
+                                                "bg-red-100 text-red-700";
+                    const statusLabel =
+                      r.status === "created"  ? "Created" :
+                      r.status === "existing" ? "Existing" :
+                      r.status === "no-email" ? "No Email" :
+                                                "Failed";
+                    return (
+                      <tr key={r.empId} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-900 font-medium">{r.name}</td>
+                        <td className="px-3 py-2 text-gray-500 font-mono text-xs">{r.empId}</td>
+                        <td className="px-3 py-2 text-gray-600 text-xs break-all">{r.email || "—"}</td>
+                        <td className="px-3 py-2">
+                          {r.password
+                            ? <code className="text-xs bg-gray-50 px-2 py-1 rounded border border-gray-100">{r.password}</code>
+                            : <span className="text-xs text-gray-400">—</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusCls}`}>
+                            {statusLabel}
+                          </span>
+                          {r.reason && <p className="text-[11px] text-gray-500 mt-1">{r.reason}</p>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.password && (
+                            <button
+                              type="button"
+                              onClick={() => copyBulkRow(r)}
+                              // Password NOT in aria-label (a11y note #1) — the
+                              // SR-friendly label just names the row.
+                              aria-label={`Copy credentials for ${r.name} (${r.empId})`}
+                              className="text-xs font-medium text-[#4F3CC9] inline-flex items-center gap-1 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] rounded px-1"
+                            >
+                              {copiedBulkRow === r.empId ? <CheckCircle2 size={12} className="text-green-500" aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
+                              {copiedBulkRow === r.empId ? "Copied" : "Copy"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                type="button"
+                onClick={closeBulkResults}
+                className="bg-[#4F3CC9] text-white py-2.5 px-5 rounded-xl text-sm font-semibold hover:bg-[#3d2fa8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
+              >
+                Done
               </button>
             </div>
           </div>
