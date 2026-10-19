@@ -6,13 +6,13 @@ import {
 } from "recharts";
 import { collection, query, where, onSnapshot, setDoc, addDoc, doc, getDoc, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { useHolidays, isNonWorkingDay } from "@/lib/useHolidays";
+import { useHolidays, useHolidayMap, isNonWorkingDay } from "@/lib/useHolidays";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
 import { backfillEmployee, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 import { markEmpNotifRead } from "@/lib/firebaseService";
 import { effectiveStatus } from "@/lib/attendanceStatus";
 
-type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Incomplete" | "Late" | "Late (Pending Review)";
+type AttStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Holiday" | "Incomplete" | "Late" | "Late (Pending Review)";
 
 interface AttEntry {
   date: string;
@@ -97,6 +97,7 @@ function StatusBadge({ status }: { status: AttStatus }) {
     "Half Day":{ cls: "bg-yellow-100 text-yellow-700", icon: <AlertCircle size={11} />,  label: "Half Day" },
     Leave:     { cls: "bg-blue-100 text-blue-700",     icon: <Clock size={11} />,        label: "Leave"    },
     "Week Off":{ cls: "bg-gray-100 text-gray-500",     icon: null,                       label: "Week Off" },
+    Holiday:   { cls: "bg-purple-100 text-purple-700", icon: <Calendar size={11} aria-hidden="true" />, label: "Holiday" },
     Incomplete:{ cls: "bg-orange-100 text-orange-700", icon: <AlertCircle size={11} aria-hidden="true" />,  label: "Incomplete" },
     Late:      { cls: "bg-orange-100 text-orange-700", icon: <AlertCircle size={11} aria-hidden="true" />,  label: "Late" },
     "Late (Pending Review)": { cls: "bg-yellow-100 text-yellow-700", icon: <Clock size={11} aria-hidden="true" />, label: "Late (Pending Review)" },
@@ -140,6 +141,10 @@ export default function AttendancePage() {
   // live `settings/holidays` Firestore doc so an HR update propagates
   // immediately into every count/row on this page.
   const holidaySet = useHolidays();
+  // Name lookup for declared holidays — lets history + status pill show
+  // "Holiday — Diwali" instead of a generic "Week Off" so employees know
+  // exactly which company holiday the day is marked for.
+  const holidayMap = useHolidayMap();
   const [clockInTime, setClockInTime] = useState<string | null>(null);
   const [clockOutTime, setClockOutTime] = useState<string | null>(null);
   // Accumulated seconds from CLOSED sessions on the current day. The live tick
@@ -1512,6 +1517,25 @@ export default function AttendancePage() {
                               workingHours: row.hours === "—" ? "" : row.hours,
                               status: row.status,
                             }) as AttStatus;
+                            // Declared company holidays override the generic
+                            // "Week Off" so the row shows the actual holiday name
+                            // (e.g. "Holiday — Diwali"). a11y: aria-label carries
+                            // the full "Holiday: {name}" so SR users hear the
+                            // category word plus the name, per review note.
+                            const iso = logDateToISO(row.date);
+                            const holidayName = holidayMap.get(iso);
+                            if (holidayName && (derived === "Week Off" || derived === "Absent")) {
+                              return (
+                                <span
+                                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700"
+                                  title={`Holiday: ${holidayName}`}
+                                  aria-label={`Holiday: ${holidayName}`}
+                                >
+                                  <Calendar size={11} aria-hidden="true" />
+                                  Holiday · {holidayName}
+                                </span>
+                              );
+                            }
                             return <StatusBadge status={derived} />;
                           })()}
                         </td>

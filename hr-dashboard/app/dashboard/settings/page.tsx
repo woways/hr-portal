@@ -7,7 +7,7 @@ import { auth, firebaseConfig } from "@/lib/firebase";
 import { sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { initializeApp, getApps, deleteApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, collection, getDocs, query, where, getFirestore } from "firebase/firestore";
+import { doc, setDoc, collection, getDocs, query, where, getFirestore, addDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 type SettingsTab = "Company" | "Departments" | "Leave Policies" | "Work Timings" | "Attendance Rules" | "Holiday Calendar" | "Password Reset" | "HR Accounts";
@@ -384,6 +384,52 @@ export default function SettingsPage() {
     }
   }
 
+  // Fan-out one notification per active employee + one HR broadcast so the whole
+  // company sees a newly-declared holiday the moment HR saves it in Settings.
+  // Date is rendered in a human-readable form (per a11y note) so SR users and
+  // sighted users both see "19 October 2026" instead of a raw ISO string.
+  async function broadcastHolidayNotification(h: Holiday) {
+    try {
+      const pretty = new Date(h.date + "T00:00:00").toLocaleDateString("en-IN", {
+        weekday: "long", day: "numeric", month: "long", year: "numeric",
+      });
+      const title   = `Holiday declared: ${h.name}`;
+      const message = `${h.name} is a company holiday on ${pretty}. The portal will mark this day as a non-working day.`;
+      const notifsCol = collection(db, "notifications");
+      // Load active employees (role=employee active) and queue one doc per uid.
+      const empSnap = await getDocs(query(collection(db, "employees"), where("status", "==", "Active")));
+      const writes: Promise<unknown>[] = [];
+      empSnap.docs.forEach((d) => {
+        const data = d.data() as Record<string, unknown>;
+        const empId = String(data.employeeId ?? d.id ?? "");
+        if (!empId) return;
+        writes.push(addDoc(notifsCol, {
+          userId:    empId,
+          empId,
+          type:      "system",
+          title,
+          message,
+          read:      false,
+          createdAt: serverTimestamp(),
+          refId:     h.id,
+        }));
+      });
+      // One HR_PORTAL fan-in notification so the HR notifications page records it.
+      writes.push(addDoc(notifsCol, {
+        userId:    "HR_PORTAL",
+        type:      "system",
+        title,
+        message,
+        read:      false,
+        createdAt: serverTimestamp(),
+        refId:     h.id,
+      }));
+      await Promise.allSettled(writes);
+    } catch (err) {
+      console.error("Holiday broadcast failed", err);
+    }
+  }
+
   function addHoliday() {
     if (!holidayForm.name.trim() || !holidayForm.date) {
       showToast("Please fill in holiday name and date.", false);
@@ -396,6 +442,8 @@ export default function SettingsPage() {
       type: holidayForm.type,
     };
     persistHolidays([...holidays, newH]);
+    // Fire-and-forget so the HR UX stays snappy; errors surface via console.
+    broadcastHolidayNotification(newH);
     setHolidayForm({ name: "", date: "", type: "National" });
     setShowAddHoliday(false);
     showToast(`${newH.name} added to holiday calendar`);

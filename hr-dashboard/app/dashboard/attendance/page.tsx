@@ -15,7 +15,7 @@ import { SkeletonTableRows } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { collection, onSnapshot, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { useHolidays, isNonWorkingDay } from "@/lib/useHolidays";
+import { useHolidays, useHolidayMap, isNonWorkingDay } from "@/lib/useHolidays";
 import { backfillAllEmployees, deletePreStartAttendance } from "@/lib/attendanceBackfill";
 
 type AttendanceStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off" | "Incomplete";
@@ -75,6 +75,8 @@ export default function AttendancePage() {
   // 6-day workweek: live set of declared holidays. Sunday + these are the only
   // non-working days; Saturday counts as a workday. Keyed off settings/holidays.
   const holidaySet = useHolidays();
+  // Human name per ISO date — surfaces as "Holiday · Diwali" in the daily row.
+  const holidayMap = useHolidayMap();
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loadingRecords, setLoadingRecords] = useState(true);
   // Configured Late Login Threshold (HH:MM, 24h) from Settings → Work Timings.
@@ -1655,6 +1657,21 @@ export default function AttendancePage() {
                       const isMissed = !!r.clockIn && !r.clockOut && r.date !== TODAY;
                       const rec = isMissed ? { ...r, status: "Incomplete" as AttendanceStatus } : r;
                       const eff = effectiveStatus(rec) as AttendanceStatus;
+                      // Declared holiday overrides generic Week Off / Absent to
+                      // surface the actual holiday name (a11y: full category word
+                      // in aria-label per review note).
+                      const holidayName = r.date ? holidayMap.get(r.date) : undefined;
+                      if (holidayName && (eff === "Week Off" || eff === "Absent")) {
+                        return (
+                          <span
+                            className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700"
+                            title={`Holiday: ${holidayName}`}
+                            aria-label={`Holiday: ${holidayName}`}
+                          >
+                            Holiday · {holidayName}
+                          </span>
+                        );
+                      }
                       return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor[eff] ?? statusColor[r.status]}`}>{eff}</span>;
                     })()}
                   </td>
