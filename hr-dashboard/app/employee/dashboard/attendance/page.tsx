@@ -1170,8 +1170,32 @@ export default function AttendancePage() {
             const h12 = hh > 12 ? hh - 12 : hh === 0 ? 12 : hh;
             return `${String(h12).padStart(2, "0")}:${String(mm).padStart(2, "0")} ${suffix}`;
           };
+          // Today-is-a-holiday banner: looks up the live `holidayMap` so a
+          // same-day HR holiday declaration shows up immediately. Purely
+          // informational — Clock In button stays enabled so an employee can
+          // still work on a holiday if they choose.
+          const todayIsoLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+          const todayHolidayName = holidayMap.get(todayIsoLocal);
           return (
         <>
+        {todayHolidayName && (
+          <div
+            role="status"
+            className="mb-4 flex items-start gap-3 rounded-xl border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-800"
+          >
+            <Calendar size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <div>
+              <p className="font-semibold">
+                <span className="sr-only">Holiday notice: </span>
+                <span aria-hidden="true">🎉 </span>
+                Today is a Holiday — {todayHolidayName}
+              </p>
+              <p className="text-xs mt-0.5 opacity-85">
+                No work expected today. You can still clock in if you choose to work.
+              </p>
+            </div>
+          </div>
+        )}
         {pastCutoff && (
           <div
             role="alert"

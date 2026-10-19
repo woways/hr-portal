@@ -5,6 +5,7 @@ import {
   CalendarOff, Target, IndianRupee, Megaphone,
 } from "lucide-react";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
+import { useHolidayMap } from "@/lib/useHolidays";
 import {
   collection, query, where, onSnapshot, doc, getDoc,
 } from "firebase/firestore";
@@ -63,6 +64,45 @@ const NOTIF_CLS: Record<string, string> = {
 
 export default function DashboardPage() {
   const { empId, empName, loading: profileLoading } = useEmployeeProfile();
+  // Upcoming-holiday banner source. Groups consecutive dates with the same
+  // name into a single range (e.g. "Dasara — 20–21 October 2026").
+  const holidayMap = useHolidayMap();
+  const upcomingHoliday = (() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const horizon = new Date(today);
+    horizon.setDate(horizon.getDate() + 14); // show anything in the next ~2 weeks
+    // Flatten + sort + filter.
+    const entries = Array.from(holidayMap.entries())
+      .map(([iso, name]) => ({ iso, name, dt: new Date(iso + "T00:00:00") }))
+      .filter(e => e.dt >= today && e.dt <= horizon)
+      .sort((a, b) => a.dt.getTime() - b.dt.getTime());
+    if (entries.length === 0) return null;
+    // Group same-name consecutive runs starting from the earliest.
+    const first = entries[0];
+    const run = [first];
+    for (let i = 1; i < entries.length; i++) {
+      const prev = entries[i - 1];
+      const cur  = entries[i];
+      const dayGap = Math.round((cur.dt.getTime() - prev.dt.getTime()) / 86400000);
+      if (cur.name === first.name && dayGap === 1) run.push(cur);
+      else break;
+    }
+    const start = run[0].dt;
+    const end   = run[run.length - 1].dt;
+    const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
+    const fmtDay = (d: Date) => String(d.getDate());
+    const fmtMY  = (d: Date) => d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    const fmtFull = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+    const rangeLabel =
+      run.length === 1 ? fmtFull(start) :
+      sameMonth        ? `${fmtDay(start)}–${fmtDay(end)} ${fmtMY(end)}` :
+                         `${fmtFull(start)} – ${fmtFull(end)}`;
+    const srLabel =
+      run.length === 1 ? fmtFull(start) : `${fmtFull(start)} to ${fmtFull(end)}`;
+    const isToday = start.getTime() === today.getTime();
+    return { name: first.name, rangeLabel, srLabel, isToday };
+  })();
   const [currentTime, setCurrentTime] = useState("");
   const [currentDate, setCurrentDate] = useState("");
   const [clockRec, setClockRec] = useState<ClockRecord | null>(null);
@@ -212,6 +252,34 @@ export default function DashboardPage() {
           <p className="text-2xl font-bold text-[#4F3CC9] tabular-nums">{currentTime}</p>
         </div>
       </div>
+
+      {/* Upcoming holiday banner — purely informational; role=status implies
+          polite announcement so SR users hear it on initial focus. */}
+      {upcomingHoliday && (
+        <section
+          role="status"
+          aria-labelledby="holiday-banner-title"
+          className="rounded-2xl border border-purple-200 bg-purple-50 px-5 py-4 flex items-start gap-3"
+        >
+          <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center shrink-0" aria-hidden="true">
+            <CalendarDays size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 id="holiday-banner-title" className="text-base font-bold text-purple-800">
+              <span aria-hidden="true">🎉 </span>
+              {upcomingHoliday.isToday ? "Today is a Holiday" : "Upcoming Holiday"}
+            </h2>
+            <p className="text-sm text-purple-800 mt-0.5">
+              <strong>{upcomingHoliday.name}</strong>
+              {" — "}
+              <span aria-label={upcomingHoliday.srLabel}>{upcomingHoliday.rangeLabel}</span>
+            </p>
+            <p className="text-xs text-purple-700 mt-1 opacity-80">
+              No work expected on these days. Your attendance will be marked as Holiday automatically.
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* Attendance Overview */}
       <div>
