@@ -1045,94 +1045,7 @@ export default function AttendancePage() {
       );
     })()}
 
-    {showLateModal && lateReqTarget && (
-      <div
-        className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-        onClick={closeLateRequestModal}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="late-req-title"
-        onKeyDown={(e) => { if (e.key === "Escape") closeLateRequestModal(); }}
-      >
-        <div className="bg-white rounded-2xl w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <div>
-              <h3 id="late-req-title" className="font-bold text-gray-900">Raise Late Login Request</h3>
-              <p className="text-xs text-gray-400 mt-0.5">Ask HR to excuse your late clock-in</p>
-            </div>
-            <button
-              type="button"
-              onClick={closeLateRequestModal}
-              aria-label="Close late login request dialog"
-            >
-              <XCircle size={20} className="text-gray-400" />
-            </button>
-          </div>
-          <div className="p-6 space-y-4">
-            <div className="bg-orange-50 rounded-xl px-4 py-3 text-sm text-orange-700 flex items-start gap-2">
-              <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-              <span>Your actual clock-in and clock-out times are always preserved. If HR approves, your status for the day updates to <strong>Present</strong>; your working hours stay based on the actual times.</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className="text-xs font-medium text-gray-600 mb-1">Date</div>
-                <div className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-100 text-sm text-gray-900">
-                  {lateReqTarget?.date || lateReqForm.selectedDate || "—"}
-                  {lateReqTarget?.day ? <span className="text-gray-400"> · {lateReqTarget.day}</span> : null}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-medium text-gray-600 mb-1">Actual Clock-In</div>
-                <div className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-100 text-sm text-gray-900">
-                  {lateReqForm.clockInTime || "—"}
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="late-req-reason" className="text-xs font-medium text-gray-600 block mb-1">
-                Reason <span className="text-red-500" aria-hidden="true">*</span>
-              </label>
-              <textarea
-                id="late-req-reason"
-                ref={lateReasonRef}
-                rows={4}
-                placeholder="e.g. Traffic jam on ORR, unwell in the morning, urgent family matter…"
-                value={lateReqForm.reason}
-                onChange={(e) => { setLateReqForm({ ...lateReqForm, reason: e.target.value }); if (lateReqError) setLateReqError(""); }}
-                aria-required="true"
-                aria-invalid={!!lateReqError}
-                aria-describedby={lateReqError ? "late-req-error" : undefined}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9] resize-none"
-              />
-              {lateReqError && (
-                <p id="late-req-error" role="alert" className="mt-1 text-xs text-red-600">
-                  {lateReqError}
-                </p>
-              )}
-            </div>
-
-            <div className="flex gap-3 pt-1">
-              <button
-                type="button"
-                onClick={closeLateRequestModal}
-                className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submitLateRequest}
-                className="flex-1 bg-[#4F3CC9] text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-[#3d2fa3]"
-              >
-                Submit to HR
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )}
+    {/* Late Login Request modal removed — feature retired. */}
 
     <div className="space-y-6">
       {/* Header */}
@@ -1281,7 +1194,7 @@ export default function AttendancePage() {
           { label: "Present Days",   val: presentCount,  sub: `Out of ${totalWorkDays} working days`, icon: <CheckCircle size={18} className="text-green-600" />,  bg: "bg-green-50"  },
           { label: "Absent Days",    val: absentCount,   sub: "Unmarked absences",                     icon: <XCircle size={18} className="text-red-500" />,        bg: "bg-red-50"    },
           { label: "Half Days",      val: halfDayCount,  sub: "Partial attendance",                    icon: <AlertCircle size={18} className="text-yellow-500" />, bg: "bg-yellow-50" },
-          { label: "Late Logins",    val: lateCount,     sub: `After ${String(lateHour).padStart(2,"0")}:${String(lateMinute).padStart(2,"0")}`, icon: <Clock size={18} className="text-[#4F3CC9]" />,        bg: "bg-purple-50" },
+          // Late Logins KPI tile removed — Late Login feature retired.
         ].map(({ label, val, sub, icon, bg }) => (
           <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-center justify-between mb-3">
@@ -1583,23 +1496,7 @@ export default function AttendancePage() {
                             if (req.status === "Approved") return <span className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request approved">✓ Approved</span>;
                             return <span className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-full font-medium" aria-label="Regularization request rejected">✗ Rejected</span>;
                           })()}
-                          {row.status !== "Absent" && row.late && (() => {
-                            const lreq = getLateRequestForDate(row.date);
-                            if (!lreq) return (
-                              <button
-                                type="button"
-                                ref={row.date === getTodayDateStr() ? lateModalOpenerRef : undefined}
-                                onClick={() => openLateRequestModal(row)}
-                                aria-label={`Raise Late Login Request for ${row.date}`}
-                                className="text-xs bg-orange-100 text-orange-700 hover:bg-orange-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 px-3 py-1.5 rounded-full font-medium whitespace-nowrap"
-                              >
-                                Raise Late Login Request
-                              </button>
-                            );
-                            if (lreq.status === "Pending")  return <span className="text-xs bg-yellow-100 text-yellow-700 px-3 py-1.5 rounded-full font-medium" aria-label="Late Login Request pending">⏳ Pending Review</span>;
-                            if (lreq.status === "Approved") return <span className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-full font-medium" aria-label="Late Login Request approved by HR">✓ Approved</span>;
-                            return <span className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-full font-medium" aria-label="Late Login Request rejected by HR">✗ Rejected</span>;
-                          })()}
+                          {/* Late Login Request action removed — Late feature retired. */}
                         </td>
                       </tr>
                     ))}

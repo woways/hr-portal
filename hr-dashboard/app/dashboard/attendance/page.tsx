@@ -163,7 +163,7 @@ export default function AttendancePage() {
   // count as WFH; On-site (office) employees are never defaulted to WFH.
   function defaultLocation(workMode: string): WorkLocation {
     const wm = canonicalWorkMode(workMode);
-    if (wm === "Remote" || wm === "Hybrid") return "WFH";
+    void wm; // WFH feature retired — everyone defaults to Office; legacy Client Site preserved per row.
     return "Office"; // On-site / office / anything else
   }
 
@@ -755,7 +755,10 @@ export default function AttendancePage() {
       // "Late" filter uses the derived cutoff rule so clicking the Late KPI
       // tile surfaces every post-cutoff punch, not just rows whose stored
       // status column happens to equal "Late".
-      (statusFilter === "Late" ? lateByThreshold(r) : r.status === statusFilter);
+      // Late option removed from filter dropdown; derivation gracefully
+      // defaults to "All" when an unknown value (e.g. stale ?status=Late
+      // deep-link) is passed.
+      (r.status === statusFilter);
     const matchManager = managerFilter === "All" || r.manager === managerFilter;
     const matchLocation = locationFilter === "All" || r.location === locationFilter;
     return matchSearch && matchStatus && matchManager && matchLocation;
@@ -964,7 +967,7 @@ export default function AttendancePage() {
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-400">Work Mode</label>
             <select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)} className={inputCls}>
-              {["All","Office","WFH","Client Site"].map(l => <option key={l}>{l}</option>)}
+              {["All","Office","Client Site"].map(l => <option key={l}>{l}</option>)}
             </select>
           </div>
           <div className="flex flex-col gap-1">
@@ -976,7 +979,7 @@ export default function AttendancePage() {
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-400">Status</label>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputCls}>
-              {["All","Present","Absent","Late","Half Day","Leave","Week Off"].map(s => <option key={s}>{s}</option>)}
+              {["All","Present","Absent","Half Day","Leave","Week Off"].map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
           <div className="flex flex-col gap-1" ref={searchContainerRef}>
@@ -1047,28 +1050,24 @@ export default function AttendancePage() {
       {!loadingRecords && <p className="text-xs text-gray-400 -mt-2">Showing today&apos;s attendance for {records.length} active employees · auto-refreshes every 10s</p>}
 
       {/* ── KPI Cards ── Clickable: filters Daily Attendance to the matching rows */}
-      <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Late and WFH KPI tiles removed with their respective features. */}
         {[
           { label: "Present",   val: presentCount,  statusKey: "Present",  icon: <Users size={16} aria-hidden="true" />,        bg: "bg-green-50",   text: "text-green-700",  ring: "focus-visible:ring-green-500"  },
           { label: "Absent",    val: absentCount,   statusKey: "Absent",   icon: <AlertTriangle size={16} aria-hidden="true" />, bg: "bg-red-50",     text: "text-red-700",    ring: "focus-visible:ring-red-500"    },
-          { label: "Late",      val: lateCount,     statusKey: "Late",     icon: <Clock size={16} aria-hidden="true" />,         bg: "bg-orange-50",  text: "text-orange-700", ring: "focus-visible:ring-orange-500" },
           { label: "Half Day",  val: halfDayCount,  statusKey: "Half Day", icon: <TrendingUp size={16} aria-hidden="true" />,    bg: "bg-yellow-50",  text: "text-yellow-700", ring: "focus-visible:ring-yellow-500" },
-          { label: "WFH",       val: wfhCount,      locKey:    "WFH",      icon: <Wifi size={16} aria-hidden="true" />,          bg: "bg-blue-50",    text: "text-blue-700",   ring: "focus-visible:ring-blue-500"   },
           { label: "Overtime",  val: overtimeCount, statusKey: null,       icon: <Clock size={16} aria-hidden="true" />,         bg: "bg-purple-50",  text: "text-purple-700", ring: "focus-visible:ring-purple-500" },
         ].map((c) => (
           <button
             key={c.label}
             type="button"
             onClick={() => {
-              // Reset the complementary filter so only the clicked dimension applies.
-              if ("locKey" in c && c.locKey) {
-                setStatusFilter("All");
-                setLocationFilter(c.locKey);
-              } else if (c.statusKey) {
+              // After WFH tile removal, every remaining tile either filters by
+              // status or (Overtime) applies no filter and just jumps to the log.
+              if (c.statusKey) {
                 setLocationFilter("All");
                 setStatusFilter(c.statusKey);
               } else {
-                // Overtime: no dedicated filter; just surface the daily table.
                 setStatusFilter("All");
                 setLocationFilter("All");
               }
@@ -1132,12 +1131,11 @@ export default function AttendancePage() {
             <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">{month}</span>
           </div>
 
-          {/* Today's quick stats */}
-          <div className="grid grid-cols-4 gap-2">
+          {/* Today's quick stats — Late tile removed with the Late Login feature. */}
+          <div className="grid grid-cols-3 gap-2">
             {[
               { label: "Present",  val: presentCount,  cls: "bg-green-50  text-green-700"  },
               { label: "Absent",   val: absentCount,   cls: "bg-red-50    text-red-700"    },
-              { label: "Late",     val: lateCount,     cls: "bg-orange-50 text-orange-700" },
               { label: "On Leave", val: filtered.filter(r => r.status === "Leave").length, cls: "bg-purple-50 text-purple-700" },
             ].map(s => (
               <div key={s.label} className={`rounded-xl p-2 text-center ${s.cls}`}>
@@ -1245,54 +1243,8 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* ── Row 2: Late Login Tracker + Department Headcount ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Late Login Tracker */}
-        <div className="bg-white rounded-2xl shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold text-gray-900">Late Login Tracker</h2>
-            <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Top Offenders</span>
-          </div>
-          <div className="space-y-3">
-            {computedLateTracker.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No late logins recorded.</p>}
-            {computedLateTracker.map((emp, i) => (
-              <div key={emp.empId} className="flex items-center gap-3">
-                <span className="text-xs font-bold text-gray-400 w-5">#{i+1}</span>
-                <div className="w-8 h-8 rounded-full bg-[#EDE9FF] text-[#4F3CC9] flex items-center justify-center text-xs font-bold shrink-0">
-                  {emp.name.split(" ").map(n => n[0]).join("")}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{emp.name}</p>
-                  <p className="text-xs text-gray-400">{emp.empId}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-orange-600">{emp.lateDays} days</p>
-                  <p className="text-xs text-gray-400">avg +{emp.avgDelay}</p>
-                </div>
-                <div className="w-20">
-                  <div className="w-full bg-gray-100 rounded-full h-1.5">
-                    <div className="h-1.5 rounded-full bg-orange-400" style={{ width: `${(emp.lateDays / 10) * 100}%` }} />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5">
-            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3">Today&apos;s Late Arrivals</h3>
-            <div className="space-y-1">
-              {filtered.filter(r => lateByThreshold(r)).map(r => (
-                <div key={r.id} className="flex items-center justify-between px-3 py-2 bg-red-50 rounded-xl">
-                  <span className="text-sm text-gray-700">{r.name}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-red-600 font-medium">{r.clockIn}</span>
-                    <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Late</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
+      {/* Late Login Tracker widget removed with the Late Login feature. */}
+      <div className="grid grid-cols-1 gap-6">
         {/* Department Headcount */}
         <div className="bg-white rounded-2xl shadow-sm p-6">
           <div className="flex items-center gap-2 mb-4">
@@ -1322,131 +1274,7 @@ export default function AttendancePage() {
         {activeTab === "Attendance Requests" && (
           <div className="p-6 space-y-6">
 
-      {/* ── Late Login Requests ── */}
-      {lateRequests.filter((r) => r.status === "Pending").length > 0 && (
-        <section
-          className="bg-white rounded-2xl shadow-sm overflow-hidden border-l-4 border-amber-500"
-          aria-labelledby="late-req-heading"
-        >
-          <div className="px-6 py-4 border-b flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <h2 id="late-req-heading" className="text-base font-semibold text-gray-900">Late Login Requests</h2>
-              <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
-                {lateRequests.filter((r) => r.status === "Pending").length} Pending
-              </span>
-            </div>
-            <p className="text-xs text-gray-400">Actual clock-in / out times are preserved regardless of decision.</p>
-          </div>
-          <ul className="divide-y divide-gray-50">
-            {lateRequests.filter((r) => r.status === "Pending").map((req) => (
-              <li key={req.id} className="px-6 py-5 flex flex-col md:flex-row md:items-start gap-4">
-                <div className="flex-1 space-y-2">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <div className="w-8 h-8 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0" aria-hidden="true">
-                      {(req.empName || "?").split(" ").map((n) => n[0]).join("").slice(0,2)}
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">{req.empName || "—"}</p>
-                      <p className="text-xs text-gray-400">{req.empId}</p>
-                    </div>
-                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                      {req.date}{req.day ? ` · ${req.day}` : ""}
-                    </span>
-                    <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-medium">
-                      Clock-In: {req.clockInTime || "—"}
-                    </span>
-                    {req.cutoff && (
-                      <span className="text-xs bg-gray-50 text-gray-500 px-2 py-0.5 rounded-full">
-                        Cutoff: {req.cutoff}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-sm text-gray-600 bg-gray-50 rounded-xl px-4 py-3 leading-relaxed">
-                    &ldquo;{req.reason}&rdquo;
-                  </p>
-                  <label htmlFor={`late-comment-${req.id}`} className="sr-only">
-                    HR comment for {req.empName || "employee"} on {req.date}
-                  </label>
-                  <input
-                    id={`late-comment-${req.id}`}
-                    placeholder="Add a comment (optional)..."
-                    value={lateHrComment[req.id] ?? ""}
-                    onChange={(e) => setLateHrComment({ ...lateHrComment, [req.id]: e.target.value })}
-                    className="w-full text-sm px-3 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
-                  />
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => actionLateRequest(req.id, "Approved")}
-                    aria-label={`Approve late login for ${req.empName || req.empId} on ${req.date}`}
-                    className="px-5 py-2 rounded-xl bg-green-500 text-white text-sm font-semibold hover:bg-green-600 transition-colors"
-                  >
-                    ✓ Approve
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => actionLateRequest(req.id, "Rejected")}
-                    aria-label={`Reject late login for ${req.empName || req.empId} on ${req.date}`}
-                    className="px-5 py-2 rounded-xl bg-red-100 text-red-600 text-sm font-semibold hover:bg-red-200 transition-colors"
-                  >
-                    ✗ Reject
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/* Reviewed late login requests — compact table */}
-      {lateRequests.filter((r) => r.status !== "Pending").length > 0 && (
-        <section className="bg-white rounded-2xl shadow-sm overflow-hidden border border-gray-100" aria-labelledby="late-reviewed-heading">
-          <div className="px-6 py-3 border-b flex items-center gap-2">
-            <h2 id="late-reviewed-heading" className="text-sm font-semibold text-gray-700">Reviewed Late Logins</h2>
-            <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-              {lateRequests.filter((r) => r.status !== "Pending").length}
-            </span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <caption className="sr-only">Late login requests already reviewed by HR</caption>
-              <thead>
-                <tr className="bg-[#F5F3FF] text-gray-500 text-xs uppercase tracking-wide">
-                  <th scope="col" className="px-5 py-3 text-left">Employee</th>
-                  <th scope="col" className="px-5 py-3 text-left">Emp ID</th>
-                  <th scope="col" className="px-5 py-3 text-left">Date</th>
-                  <th scope="col" className="px-5 py-3 text-left">Clock-In</th>
-                  <th scope="col" className="px-5 py-3 text-left">Reason</th>
-                  <th scope="col" className="px-5 py-3 text-left">HR Comment</th>
-                  <th scope="col" className="px-5 py-3 text-left">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {lateRequests.filter((r) => r.status !== "Pending").map((req) => (
-                  <tr key={req.id} className={`hover:bg-gray-50 transition-colors ${req.status === "Approved" ? "bg-green-50/20" : "bg-red-50/20"}`}>
-                    <td className="px-5 py-3 font-medium text-gray-900 whitespace-nowrap">{req.empName || "—"}</td>
-                    <td className="px-5 py-3 text-gray-500 text-xs">{req.empId || "—"}</td>
-                    <td className="px-5 py-3 text-gray-600 whitespace-nowrap">{req.date}</td>
-                    <td className="px-5 py-3 text-gray-600">{req.clockInTime || "—"}</td>
-                    <td className="px-5 py-3 text-gray-600 max-w-[220px]">
-                      <span className="block truncate" title={req.reason}>{req.reason || "—"}</span>
-                    </td>
-                    <td className="px-5 py-3 text-gray-500 text-xs max-w-[160px]">
-                      <span className="block truncate" title={req.hrComment}>{req.hrComment || "—"}</span>
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${req.status === "Approved" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                        {req.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+      {/* Late Login Requests panels (pending + reviewed) removed with the Late feature. */}
 
       {/* ── Regularization Requests ── */}
       {regRequests.filter((r) => r.status === "Pending").length > 0 && (

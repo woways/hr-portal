@@ -681,21 +681,10 @@ export default function SettingsPage() {
                         </div>
                       </div>
                     ))}
-                    <div>
-                      <label htmlFor="late-login-cutoff" className="text-xs font-medium text-gray-600 block mb-1">Late Login Cutoff</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          id="late-login-cutoff"
-                          type="time"
-                          value={attRules.lateLoginCutoff}
-                          onChange={(e) => setAttRules({ ...attRules, lateLoginCutoff: e.target.value })}
-                          aria-describedby="late-login-cutoff-help"
-                          className={inputCls}
-                        />
-                        <span className="text-sm text-gray-500 shrink-0">HH:MM</span>
-                      </div>
-                      <p id="late-login-cutoff-help" className="text-[11px] text-gray-500 mt-1">Employees clocking in after this time are marked <b>Late</b> and can raise a Late Login Request for HR review.</p>
-                    </div>
+                    {/* Late Login Cutoff removed — the Late Login feature is no
+                        longer part of the HR Portal. attRules.lateLoginCutoff
+                        is still carried in state for backward compatibility
+                        with older settings docs but is no longer configurable. */}
                     <div>
                       <label htmlFor="clock-out-cutoff" className="text-xs font-medium text-gray-600 block mb-1">Clock-Out Cutoff</label>
                       <div className="flex items-center gap-2">

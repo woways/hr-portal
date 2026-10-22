@@ -132,18 +132,11 @@ export function deriveAttendanceStatus(rec: AttStatusRecord, t?: AttThresholds):
   const clockedOut = !!clockOut && clockOut !== "Ongoing" && clockOut !== "—" && clockOut !== "" && clockOut !== "--:--";
   if (clockedOut && parseWorkedHours(rec) <= 0) return "Absent"; // 0 hours worked → not Present
 
-  // Late-login handling — clockIn strictly after configured cutoff is "Late".
-  // An HR-approved late-login request excuses the lateness (Present); pending
-  // request surfaces as "Late (Pending Review)" so both employee and HR can see
-  // the review is in flight without losing the original Late signal.
-  const cutoff = (t?.lateLoginCutoff ?? CONFIGURED_ATT_THRESHOLDS.lateLoginCutoff);
-  const lateMins = isLateClockIn(clockIn, cutoff);
-  if (lateMins != null && lateMins > 0) {
-    const req = rec.lateRequestStatus;
-    if (req === "Approved") return "Present";
-    if (req === "Pending")  return "Late (Pending Review)";
-    return "Late";
-  }
-
+  // Late Login feature removed — late clock-ins are no longer surfaced as a
+  // distinct status. Any day with a valid clock-in that recorded > 0 hours
+  // (or is still ongoing) renders as Present. The `lateRequestStatus` and
+  // configured cutoff fields are kept in the type for backward compatibility
+  // with historical records but no longer influence derivation.
+  void t;
   return "Present";
 }

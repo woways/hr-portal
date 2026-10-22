@@ -140,7 +140,7 @@ const managers: string[] = [];
 
 const blankForm: Omit<Employee, "id"> = {
   name: "", designation: "", department: "", role: ROLES[0], reportingManager: "",
-  workMode: "Remote", employmentType: "Full-Time", doj: "", status: "Active",
+  workMode: "On-site", employmentType: "Full-Time", doj: "", status: "Active",
   email: "", phone: "", emergencyContact: "", emergencyName: "",
   nationality: "Indian", maritalStatus: "Single", fatherSpouseName: "",
   alternatePhone: "", city: "", state: "", pinCode: "",
@@ -554,9 +554,17 @@ function FormModal({
               </div>
               <div>
                 <label className={labelCls}>Work Mode</label>
-                <select value={form.workMode} onChange={(e) => f("workMode", e.target.value as WorkMode)} className={selectCls}>
-                  {["Remote","On-site","Hybrid"].map(w => <option key={w}>{w}</option>)}
+                {/* WFH feature retired — only On-site is offered for new records.
+                    Legacy employees with Remote/Hybrid keep their stored value;
+                    we surface it as a disabled option so an admin opening the
+                    Edit modal doesn't silently overwrite it on save. */}
+                <select value={form.workMode} onChange={(e) => f("workMode", e.target.value as WorkMode)} className={selectCls} aria-describedby="work-mode-help">
+                  <option value="On-site">On-site</option>
+                  {form.workMode && form.workMode !== "On-site" && (
+                    <option value={form.workMode} disabled>{form.workMode} (legacy)</option>
+                  )}
                 </select>
+                <p id="work-mode-help" className="text-[11px] text-gray-500 mt-1">On-site only — remote / hybrid options have been removed.</p>
               </div>
               <div>
                 <label className={labelCls}>Shift</label>
@@ -1062,8 +1070,9 @@ function BulkImportModal({ onImport, onClose, nextIdStart, existingEmails }: {
                           </select>
                         </td>
                         <td className="px-2 py-2">
-                          <select value={row.workMode || "Remote"} onChange={(e) => setCell(i, "workMode", e.target.value)} className={selectCls}>
-                            {["Remote","On-site","Hybrid"].map(w => <option key={w}>{w}</option>)}
+                          <select value={row.workMode || "On-site"} onChange={(e) => setCell(i, "workMode", e.target.value)} className={selectCls}>
+                            {/* WFH feature retired — only On-site for bulk-imported rows. */}
+                            {["On-site"].map(w => <option key={w}>{w}</option>)}
                           </select>
                         </td>
                         <td className="px-2 py-2">
@@ -1269,6 +1278,9 @@ export default function EmployeesPage() {
   // button that opened the dialog on close (ref map keyed by employee id).
   const [resetTarget, setResetTarget] = useState<Employee | null>(null);
   const [resetSending, setResetSending] = useState(false);
+  const [resetCustomPwd, setResetCustomPwd] = useState("");
+  const [resetShowPwd, setResetShowPwd] = useState(false);
+  const [resetPwdError, setResetPwdError] = useState("");
   const resetBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   // After-delete toast with a direct link to the Firebase Auth users page so
   // HR can finish revoking the login in one click (client SDK can't delete
@@ -1632,6 +1644,9 @@ export default function EmployeesPage() {
   function closeResetDialog() {
     const id = resetTarget?.id;
     setResetTarget(null);
+    setResetCustomPwd("");
+    setResetShowPwd(false);
+    setResetPwdError("");
     if (id) setTimeout(() => resetBtnRefs.current[id]?.focus(), 50);
   }
   // Dual-path "Reset Credentials" — try to CREATE a Firebase Auth account
@@ -1647,8 +1662,15 @@ export default function EmployeesPage() {
       showToast("This employee has no email on file. Edit the record to add one first.", false);
       return;
     }
+    // Validate optional custom password BEFORE touching Firebase.
+    const customPwd = resetCustomPwd.trim();
+    if (customPwd && customPwd.length < 8) {
+      setResetPwdError("Password must be at least 8 characters.");
+      return;
+    }
+    setResetPwdError("");
     setResetSending(true);
-    const tempPassword = generateTempPassword();
+    const tempPassword = customPwd || generateTempPassword();
     let authCreated = false;
     try {
       const secondaryApp = initializeApp(firebaseConfig, `reset-${target.id}-${Date.now()}`);
@@ -2456,6 +2478,44 @@ export default function EmployeesPage() {
                   Firebase will try to create a login account for <span dir="ltr" className="font-medium text-gray-800">{resetTarget.email || "—"}</span> first. If the email already has one, Firebase will instead email a password-reset link to that address.
                 </p>
               </div>
+            </div>
+            {/* Optional custom password — blank → auto-generated random. Only
+                used when the account is actually created; silently ignored on
+                the reset-email fallback (toast surfaces that outcome). */}
+            <div className="mb-4">
+              <label htmlFor="reset-cred-pwd" className="text-xs font-medium text-gray-700 block mb-1">
+                Set a password <span className="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="reset-cred-pwd"
+                  type={resetShowPwd ? "text" : "password"}
+                  value={resetCustomPwd}
+                  onChange={(e) => { setResetCustomPwd(e.target.value); if (resetPwdError) setResetPwdError(""); }}
+                  autoComplete="new-password"
+                  aria-describedby={resetPwdError ? "reset-cred-pwd-help reset-cred-pwd-err" : "reset-cred-pwd-help"}
+                  aria-invalid={!!resetPwdError}
+                  placeholder="e.g. Welcome@2026"
+                  className="w-full px-3 py-2 pr-10 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
+                  disabled={resetSending}
+                />
+                <button
+                  type="button"
+                  onClick={() => setResetShowPwd((v) => !v)}
+                  aria-pressed={resetShowPwd}
+                  aria-label={resetShowPwd ? "Hide password" : "Show password"}
+                  disabled={resetSending}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9]"
+                >
+                  {resetShowPwd ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+                </button>
+              </div>
+              <p id="reset-cred-pwd-help" className="mt-1 text-[11px] text-gray-500">
+                Leave blank to auto-generate. Minimum 8 characters. Ignored if the email already has a login (reset email sent instead).
+              </p>
+              {resetPwdError && (
+                <p id="reset-cred-pwd-err" role="alert" className="mt-1 text-[11px] text-red-600">{resetPwdError}</p>
+              )}
             </div>
             <div className="flex gap-2">
               <button
