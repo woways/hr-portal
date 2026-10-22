@@ -1629,6 +1629,11 @@ export default function EmployeesPage() {
     setResetTarget(null);
     if (id) setTimeout(() => resetBtnRefs.current[id]?.focus(), 50);
   }
+  // Dual-path "Reset Credentials" — try to CREATE a Firebase Auth account
+  // with a fresh password first (handles the common case where the Firestore
+  // employee record exists but the Auth account was never created / was
+  // deleted). If the email already has an Auth user, fall back to the standard
+  // sendPasswordResetEmail flow.
   async function sendResetLink() {
     if (!resetTarget || resetSending) return;
     const target = resetTarget;
@@ -1638,19 +1643,58 @@ export default function EmployeesPage() {
       return;
     }
     setResetSending(true);
+    const tempPassword = generateTempPassword();
+    let authCreated = false;
     try {
-      await sendPasswordResetEmail(getAuth(), email);
-      showToast(`Reset link sent to ${email}.`, true);
+      const secondaryApp = initializeApp(firebaseConfig, `reset-${target.id}-${Date.now()}`);
+      const secondaryAuth = getAuth(secondaryApp);
+      try {
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
+        authCreated = true;
+        await createUserProfile({
+          uid: cred.user.uid,
+          email,
+          name: target.name,
+          role: "employee",
+          employeeId: target.id,
+          department: target.department,
+          createdAt: new Date().toISOString(),
+        });
+        try { const { initPasswordChangedFlag } = await import("@/lib/passwordFlag"); await initPasswordChangedFlag(email); } catch { /* non-fatal */ }
+        await secondaryAuth.signOut();
+        await deleteApp(secondaryApp);
+      } catch (createErr) {
+        const ce = createErr as { code?: string; message?: string };
+        try { await deleteApp(secondaryApp); } catch { /* ignore */ }
+        if (ce?.code === "auth/email-already-in-use") {
+          // Account already exists — fall through to the reset-email path.
+          await sendPasswordResetEmail(getAuth(), email);
+          showToast(`Account already exists — password reset link sent to ${email}.`, true);
+          closeResetDialog();
+          return;
+        }
+        throw createErr; // other creation errors handled below
+      }
+      // Create succeeded — show the credentials popup so HR can share.
+      setCreatedCreds({
+        name: target.name,
+        email,
+        password: tempPassword,
+        empId: target.id,
+        authError: null,
+      });
+      showToast(`Login created for ${target.name} — share the credentials shown.`, true);
       closeResetDialog();
     } catch (err) {
       const e = err as { code?: string; message?: string };
-      console.error("sendPasswordResetEmail failed", e);
-      const reason = e?.code === "auth/user-not-found"
-        ? "No Firebase account exists for this email. The employee may have never logged in — add them again from the Add Employee form."
-        : e?.code === "auth/invalid-email"
-          ? "Firebase rejected this email format."
-          : (e?.message || "Failed to send reset link.");
+      console.error("Reset Credentials failed", e);
+      const reason =
+        e?.code === "auth/invalid-email"       ? "Firebase rejected this email format." :
+        e?.code === "auth/weak-password"       ? "Firebase rejected the generated password. Try again." :
+        e?.code === "auth/user-not-found"      ? "No Firebase account exists for this email, and create failed. Please contact admin." :
+        (e?.message || "Could not reset credentials. Please try again.");
       showToast(reason, false);
+      void authCreated;
     } finally {
       setResetSending(false);
     }
@@ -2384,6 +2428,7 @@ export default function EmployeesPage() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="reset-cred-title"
+          aria-describedby="reset-cred-body"
           onKeyDown={(e) => { if (e.key === "Escape") closeResetDialog(); }}
         >
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl p-6" onClick={(e) => e.stopPropagation()}>
@@ -2393,8 +2438,8 @@ export default function EmployeesPage() {
               </div>
               <div>
                 <h2 id="reset-cred-title" className="text-base font-bold text-gray-900">Reset credentials for {resetTarget.name}?</h2>
-                <p className="text-xs text-gray-500 mt-1">
-                  Firebase will email <span dir="ltr" className="font-medium text-gray-800">{resetTarget.email || "—"}</span> a password-reset link. The employee sets their own new password via that link.
+                <p id="reset-cred-body" className="text-xs text-gray-500 mt-1">
+                  Firebase will try to create a login account for <span dir="ltr" className="font-medium text-gray-800">{resetTarget.email || "—"}</span> first. If the email already has one, Firebase will instead email a password-reset link to that address.
                 </p>
               </div>
             </div>
@@ -2415,7 +2460,7 @@ export default function EmployeesPage() {
                 className="flex-1 bg-[#4F3CC9] text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-[#3d2fa8] disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
               >
                 {resetSending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <KeyRound size={14} aria-hidden="true" />}
-                {resetSending ? "Sending…" : "Send Reset Link"}
+                {resetSending ? "Working…" : "Reset Credentials"}
               </button>
             </div>
           </div>
