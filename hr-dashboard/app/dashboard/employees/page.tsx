@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Eye, Pencil, Trash2, X, Plus, Search, Upload, Download, Rows3, Copy, CheckCircle2, FileText, Clock, CheckCircle, KeyRound, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Pencil, Trash2, X, Plus, Search, Upload, Download, Rows3, Copy, CheckCircle2, FileText, Clock, CheckCircle, KeyRound, Loader2, ExternalLink } from "lucide-react";
 import * as XLSX from "xlsx";
 import { initializeApp, deleteApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
@@ -11,7 +11,7 @@ import { invalidateEmployees } from "@/lib/cachedService";
 import { computeNextEmployeeId } from "@/lib/employeeId";
 import { isValidJobTitle } from "@/lib/jobTitle";
 import { readCache, writeCache } from "@/lib/cache";
-import { getDoc, doc as fsDoc } from "firebase/firestore";
+import { getDoc, doc as fsDoc, collection, query, where, getDocs, doc, deleteDoc } from "firebase/firestore";
 import { DEPARTMENTS } from "@/lib/constants";
 import { useDepartments } from "@/lib/useDepartments";
 import { canonicalWorkMode, canonicalEmploymentType, canonicalDepartment, isKnownDepartment } from "@/lib/enums";
@@ -876,7 +876,7 @@ function rowToEmployee(row: BulkRow, id: string): Employee {
 }
 
 function BulkImportModal({ onImport, onClose, nextIdStart, existingEmails }: {
-  onImport: (emps: Employee[]) => void;
+  onImport: (emps: Employee[], defaultPassword?: string) => void;
   onClose: () => void;
   nextIdStart: number;
   existingEmails: Set<string>;
@@ -887,6 +887,11 @@ function BulkImportModal({ onImport, onClose, nextIdStart, existingEmails }: {
   const [csvRows, setCsvRows] = useState<BulkRow[]>([]);
   const [csvName, setCsvName] = useState("");
   const [toast, setToast] = useState("");
+  // Optional default password for every new Firebase Auth account created in
+  // this import batch. Blank = per-row random 12-char (existing behaviour).
+  const [defaultPassword, setDefaultPassword] = useState("");
+  const [showDefaultPwd, setShowDefaultPwd] = useState(false);
+  const [defaultPwdError, setDefaultPwdError] = useState("");
 
   // Live duplicate context over whatever rows are currently in view, so the
   // preview flags duplicate emails (against the system and within the file)
@@ -954,7 +959,15 @@ function BulkImportModal({ onImport, onClose, nextIdStart, existingEmails }: {
     const emps = valid.map((r, i) =>
       rowToEmployee(r, `EMP${String(nextIdStart + i).padStart(3, "0")}`)
     );
-    onImport(emps);
+    // Validate default password if provided; 8-char minimum keeps parity with
+    // Firebase Auth's own minimum. Error renders inline + text, not color-only.
+    const trimmedPwd = defaultPassword.trim();
+    if (trimmedPwd && trimmedPwd.length < 8) {
+      setDefaultPwdError("Password must be at least 8 characters.");
+      return;
+    }
+    setDefaultPwdError("");
+    onImport(emps, trimmedPwd || undefined);
   }
 
   const previewRows = mode === "multi" ? rows : csvRows;
@@ -1156,6 +1169,47 @@ function BulkImportModal({ onImport, onClose, nextIdStart, existingEmails }: {
           )}
         </div>
 
+        {/* Optional default-password row — if set, every newly-created
+            Firebase Auth account in this batch uses it, so HR can share one
+            memorable password with the team. Leave blank for per-row random. */}
+        <div className="px-6 pt-4 border-t shrink-0">
+          <label htmlFor="bulk-default-pwd" className="text-xs font-medium text-gray-700 block mb-1">
+            Set same default password for all new accounts <span className="text-gray-400 font-normal">(optional)</span>
+          </label>
+          <div className="flex items-center gap-2 max-w-md">
+            <div className="relative flex-1">
+              <input
+                id="bulk-default-pwd"
+                type={showDefaultPwd ? "text" : "password"}
+                value={defaultPassword}
+                autoComplete="new-password"
+                onChange={(e) => { setDefaultPassword(e.target.value); if (defaultPwdError) setDefaultPwdError(""); }}
+                aria-describedby={defaultPwdError ? "bulk-default-pwd-error bulk-default-pwd-help" : "bulk-default-pwd-help"}
+                aria-invalid={!!defaultPwdError}
+                placeholder="e.g. Welcome@2026"
+                className="w-full px-3 py-2 pr-10 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F3CC9]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowDefaultPwd((v) => !v)}
+                aria-pressed={showDefaultPwd}
+                aria-label={showDefaultPwd ? "Hide password" : "Show password"}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9]"
+              >
+                {showDefaultPwd ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+              </button>
+            </div>
+          </div>
+          <p id="bulk-default-pwd-help" className="mt-1 text-[11px] text-gray-500">
+            Leave blank to auto-generate a unique 12-character password per employee. Minimum 8 characters.
+          </p>
+          {defaultPwdError && (
+            <p id="bulk-default-pwd-error" role="alert" className="mt-1 text-[11px] text-red-600">
+              {defaultPwdError}
+            </p>
+          )}
+        </div>
+
         {/* Footer */}
         <div className="px-6 pb-5 pt-4 border-t shrink-0 flex items-center gap-3">
           {toast && <span className="text-xs text-red-500 mr-auto">{toast}</span>}
@@ -1216,6 +1270,10 @@ export default function EmployeesPage() {
   const [resetTarget, setResetTarget] = useState<Employee | null>(null);
   const [resetSending, setResetSending] = useState(false);
   const resetBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // After-delete toast with a direct link to the Firebase Auth users page so
+  // HR can finish revoking the login in one click (client SDK can't delete
+  // another user's Auth account).
+  const [deletedToast, setDeletedToast] = useState<{ name: string; email: string } | null>(null);
   // Bulk-import results modal — rendered after a bulk CSV / multi-row import so
   // HR sees per-row outcome AND the newly-generated login credentials for every
   // row that got a Firebase Auth account. Password stays visible on-screen
@@ -1595,7 +1653,7 @@ export default function EmployeesPage() {
     }
   }
 
-  async function handleBulkImport(emps: Employee[]) {
+  async function handleBulkImport(emps: Employee[], defaultPassword?: string) {
     // De-duplicate against existing employees AND within the batch, keyed on work
     // email (the natural unique identifier). Re-importing the same file must not
     // create duplicate records (EMP-001) — matching rows are skipped, not re-added.
@@ -1637,7 +1695,9 @@ export default function EmployeesPage() {
         perRow.push({ name: emp.name, empId: emp.id, email: "", status: "no-email", reason: "No email provided — login not created" });
         continue;
       }
-      const tempPassword = generateTempPassword();
+      // Default password (if HR entered one in the modal) overrides the random
+      // per-row generation so the whole team can be told the same password.
+      const tempPassword = defaultPassword || generateTempPassword();
       try {
         const secondaryApp = initializeApp(firebaseConfig, `bulk-${emp.id}-${Date.now()}`);
         const secondaryAuth = getAuth(secondaryApp);
@@ -1755,13 +1815,34 @@ export default function EmployeesPage() {
     if (!deleteEmp) return;
     setDeleting(true);
     setDeleteError(null);
+    const emp = deleteEmp;
     try {
-      await deleteEmployee(deleteEmp.id);
-      const next = employees.filter((e) => e.id !== deleteEmp.id);
+      await deleteEmployee(emp.id);
+      // Clean up matching users/{uid} profile doc so stale role / employeeId
+      // mappings don't linger when HR re-imports with the same email later.
+      // Firebase client SDK cannot delete the Firebase Auth account — HR must
+      // finish that step in the Firebase Console; the toast carries the link.
+      try {
+        const email = (emp.email || "").trim().toLowerCase();
+        if (email) {
+          const usersSnap = await getDocs(
+            query(collection(db, "users"), where("email", "==", email))
+          );
+          await Promise.all(usersSnap.docs.map((d) => deleteDoc(doc(db, "users", d.id))));
+        }
+      } catch (cleanupErr) {
+        // Non-fatal — employee record already deleted; log and keep going.
+        console.error("users/{uid} cleanup failed", cleanupErr);
+      }
+      const next = employees.filter((e) => e.id !== emp.id);
       setEmployees(next);
       writeCache(EMP_CACHE, next);
       invalidateEmployees();
       setDeleteEmp(null);
+      // Show the toast with a link to the Firebase Console so HR can finish
+      // revoking the Auth login in one click.
+      setDeletedToast({ name: emp.name, email: emp.email || "" });
+      setTimeout(() => setDeletedToast(null), 10000);
     } catch (err) {
       const code = (err as { code?: string }).code ?? "";
       if (code === "permission-denied")
@@ -1903,6 +1984,43 @@ export default function EmployeesPage() {
       {addToast && (
         <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-2xl text-white text-sm font-medium shadow-lg ${addToast.ok ? "bg-green-500" : "bg-red-500"}`}>
           {addToast.msg}
+        </div>
+      )}
+      {deletedToast && (
+        // Toast with a direct link to Firebase Console so HR can finish the
+        // Auth-side delete in one click. Longer-lived (10s) than normal toasts
+        // because the link is the actionable part. Dismissable via the ×.
+        <div className="fixed top-5 right-5 z-50 max-w-sm px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-lg flex items-start gap-3">
+          <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center shrink-0" aria-hidden="true">
+            <CheckCircle2 size={16} />
+          </div>
+          <div className="flex-1 text-sm">
+            <p className="font-semibold text-gray-900">Employee deleted</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              <strong>{deletedToast.name}</strong> removed from the Employees list and user profiles.
+            </p>
+            <p className="text-xs text-amber-700 mt-1">
+              Firebase Auth login still exists. Delete it to fully revoke access:
+            </p>
+            <a
+              href="https://console.firebase.google.com/project/hrmanagement-6b903/authentication/users"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-[#4F3CC9] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] rounded"
+            >
+              Open Firebase Console
+              <ExternalLink size={11} aria-hidden="true" />
+              <span className="sr-only">(opens in new tab)</span>
+            </a>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDeletedToast(null)}
+            aria-label="Dismiss notification"
+            className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400"
+          >
+            <X size={13} aria-hidden="true" />
+          </button>
         </div>
       )}
       <div className="flex items-center justify-between">
@@ -2059,19 +2177,29 @@ export default function EmployeesPage() {
 
       {/* Delete Confirmation Modal */}
       {deleteEmp && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { if (!deleting) { setDeleteEmp(null); setDeleteError(null); } }}>
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => { if (!deleting) { setDeleteEmp(null); setDeleteError(null); } }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-emp-title"
+          aria-describedby="delete-emp-body delete-emp-auth-note"
+        >
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0" aria-hidden="true">
                 <Trash2 size={18} className="text-red-500" />
               </div>
               <div>
-                <h2 className="text-base font-bold text-gray-900">Delete Employee</h2>
+                <h2 id="delete-emp-title" className="text-base font-bold text-gray-900">Delete Employee</h2>
                 <p className="text-xs text-gray-400">This action cannot be undone</p>
               </div>
             </div>
-            <p className="text-sm text-gray-600 mb-4">
-              Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteEmp.name}</span> ({deleteEmp.id})? All their data will be permanently removed.
+            <p id="delete-emp-body" className="text-sm text-gray-600 mb-3">
+              Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteEmp.name}</span> ({deleteEmp.id})? Their employee record and user profile will be permanently removed.
+            </p>
+            <p id="delete-emp-auth-note" className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-4">
+              ⚠ Firebase Auth login for this employee is <strong>not</strong> auto-deleted. To fully revoke access, delete the user from Firebase Console after confirming (a link appears in the next toast).
             </p>
             {deleteError && (
               <div className="mb-4 px-3 py-2.5 rounded-xl bg-red-50 border border-red-200 text-sm text-red-600">
