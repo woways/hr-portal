@@ -35,9 +35,21 @@ export async function markPasswordChanged(uid?: string | null): Promise<void> {
 export async function shouldPromptPasswordChange(): Promise<boolean> {
   const user = auth.currentUser;
   if (!user) return false;
+  // 1. users/{uid} doc authoritative when present:
+  //    passwordChanged === true  → never prompt (user has set their own pw)
+  //    passwordChanged === false → prompt (seeded false by HR at account create)
+  //    doc exists but field absent → likely a legacy employee who was never
+  //    seeded; fall through to the metadata heuristic below.
+  //
+  // 2. users/{uid} doc MISSING → treat as a freshly-created account the HR
+  //    import didn't fully provision yet; prompt so the new hire still gets
+  //    the nudge. (Writing the doc would need the user to have create perms
+  //    on their own users/{uid} — rules already allow that.)
+  let docExists = false;
   try {
     const snap = await getDoc(doc(db, "users", user.uid));
     if (snap.exists()) {
+      docExists = true;
       const data = snap.data() as Record<string, unknown>;
       if (data.passwordChanged === true) return false;
       if (data.passwordChanged === false) return true;
@@ -46,13 +58,14 @@ export async function shouldPromptPasswordChange(): Promise<boolean> {
     console.error("shouldPromptPasswordChange: user doc read failed", err);
     return false;
   }
-  // Legacy fallback — users created before the flag existed. Treat as "first
-  // sign-in" if creationTime ≈ lastSignInTime (< 60s delta).
+  if (!docExists) return true;
+  // 3. Legacy employee with doc-no-field — show only on a near-first sign-in
+  //    (delta < 24h) so established users aren't repeatedly nagged.
   const meta = user.metadata;
   if (meta.creationTime && meta.lastSignInTime) {
     const created = Date.parse(meta.creationTime);
     const signed  = Date.parse(meta.lastSignInTime);
-    if (!isNaN(created) && !isNaN(signed) && Math.abs(signed - created) < 60_000) {
+    if (!isNaN(created) && !isNaN(signed) && Math.abs(signed - created) < 24 * 60 * 60 * 1000) {
       return true;
     }
   }
