@@ -11,7 +11,7 @@ import { invalidateEmployees } from "@/lib/cachedService";
 import { computeNextEmployeeId } from "@/lib/employeeId";
 import { isValidJobTitle } from "@/lib/jobTitle";
 import { readCache, writeCache } from "@/lib/cache";
-import { getDoc, doc as fsDoc, collection, query, where, getDocs, doc, deleteDoc } from "firebase/firestore";
+import { getDoc, doc as fsDoc, collection, query, where, getDocs, doc, deleteDoc, setDoc, getFirestore } from "firebase/firestore";
 import { DEPARTMENTS } from "@/lib/constants";
 import { useDepartments } from "@/lib/useDepartments";
 import { canonicalWorkMode, canonicalEmploymentType, canonicalDepartment, isKnownDepartment } from "@/lib/enums";
@@ -1574,14 +1574,19 @@ export default function EmployeesPage() {
         const secondaryAuth = getAuth(secondaryApp);
         const cred = await createUserWithEmailAndPassword(secondaryAuth, savedEmail, tempPassword);
         authCreated = true;
-        await createUserProfile({
-          uid: cred.user.uid,
-          email: savedEmail,
-          name: savedName,
-          role: "employee",
-          employeeId: newId,
-          department: savedDept,
-          createdAt: new Date().toISOString(),
+        // Write users/{uid} via SECONDARY Firestore so request.auth.uid matches
+        // the newly-created user (strict rule: write only to own doc). Also
+        // seed passwordChanged=false for the first-login prompt.
+        const secondaryDb = getFirestore(secondaryApp);
+        await setDoc(doc(secondaryDb, "users", cred.user.uid), {
+          uid:         cred.user.uid,
+          email:       savedEmail,
+          name:        savedName,
+          role:        "employee",
+          employeeId:  newId,
+          department:  savedDept,
+          createdAt:   new Date().toISOString(),
+          passwordChanged: false,
         });
         // Flag=false triggers the first-login "change your password" prompt on
         // the employee dashboard until they actually change the temp password.
@@ -1651,16 +1656,20 @@ export default function EmployeesPage() {
       try {
         const cred = await createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
         authCreated = true;
-        await createUserProfile({
-          uid: cred.user.uid,
+        // Write users/{uid} via the SECONDARY app's Firestore so request.auth.uid
+        // matches the new user's uid (strict rule: write only to own doc).
+        // Also seed passwordChanged=false so the first-login prompt fires for them.
+        const secondaryDb = getFirestore(secondaryApp);
+        await setDoc(doc(secondaryDb, "users", cred.user.uid), {
+          uid:         cred.user.uid,
           email,
-          name: target.name,
-          role: "employee",
-          employeeId: target.id,
-          department: target.department,
-          createdAt: new Date().toISOString(),
+          name:        target.name,
+          role:        "employee",
+          employeeId:  target.id,
+          department:  target.department || "",
+          createdAt:   new Date().toISOString(),
+          passwordChanged: false,
         });
-        try { const { initPasswordChangedFlag } = await import("@/lib/passwordFlag"); await initPasswordChangedFlag(email); } catch { /* non-fatal */ }
         await secondaryAuth.signOut();
         await deleteApp(secondaryApp);
       } catch (createErr) {
@@ -1749,14 +1758,19 @@ export default function EmployeesPage() {
         const secondaryApp = initializeApp(firebaseConfig, `bulk-${emp.id}-${Date.now()}`);
         const secondaryAuth = getAuth(secondaryApp);
         const cred = await createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
-        await createUserProfile({
-          uid: cred.user.uid,
+        // Secondary-app Firestore so the newly-created user's auth.uid matches
+        // the users/{uid} doc being written (strict rule). passwordChanged=false
+        // seeds the first-login prompt.
+        const secondaryDb = getFirestore(secondaryApp);
+        await setDoc(doc(secondaryDb, "users", cred.user.uid), {
+          uid:         cred.user.uid,
           email,
-          name: emp.name,
-          role: "employee",
-          employeeId: emp.id,
-          department: emp.department,
-          createdAt: new Date().toISOString(),
+          name:        emp.name,
+          role:        "employee",
+          employeeId:  emp.id,
+          department:  emp.department || "",
+          createdAt:   new Date().toISOString(),
+          passwordChanged: false,
         });
         // Same first-login flag seed for bulk-imported accounts.
         try { const { initPasswordChangedFlag } = await import("@/lib/passwordFlag"); await initPasswordChangedFlag(email); } catch { /* non-fatal */ }
