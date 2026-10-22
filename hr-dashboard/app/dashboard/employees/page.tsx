@@ -1583,6 +1583,9 @@ export default function EmployeesPage() {
           department: savedDept,
           createdAt: new Date().toISOString(),
         });
+        // Flag=false triggers the first-login "change your password" prompt on
+        // the employee dashboard until they actually change the temp password.
+        try { const { markPasswordChanged } = await import("@/lib/passwordFlag"); await import("@/lib/passwordFlag").then(m => m.initPasswordChangedFlag(savedEmail)); void markPasswordChanged; } catch { /* non-fatal */ }
         await secondaryAuth.signOut();
         await deleteApp(secondaryApp);
       } catch (err) {
@@ -1711,6 +1714,8 @@ export default function EmployeesPage() {
           department: emp.department,
           createdAt: new Date().toISOString(),
         });
+        // Same first-login flag seed for bulk-imported accounts.
+        try { const { initPasswordChangedFlag } = await import("@/lib/passwordFlag"); await initPasswordChangedFlag(email); } catch { /* non-fatal */ }
         await secondaryAuth.signOut();
         await deleteApp(secondaryApp);
         perRow.push({ name: emp.name, empId: emp.id, email, status: "created", password: tempPassword });

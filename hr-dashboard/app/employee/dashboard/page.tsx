@@ -1,11 +1,13 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   Clock, CheckCircle, CalendarDays, Bell, AlertCircle,
-  CalendarOff, Target, IndianRupee, Megaphone,
+  CalendarOff, Target, IndianRupee, Megaphone, BookOpen, KeyRound, X, ArrowRight,
 } from "lucide-react";
 import { useEmployeeProfile } from "@/lib/useEmployeeProfile";
 import { useHolidayMap } from "@/lib/useHolidays";
+import { shouldPromptPasswordChange } from "@/lib/passwordFlag";
 import {
   collection, query, where, onSnapshot, doc, getDoc,
 } from "firebase/firestore";
@@ -64,6 +66,54 @@ const NOTIF_CLS: Record<string, string> = {
 
 export default function DashboardPage() {
   const { empId, empName, loading: profileLoading } = useEmployeeProfile();
+  const router = useRouter();
+  // First-login prompt (fires on dashboard mount if the signed-in user has
+  // never changed their temp password). Dismissal is per-session only.
+  const [showFirstLogin, setShowFirstLogin] = useState(false);
+  const firstLoginReturnFocusRef = useRef<HTMLElement | null>(null);
+  const firstLoginDialogRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        if (sessionStorage.getItem("firstLoginPromptDismissed") === "1") return;
+      } catch { /* ignore */ }
+      const should = await shouldPromptPasswordChange();
+      if (should) {
+        firstLoginReturnFocusRef.current = document.activeElement as HTMLElement | null;
+        setShowFirstLogin(true);
+      }
+    })();
+  }, []);
+  function closeFirstLogin(dismiss = true) {
+    setShowFirstLogin(false);
+    if (dismiss) {
+      try { sessionStorage.setItem("firstLoginPromptDismissed", "1"); } catch { /* ignore */ }
+    }
+    setTimeout(() => firstLoginReturnFocusRef.current?.focus(), 50);
+  }
+  function openChangePassword() {
+    closeFirstLogin(false);
+    router.push("/employee/dashboard/profile#change-password");
+  }
+
+  // Portal Guide modal — on-demand quick reference for employees.
+  const [showGuide, setShowGuide] = useState(false);
+  const guideTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const guideSectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  function openGuide() {
+    guideTriggerRef.current = document.activeElement as HTMLButtonElement | null;
+    setShowGuide(true);
+  }
+  function closeGuide() {
+    setShowGuide(false);
+    setTimeout(() => guideTriggerRef.current?.focus(), 50);
+  }
+  function jumpToGuideSection(id: string) {
+    const el = guideSectionRefs.current[id];
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    el.focus({ preventScroll: true });
+  }
   // Upcoming-holiday banner source. Groups consecutive dates with the same
   // name into a single range (e.g. "Dasara — 20–21 October 2026").
   const holidayMap = useHolidayMap();
@@ -281,6 +331,30 @@ export default function DashboardPage() {
         </section>
       )}
 
+      {/* Portal Guide card — opens an on-demand "How to use" modal. Not a
+          nested interactive: only the Open Guide button is clickable; the card
+          wrapper is a plain section with a heading. */}
+      <section
+        aria-labelledby="portal-guide-card-title"
+        className="rounded-2xl border border-[#4F3CC9]/20 bg-gradient-to-r from-[#F5F3FF] to-white px-5 py-4 flex items-start gap-4"
+      >
+        <div className="w-11 h-11 rounded-xl bg-[#4F3CC9] text-white flex items-center justify-center shrink-0" aria-hidden="true">
+          <BookOpen size={20} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 id="portal-guide-card-title" className="text-base font-bold text-gray-900">How to use the Portal</h2>
+          <p className="text-sm text-gray-500 mt-0.5">Clock-in, leave, payslip, password — step-by-step quick guide.</p>
+        </div>
+        <button
+          type="button"
+          onClick={openGuide}
+          className="shrink-0 inline-flex items-center gap-1.5 bg-[#4F3CC9] text-white rounded-xl px-4 py-2 text-sm font-semibold hover:bg-[#3d2fa8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
+        >
+          Open Guide
+          <ArrowRight size={14} aria-hidden="true" />
+        </button>
+      </section>
+
       {/* Attendance Overview */}
       <div>
         <h2 className="text-base font-semibold text-gray-700 mb-3">Attendance Overview</h2>
@@ -430,6 +504,216 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {/* First-login modal — nudges new employees to change the temp password */}
+      {showFirstLogin && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 motion-reduce:transition-none"
+          onClick={() => closeFirstLogin(true)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="first-login-title"
+          aria-describedby="first-login-desc"
+          onKeyDown={(e) => { if (e.key === "Escape") closeFirstLogin(true); }}
+        >
+          <div ref={firstLoginDialogRef} className="bg-white rounded-2xl w-full max-w-sm shadow-xl p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3 mb-3">
+              <div className="w-11 h-11 rounded-xl bg-[#F5F3FF] text-[#4F3CC9] flex items-center justify-center shrink-0" aria-hidden="true">
+                <KeyRound size={20} />
+              </div>
+              <div>
+                <h2 id="first-login-title" className="text-base font-bold text-gray-900">Welcome! Please change your password</h2>
+                <p id="first-login-desc" className="text-sm text-gray-500 mt-1">
+                  For security, change the temporary password HR shared with you. You can always update it later from <strong>Profile → Change Password</strong>.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => closeFirstLogin(true)}
+                className="flex-1 border border-gray-200 text-gray-700 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400"
+                autoFocus
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={openChangePassword}
+                className="flex-1 bg-[#4F3CC9] text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-[#3d2fa8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
+              >
+                Open Change Password
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Portal Guide modal */}
+      {showGuide && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 motion-reduce:transition-none"
+          onClick={closeGuide}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="portal-guide-title"
+          aria-describedby="portal-guide-intro"
+          onKeyDown={(e) => { if (e.key === "Escape") closeGuide(); }}
+        >
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] shadow-xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 id="portal-guide-title" className="text-base font-bold text-gray-900">How to use the WoWays HR Portal</h2>
+                <p id="portal-guide-intro" className="text-xs text-gray-500 mt-0.5">A quick, step-by-step guide. Jump to any section from the list below.</p>
+              </div>
+              <button type="button" onClick={closeGuide} aria-label="Close guide" className="text-gray-400 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 rounded">
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+              {/* Jump nav — labelled so it doesn't collide with page nav */}
+              <nav aria-label="Guide sections" className="rounded-xl bg-gray-50 border border-gray-100 p-3">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Jump to</p>
+                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                  {[
+                    ["clock-in", "Clocking In"],
+                    ["clock-out", "Clocking Out"],
+                    ["late-login", "Late Login Request"],
+                    ["correction", "Attendance Correction"],
+                    ["leave", "Applying for Leave"],
+                    ["payslip", "Viewing Your Payslip"],
+                    ["goals", "Setting / Updating Goals"],
+                    ["notifications", "Reading Notifications"],
+                    ["password", "Changing Your Password"],
+                  ].map(([id, label]) => (
+                    <li key={id}>
+                      <button
+                        type="button"
+                        onClick={() => jumpToGuideSection(id)}
+                        className="text-left text-[#4F3CC9] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] rounded px-1"
+                      >
+                        {label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+
+              {[
+                {
+                  id: "clock-in",
+                  title: "Clocking In",
+                  steps: [
+                    "Open the Attendance page from the sidebar.",
+                    "Tap the big purple Clock In circle at the top of the page.",
+                    "Your Clock In time is recorded instantly. The status pill under the button turns green with 'Present'.",
+                    "If you clock in after 10:30 AM, your day shows as 'Late' and a 'Raise Late Login Request' button appears.",
+                  ],
+                },
+                {
+                  id: "clock-out",
+                  title: "Clocking Out",
+                  steps: [
+                    "Return to the Attendance page before 11:00 PM.",
+                    "Tap the big red Clock Out circle.",
+                    "Your total working hours are calculated automatically from first clock-in to last clock-out.",
+                    "Clock Out is disabled after 11:00 PM — if you miss it, raise an Attendance Correction (see below).",
+                  ],
+                },
+                {
+                  id: "late-login",
+                  title: "Raising a Late Login Request",
+                  steps: [
+                    "On the Attendance history row for the late day, click 'Raise Late Login Request'.",
+                    "Fill in the reason (e.g. traffic, medical, metro delay).",
+                    "Submit — the request goes to HR. Your row shows 'Pending Review'.",
+                    "HR approves → the day is marked Present. HR rejects → the day stays 'Late'.",
+                  ],
+                },
+                {
+                  id: "correction",
+                  title: "Raising an Attendance Correction (Absent / Incomplete / forgot clock-out)",
+                  steps: [
+                    "On any past Absent or Incomplete row, click 'Raise Request' or 'Add Clock-Out'.",
+                    "Pick the date, enter the actual arrival or clock-out time, and describe the reason.",
+                    "Submit — HR reviews and approves/rejects. On approval the day's status updates automatically.",
+                  ],
+                },
+                {
+                  id: "leave",
+                  title: "Applying for Leave",
+                  steps: [
+                    "Open the Leaves page from the sidebar.",
+                    "Click '+ Apply Leave', pick the dates and leave type (Casual / Sick / Earned).",
+                    "Add a short reason and submit.",
+                    "Track status (Pending / Approved / Rejected) on the same page. Approved leave is deducted from your balance.",
+                  ],
+                },
+                {
+                  id: "payslip",
+                  title: "Viewing Your Payslip",
+                  steps: [
+                    "Open the Payslip page from the sidebar.",
+                    "Pick the month from the dropdown.",
+                    "Review the breakdown of earnings and deductions, and download the PDF if you need a copy.",
+                  ],
+                },
+                {
+                  id: "goals",
+                  title: "Setting / Updating Goals",
+                  steps: [
+                    "Open the Goals page from the sidebar.",
+                    "View the goals your manager has set for you.",
+                    "Click a goal to update your progress percentage, add a note, or attach evidence.",
+                    "Your updates are visible to your manager instantly.",
+                  ],
+                },
+                {
+                  id: "notifications",
+                  title: "Reading Notifications",
+                  steps: [
+                    "Open Notifications from the sidebar (bell icon).",
+                    "Click any card — the portal takes you straight to the relevant page (e.g. a leave decision → Leaves).",
+                    "Use the 'Mark as Read' button on a card, or the × to dismiss it, without triggering navigation.",
+                  ],
+                },
+                {
+                  id: "password",
+                  title: "Changing Your Password",
+                  steps: [
+                    "Open the Profile page from the sidebar.",
+                    "Scroll down to 'Change Password'.",
+                    "Enter your current password, a new password (at least 8 characters), confirm it, and click Change Password.",
+                    "You stay signed in. The next time you sign in, use the new password.",
+                  ],
+                },
+              ].map((s) => (
+                <section
+                  key={s.id}
+                  aria-labelledby={`guide-${s.id}-title`}
+                  tabIndex={-1}
+                  ref={(el) => { guideSectionRefs.current[s.id] = el; }}
+                  className="focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] rounded-xl p-4 border border-gray-100 bg-white"
+                >
+                  <h3 id={`guide-${s.id}-title`} className="text-base font-semibold text-gray-900 mb-2">{s.title}</h3>
+                  <ol className="list-decimal pl-5 space-y-1 text-sm text-gray-700">
+                    {s.steps.map((step, i) => <li key={i}>{step}</li>)}
+                  </ol>
+                </section>
+              ))}
+            </div>
+            <div className="px-6 py-3 border-t border-gray-100 flex justify-end">
+              <button
+                type="button"
+                onClick={closeGuide}
+                className="bg-[#4F3CC9] text-white py-2 px-5 rounded-xl text-sm font-semibold hover:bg-[#3d2fa8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9] focus-visible:ring-offset-2"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

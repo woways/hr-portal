@@ -167,6 +167,7 @@ export default function SettingsPage() {
       const credential = EmailAuthProvider.credential(user.email, currentPw);
       await reauthenticateWithCredential(user, credential);
       await updatePassword(user, newPw);
+      try { const { markPasswordChanged } = await import("@/lib/passwordFlag"); await markPasswordChanged(user.uid); } catch { /* non-fatal */ }
       setPwSuccess("Password changed successfully!");
       setCurrentPw(""); setNewPw(""); setConfirmPw("");
     } catch (err: unknown) {

@@ -384,6 +384,25 @@ interface EmployeeData {
 
 export default function ProfilePage() {
   const [activeTab, setActiveTab] = useState<ProfileTab>("Overview");
+  // Deep-link support — the Dashboard's first-login modal sends the employee
+  // here with /employee/dashboard/profile#change-password. Flip to the Settings
+  // tab (where Change Password lives) and move focus to that section after
+  // mount so SR + keyboard users land on it, not at the top of the page.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const applyHash = () => {
+      if (window.location.hash !== "#change-password") return;
+      setActiveTab("Settings");
+      // Wait a frame so React mounts the Settings tab panel first.
+      setTimeout(() => {
+        const el = document.getElementById("change-password");
+        if (el) { el.scrollIntoView({ block: "start" }); el.focus({ preventScroll: true }); }
+      }, 120);
+    };
+    applyHash();
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, []);
   const [editing, setEditing] = useState(false);
   const [empData, setEmpData] = useState<EmployeeData | null>(null);
   const [form, setForm] = useState({
@@ -502,6 +521,8 @@ export default function ProfilePage() {
       const credential = EmailAuthProvider.credential(user.email, passwordForm.current);
       await reauthenticateWithCredential(user, credential);
       await updatePassword(user, passwordForm.newPw);
+      // Mark the flag so the first-login prompt never fires again for them.
+      try { const { markPasswordChanged } = await import("@/lib/passwordFlag"); await markPasswordChanged(user.uid); } catch { /* non-fatal */ }
       setPwSuccess(true);
       setPasswordForm({ current: "", newPw: "", confirm: "" });
       setPwErrors({});
@@ -1745,8 +1766,9 @@ export default function ProfilePage() {
             <div className="flex-1 border-t border-gray-100" />
           </div>
 
-          {/* Change Password Form */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          {/* Change Password Form — hash target 'change-password' so dashboard
+              first-login prompt can deep-link + focus the heading on arrival. */}
+          <div id="change-password" tabIndex={-1} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 scroll-mt-20 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4F3CC9]">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-11 h-11 rounded-xl bg-[#EDE9FF] flex items-center justify-center shrink-0">
                 <Lock size={20} className="text-[#4F3CC9]" />
